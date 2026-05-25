@@ -1107,7 +1107,7 @@ impl McpClient {
         for v in candidates {
             let init_params = json!({
                 "protocolVersion": v,
-                "clientInfo": { "name": "LiveAgent", "version": "0.1.0" },
+                "clientInfo": { "name": "LiveAgent", "version": crate::app_version() },
                 "capabilities": {}
             });
 

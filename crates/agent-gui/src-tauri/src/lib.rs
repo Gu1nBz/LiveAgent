@@ -17,6 +17,10 @@ const TRAY_QUIT_ID: &str = "tray-quit";
 const TRAY_DOUBLE_CLICK_INTERVAL_MS: u64 = 500;
 const TRAY_SHOW_MENU_ON_LEFT_CLICK: bool = !cfg!(target_os = "windows");
 
+pub fn app_version() -> &'static str {
+    env!("LIVEAGENT_APP_VERSION")
+}
+
 macro_rules! app_invoke_handler {
     () => {
         tauri::generate_handler![

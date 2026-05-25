@@ -140,6 +140,10 @@ jobs:
         working-directory: crates/agent-gui
         run: pnpm test:frontend
 
+      - name: Test release scripts
+        working-directory: crates/agent-gui
+        run: pnpm test:release
+
   tauri-rust:
     name: Tauri Rust Check
     runs-on: ubuntu-latest

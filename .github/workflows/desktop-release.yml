@@ -17,9 +17,34 @@ env:
   NODE_VERSION: 22.17.1
 
 jobs:
+  release-metadata:
+    name: Release Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: node scripts/release/prepare-app-version-from-tag.mjs "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT" --json
+
   macos:
     name: macOS ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    needs: release-metadata
+    env:
+      LIVEAGENT_APP_VERSION: ${{ needs.release-metadata.outputs.app_version }}
+      LIVEAGENT_IS_PRERELEASE: ${{ needs.release-metadata.outputs.is_prerelease }}
+      LIVEAGENT_RELEASE_TAG: ${{ needs.release-metadata.outputs.release_tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,11 +60,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.release-metadata.outputs.release_tag }}
 
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Prepare release version config
+        working-directory: crates/agent-gui
+        run: node ../../scripts/release/prepare-app-version-from-tag.mjs "$LIVEAGENT_RELEASE_TAG" --github-env "$GITHUB_ENV" --tauri-config src-tauri/tauri.version.generated.conf.json
 
       - name: Install pnpm
         run: npm install -g pnpm@10.32.1
@@ -107,8 +136,6 @@ jobs:
         run: make desktop-build-macos-release
 
       - name: Stage macOS artifact
-        env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -117,9 +144,9 @@ jobs:
           test -n "$dmg_path"
           test -n "$updater_path"
           test -f "$updater_path.sig"
-          cp "$dmg_path" "dist/LiveAgent-${RELEASE_TAG}-macOS-${{ matrix.suffix }}.dmg"
-          cp "$updater_path" "dist/LiveAgent-${RELEASE_TAG}-macOS-${{ matrix.suffix }}.app.tar.gz"
-          cp "$updater_path.sig" "dist/LiveAgent-${RELEASE_TAG}-macOS-${{ matrix.suffix }}.app.tar.gz.sig"
+          cp "$dmg_path" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-macOS-${{ matrix.suffix }}.dmg"
+          cp "$updater_path" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-macOS-${{ matrix.suffix }}.app.tar.gz"
+          cp "$updater_path.sig" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-macOS-${{ matrix.suffix }}.app.tar.gz.sig"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -130,14 +157,24 @@ jobs:
   windows:
     name: Windows x64
     runs-on: windows-latest
+    needs: release-metadata
+    env:
+      LIVEAGENT_APP_VERSION: ${{ needs.release-metadata.outputs.app_version }}
+      LIVEAGENT_IS_PRERELEASE: ${{ needs.release-metadata.outputs.is_prerelease }}
+      LIVEAGENT_RELEASE_TAG: ${{ needs.release-metadata.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.release-metadata.outputs.release_tag }}
 
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Prepare release version config
+        shell: bash
+        working-directory: crates/agent-gui
+        run: node ../../scripts/release/prepare-app-version-from-tag.mjs "$LIVEAGENT_RELEASE_TAG" --github-env "$GITHUB_ENV" --tauri-config src-tauri/tauri.version.generated.conf.json
 
       - name: Install pnpm
         run: npm install -g pnpm@10.32.1
@@ -159,17 +196,16 @@ jobs:
 
       - name: Build Windows bundles
         working-directory: crates/agent-gui
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           LIVEAGENT_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
           LIVEAGENT_UPDATE_REPOSITORY: ${{ github.repository }}
-        run: pnpm tauri build --config src-tauri/tauri.windows.release.conf.json --target x86_64-pc-windows-msvc
+        run: pnpm tauri build --config src-tauri/tauri.windows.release.conf.json --config "$LIVEAGENT_TAURI_VERSION_CONFIG" --target x86_64-pc-windows-msvc
 
       - name: Stage Windows artifacts
         shell: bash
-        env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -179,10 +215,10 @@ jobs:
           test -n "$exe_path"
           test -f "$msi_path.sig"
           test -f "$exe_path.sig"
-          cp "$msi_path" "dist/LiveAgent-${RELEASE_TAG}-Windows-x64.msi"
-          cp "$msi_path.sig" "dist/LiveAgent-${RELEASE_TAG}-Windows-x64.msi.sig"
-          cp "$exe_path" "dist/LiveAgent-${RELEASE_TAG}-Windows-x64-Setup.exe"
-          cp "$exe_path.sig" "dist/LiveAgent-${RELEASE_TAG}-Windows-x64-Setup.exe.sig"
+          cp "$msi_path" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Windows-x64.msi"
+          cp "$msi_path.sig" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Windows-x64.msi.sig"
+          cp "$exe_path" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Windows-x64-Setup.exe"
+          cp "$exe_path.sig" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Windows-x64-Setup.exe.sig"
           test "$(find dist -type f | wc -l)" -gt 0
 
       - uses: actions/upload-artifact@v7
@@ -194,14 +230,23 @@ jobs:
   linux:
     name: Linux x64
     runs-on: ubuntu-latest
+    needs: release-metadata
+    env:
+      LIVEAGENT_APP_VERSION: ${{ needs.release-metadata.outputs.app_version }}
+      LIVEAGENT_IS_PRERELEASE: ${{ needs.release-metadata.outputs.is_prerelease }}
+      LIVEAGENT_RELEASE_TAG: ${{ needs.release-metadata.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.release-metadata.outputs.release_tag }}
 
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Prepare release version config
+        working-directory: crates/agent-gui
+        run: node ../../scripts/release/prepare-app-version-from-tag.mjs "$LIVEAGENT_RELEASE_TAG" --github-env "$GITHUB_ENV" --tauri-config src-tauri/tauri.version.generated.conf.json
 
       - name: Install pnpm
         run: npm install -g pnpm@10.32.1
@@ -234,16 +279,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Linux bundles
+        working-directory: crates/agent-gui
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           LIVEAGENT_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
           LIVEAGENT_UPDATE_REPOSITORY: ${{ github.repository }}
-        run: pnpm --dir crates/agent-gui tauri build --config src-tauri/tauri.linux.release.conf.json --target x86_64-unknown-linux-gnu --bundles appimage deb rpm
+        run: pnpm tauri build --config src-tauri/tauri.linux.release.conf.json --config "$LIVEAGENT_TAURI_VERSION_CONFIG" --target x86_64-unknown-linux-gnu --bundles appimage deb rpm
 
       - name: Stage Linux artifacts
-        env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -256,12 +300,12 @@ jobs:
           test -f "$appimage_path.sig"
           test -f "$deb_path.sig"
           test -f "$rpm_path.sig"
-          cp "$appimage_path" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.AppImage"
-          cp "$appimage_path.sig" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.AppImage.sig"
-          cp "$deb_path" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.deb"
-          cp "$deb_path.sig" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.deb.sig"
-          cp "$rpm_path" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.rpm"
-          cp "$rpm_path.sig" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.rpm.sig"
+          cp "$appimage_path" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Linux-x86_64.AppImage"
+          cp "$appimage_path.sig" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Linux-x86_64.AppImage.sig"
+          cp "$deb_path" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Linux-x86_64.deb"
+          cp "$deb_path.sig" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Linux-x86_64.deb.sig"
+          cp "$rpm_path" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Linux-x86_64.rpm"
+          cp "$rpm_path.sig" "dist/LiveAgent-${LIVEAGENT_RELEASE_TAG}-Linux-x86_64.rpm.sig"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -273,9 +317,14 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs:
+      - release-metadata
       - macos
       - windows
       - linux
+    env:
+      LIVEAGENT_APP_VERSION: ${{ needs.release-metadata.outputs.app_version }}
+      LIVEAGENT_IS_PRERELEASE: ${{ needs.release-metadata.outputs.is_prerelease }}
+      LIVEAGENT_RELEASE_TAG: ${{ needs.release-metadata.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v6
 
@@ -288,13 +337,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.release_tag }}
         run: |
           set -euo pipefail
-          is_prerelease=false
-          if [[ "$RELEASE_TAG" =~ -(alpha|beta|rc|pre|preview|next) ]]; then
-            is_prerelease=true
-          fi
+          is_prerelease="$LIVEAGENT_IS_PRERELEASE"
 
           notes_path="$RUNNER_TEMP/liveagent-release-notes.md"
           if ! gh api "repos/$GH_REPO/releases/generate-notes" \

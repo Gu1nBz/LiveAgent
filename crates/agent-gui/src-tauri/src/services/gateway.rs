@@ -393,7 +393,7 @@ impl GatewayController {
         let mut auth_request = tonic::Request::new(proto::AuthRequest {
             token: config.token.clone(),
             agent_id: effective_agent_id(&config),
-            agent_version: env!("CARGO_PKG_VERSION").to_string(),
+            agent_version: crate::app_version().to_string(),
         });
         insert_bearer_metadata(auth_request.metadata_mut(), &config.token)?;
 

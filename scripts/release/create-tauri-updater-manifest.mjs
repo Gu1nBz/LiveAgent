@@ -2,6 +2,7 @@
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { parseReleaseVersion } from "./release-version.mjs";
 
 const [assetDir, outputPath, notesPath] = process.argv.slice(2);
 
@@ -12,13 +13,17 @@ if (!assetDir || !outputPath) {
   process.exit(1);
 }
 
-const releaseTag = process.env.RELEASE_TAG?.trim();
-const repository = process.env.GITHUB_REPOSITORY?.trim();
-
-if (!releaseTag) {
-  console.error("RELEASE_TAG is required.");
+let releaseVersion;
+try {
+  releaseVersion = parseReleaseVersion(
+    process.env.LIVEAGENT_RELEASE_TAG || process.env.RELEASE_TAG,
+  );
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
+const releaseTag = releaseVersion.releaseTag;
+const repository = process.env.GITHUB_REPOSITORY?.trim();
 
 if (!repository) {
   console.error("GITHUB_REPOSITORY is required.");
@@ -84,7 +89,7 @@ if (Object.keys(platforms).length === 0) {
 }
 
 const manifest = {
-  version: releaseTag.replace(/^v/i, ""),
+  version: releaseVersion.appVersion,
   notes: releaseNotes(),
   pub_date: new Date().toISOString(),
   platforms,
