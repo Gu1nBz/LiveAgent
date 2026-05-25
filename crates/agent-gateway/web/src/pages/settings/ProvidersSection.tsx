@@ -9,8 +9,10 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Settings,
   Settings2,
   Trash2,
+  X,
 } from "../../components/icons";
 
 import { Button } from "../../components/ui/button";
@@ -24,6 +26,8 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import { useLocale } from "../../i18n";
+import { buildModelOptions } from "../../lib/chat/chatPageHelpers";
+import { parseModelValue, toModelValue } from "../../lib/providers/llm";
 import {
   CODEX_REQUEST_FORMAT_LABELS,
   type CodexRequestFormat,
@@ -31,6 +35,7 @@ import {
   type ProviderId,
   type ProviderModelConfig,
   updateCustomProviders,
+  updateCustomSettings,
 } from "../../lib/settings";
 import {
   createDraftModelConfig,
@@ -58,6 +63,7 @@ type ModelSettingsModalProps = {
 };
 
 const PROVIDER_TABS: ProviderId[] = ["claude_code", "codex", "gemini"];
+const TITLE_MODEL_FOLLOW_CURRENT_VALUE = "__conversation_title_follow_current__";
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   claude_code: "Anthropic",
   codex: "OpenAI",
@@ -576,6 +582,136 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
   );
 }
 
+function CustomSettingsDrawer(props: SettingsSectionProps & { onClose: () => void }) {
+  const { settings, setSettings, onClose } = props;
+  const { t } = useLocale();
+  const [closing, setClosing] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const modelOptions = useMemo(() => buildModelOptions(settings), [settings]);
+  const conversationTitleModel = settings.customSettings.conversationTitleModel;
+  const selectedValue = conversationTitleModel
+    ? toModelValue(conversationTitleModel.customProviderId, conversationTitleModel.model)
+    : TITLE_MODEL_FOLLOW_CURRENT_VALUE;
+
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current !== null) {
+        clearTimeout(closeTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  function requestClose() {
+    if (closing) return;
+    setClosing(true);
+    closeTimerRef.current = setTimeout(() => {
+      onClose();
+    }, 220);
+  }
+
+  function handleTitleModelChange(value: string) {
+    setSettings((prev) =>
+      updateCustomSettings(prev, {
+        conversationTitleModel:
+          value === TITLE_MODEL_FOLLOW_CURRENT_VALUE
+            ? undefined
+            : parseModelValue(value) ?? undefined,
+      }),
+    );
+  }
+
+  return createPortal(
+    <div
+      className={`${
+        closing ? "skills-drawer-backdrop-closing" : "skills-drawer-backdrop"
+      } fixed inset-0 z-50 flex justify-end bg-foreground/[0.06] backdrop-blur-md dark:bg-background/40`}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provider-custom-settings-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) requestClose();
+      }}
+    >
+      <aside
+        className={`${
+          closing ? "skills-drawer-panel-closing" : "skills-drawer-panel"
+        } relative flex h-full w-full flex-col overflow-hidden border-l border-white/50 bg-white/70 shadow-[-32px_0_80px_-28px_rgba(15,23,42,0.22)] backdrop-blur-[28px] backdrop-saturate-150 sm:max-w-[440px] dark:border-foreground/[0.08] dark:bg-background/60`}
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent dark:via-white/10"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/35 via-transparent to-white/5 dark:from-white/[0.02] dark:via-transparent dark:to-transparent"
+        />
+
+        <div className="relative flex items-start gap-3 px-6 pb-4 pt-[22px]">
+          <div className="min-w-0 flex-1">
+            <div
+              id="provider-custom-settings-title"
+              className="text-[17px] font-semibold leading-tight tracking-tight text-foreground/95"
+            >
+              {t("settings.customSettings")}
+            </div>
+            <div className="mt-1 text-[12px] leading-relaxed text-muted-foreground/90">
+              {t("settings.conversationTitleModelHint")}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={requestClose}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-muted-foreground/80 transition-colors hover:bg-foreground/[0.12] hover:text-foreground"
+            title={t("settings.closeCustomSettings")}
+            aria-label={t("settings.closeCustomSettings")}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <div
+          aria-hidden="true"
+          className="relative mx-6 h-px bg-gradient-to-r from-transparent via-foreground/[0.08] to-transparent"
+        />
+
+        <div className="relative min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <section className="space-y-3">
+            <div className="rounded-2xl border border-foreground/[0.06] bg-white/60 p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-xl dark:border-foreground/[0.08] dark:bg-foreground/[0.03] dark:shadow-none">
+              <div className="space-y-2">
+                <Label className="text-[12.5px] font-medium text-foreground/85">
+                  {t("settings.conversationTitleModel")}
+                </Label>
+                <Select value={selectedValue} onValueChange={handleTitleModelChange}>
+                  <SelectTrigger className="h-9 rounded-lg border-foreground/10 bg-white/70 shadow-sm dark:bg-background/40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    <SelectItem value={TITLE_MODEL_FOLLOW_CURRENT_VALUE}>
+                      {t("settings.conversationTitleModelFollowCurrent")}
+                    </SelectItem>
+                    {modelOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.providerName} / {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {modelOptions.length === 0 ? (
+                  <div className="mt-1 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 text-[11.5px] leading-relaxed text-amber-700 dark:text-amber-300">
+                    {t("settings.customSettingsModelEmpty")}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>,
+    document.body,
+  );
+}
+
 function ProviderList(props: {
   type: ProviderId;
   providers: CustomProvider[];
@@ -665,9 +801,11 @@ function ProviderList(props: {
 
 export function ProvidersSection(props: SettingsSectionProps) {
   const { settings, setSettings } = props;
+  const { t } = useLocale();
 
   const [activeTab, setActiveTab] = useState<ProviderId>("claude_code");
   const [modalOpen, setModalOpen] = useState(false);
+  const [customSettingsOpen, setCustomSettingsOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<CustomProvider | null>(null);
 
   function openAdd() {
@@ -715,7 +853,7 @@ export function ProvidersSection(props: SettingsSectionProps) {
 
   return (
     <>
-      <div className="settings-provider-tabs-wrap mb-4 flex shrink-0 justify-start">
+      <div className="settings-provider-tabs-wrap mb-4 flex shrink-0 items-center justify-between gap-3">
         <div className="settings-provider-tabs inline-flex h-9 items-center rounded-lg bg-muted p-1 text-muted-foreground">
           {PROVIDER_TABS.map((tab) => (
             <button
@@ -731,6 +869,17 @@ export function ProvidersSection(props: SettingsSectionProps) {
             </button>
           ))}
         </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={() => setCustomSettingsOpen(true)}
+          title={t("settings.openCustomSettings")}
+          aria-label={t("settings.openCustomSettings")}
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
@@ -763,6 +912,13 @@ export function ProvidersSection(props: SettingsSectionProps) {
           initialData={editingProvider ?? undefined}
           onSave={handleSave}
           onClose={closeModal}
+        />
+      ) : null}
+      {customSettingsOpen ? (
+        <CustomSettingsDrawer
+          settings={settings}
+          setSettings={setSettings}
+          onClose={() => setCustomSettingsOpen(false)}
         />
       ) : null}
     </>

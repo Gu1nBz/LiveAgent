@@ -750,6 +750,66 @@
   .composer-dropdown[data-state="open"] [role="menuitemcheckbox"]:nth-child(n+6),
   .composer-dropdown[data-state="open"] [role="menuitem"]:nth-child(n+6) { animation-delay: 0.12s; }
 
+  /* Composer reasoning select animations */
+  @keyframes composerReasoningDropdownIn {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes composerReasoningDropdownOut {
+    from {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(5px) scale(0.975);
+    }
+  }
+
+  @keyframes composerReasoningItemIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .composer-reasoning-trigger[data-state="open"] {
+    box-shadow:
+      0 8px 18px -14px rgba(88, 28, 135, 0.55),
+      inset 0 0 0 1px rgba(167, 139, 250, 0.12);
+  }
+
+  .composer-reasoning-dropdown[data-state="open"] {
+    animation: composerReasoningDropdownIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: var(--radix-select-content-transform-origin);
+    --tw-enter-opacity: initial;
+    --tw-enter-scale: initial;
+    --tw-enter-translate-y: initial;
+  }
+
+  .composer-reasoning-dropdown[data-state="closed"] {
+    animation: composerReasoningDropdownOut 0.12s cubic-bezier(0.4, 0, 1, 1);
+    transform-origin: var(--radix-select-content-transform-origin);
+    --tw-exit-opacity: initial;
+    --tw-exit-scale: initial;
+    --tw-exit-translate-y: initial;
+  }
+
+  .composer-reasoning-dropdown[data-state="open"] .composer-reasoning-item {
+    animation: composerReasoningItemIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
   /* Chat header model selector animations */
   @keyframes modelSelectorDropdownIn {
     from {
@@ -802,6 +862,25 @@
 
   .model-selector-dropdown[data-state="open"] .model-selector-item {
     animation: modelSelectorItemIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .composer-dropdown,
+    .composer-dropdown [role="menuitemcheckbox"],
+    .composer-dropdown [role="menuitem"],
+    .composer-reasoning-dropdown,
+    .composer-reasoning-item,
+    .model-selector-dropdown,
+    .model-selector-item {
+      animation: none !important;
+    }
+
+    .composer-reasoning-trigger,
+    .composer-reasoning-trigger > svg:last-child,
+    .model-selector-trigger,
+    .model-selector-trigger svg {
+      transition: none !important;
+    }
   }
 
   /* Context checkpoint animations */
@@ -1488,9 +1567,9 @@ body > div:not(#root) [data-streamdown="mermaid"] svg {
   contain: layout paint style;
 }
 
-@supports (content-visibility: auto) {
-  .chat-history-row {
-    content-visibility: auto;
-    contain-intrinsic-size: 44px;
-  }
-}
+/*
+ * The history list already virtualizes once it grows large. Avoid
+ * content-visibility on rows: after pin/unpin reorders the list, WKWebView can
+ * keep the moved row in a skipped paint state and render only the white row
+ * background, making the conversation title look blank.
+ */

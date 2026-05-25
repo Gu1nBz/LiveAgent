@@ -34,6 +34,7 @@ import { McpHubPage } from "@/pages/mcp-hub/McpHubPage";
 import type { SectionId } from "@/pages/settings/types";
 import { useChatSkills } from "@/pages/chat/useChatSkills";
 import { mergeAlwaysEnabledSkillNames } from "@/lib/skills";
+import { buildModelOptions } from "@/lib/chat/chatPageHelpers";
 import { SettingsPage } from "@/pages/SettingsPage";
 import {
   findProviderModelConfig,
@@ -53,7 +54,7 @@ import {
   redactSettingsForWebStorage,
   type GatewaySettingsSyncPayload,
 } from "@/lib/settings/sync";
-import type { ModelOption } from "@/lib/providers/llm";
+import { toModelValue } from "@/lib/providers/llm";
 
 import {
   getGatewayWebSocketClient,
@@ -248,7 +249,6 @@ type SendChatOptions = {
 
 type SendChatFn = (message: string, options?: SendChatOptions) => Promise<void>;
 
-const MODEL_VALUE_SEPARATOR = "::";
 const PROTECTED_DRAFT_CONVERSATION = "__protected_draft__";
 const HISTORY_DETAIL_INITIAL_MAX_MESSAGES = 360;
 const HISTORY_SWITCH_OVERLAY_MIN_MS = 260;
@@ -341,44 +341,6 @@ function isChatEventTitleFinal(event: ChatEvent) {
 
 function isTerminalChatEvent(event: ChatEvent) {
   return event.type === "done" || event.type === "error";
-}
-
-function toModelValue(model: SelectedModel): string {
-  return `${model.customProviderId}${MODEL_VALUE_SEPARATOR}${model.model}`;
-}
-
-function buildModelOptions(
-  providers: ModelProviderSource[],
-  selectedModel?: SelectedModel,
-): ModelOption[] {
-  const options: ModelOption[] = [];
-
-  for (const provider of providers) {
-    for (const model of provider.activeModels) {
-      options.push({
-        providerType: provider.type,
-        providerName: provider.name,
-        model,
-        value: `${provider.id}${MODEL_VALUE_SEPARATOR}${model}`,
-        label: model,
-      });
-    }
-  }
-
-  if (!selectedModel) {
-    return options;
-  }
-
-  const selectedValue = toModelValue(selectedModel);
-  const selectedIndex = options.findIndex((item) => item.value === selectedValue);
-  if (selectedIndex <= 0) {
-    return options;
-  }
-
-  const next = [...options];
-  const [selected] = next.splice(selectedIndex, 1);
-  next.unshift(selected);
-  return next;
 }
 
 function buildGatewaySelectedModel(
@@ -3957,11 +3919,10 @@ export default function App() {
   const isAgentMode = settings.system.executionMode !== "text";
   const isAgentDevExecutionMode = isAgentDevMode(settings.system.executionMode);
 
-  const modelOptions = useMemo(
-    () => buildModelOptions(activeProviders, settings.selectedModel),
-    [activeProviders, settings.selectedModel],
-  );
-  const selectedValue = settings.selectedModel ? toModelValue(settings.selectedModel) : undefined;
+  const modelOptions = useMemo(() => buildModelOptions(settings), [settings]);
+  const selectedValue = settings.selectedModel
+    ? toModelValue(settings.selectedModel.customProviderId, settings.selectedModel.model)
+    : undefined;
 
   const skillsEnabled = settings.skills.enabled && isAgentMode;
   const selectedSkillNames = useMemo(

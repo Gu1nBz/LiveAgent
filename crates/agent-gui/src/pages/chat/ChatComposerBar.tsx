@@ -298,7 +298,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                 >
                   <SelectTrigger
                     className={cn(
-                      "composer-reasoning-trigger group/reasoning h-8 w-auto shrink-0 gap-0.5 rounded-full border pl-2 pr-1.5 text-xs font-medium shadow-none outline-hidden transition-colors disabled:opacity-45 [&>svg:last-child]:h-3 [&>svg:last-child]:w-3 [&>svg:last-child]:opacity-50",
+                      "composer-reasoning-trigger group/reasoning h-8 w-auto shrink-0 gap-0.5 rounded-full border pl-2 pr-1.5 text-xs font-medium shadow-none outline-hidden transition-all duration-200 ease-out disabled:opacity-45 [&>svg:last-child]:h-3 [&>svg:last-child]:w-3 [&>svg:last-child]:opacity-50 [&>svg:last-child]:transition-transform [&>svg:last-child]:duration-200 [&[data-state=open]>svg:last-child]:rotate-180",
                       chatRuntimeControls.thinkingEnabled
                         ? "border-violet-300/30 bg-violet-50/55 text-foreground hover:border-violet-300/45 hover:bg-violet-50/80 dark:border-violet-300/15 dark:bg-violet-400/[0.07] dark:text-foreground dark:hover:bg-violet-400/[0.13]"
                         : "border-transparent bg-foreground/[0.04] text-muted-foreground hover:bg-foreground/[0.07] dark:bg-white/[0.04] dark:hover:bg-white/[0.08]",
@@ -317,9 +317,14 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                       <SelectValue />
                     </span>
                   </SelectTrigger>
-                  <SelectContent>
-                    {reasoningOptions.map((value) => (
-                      <SelectItem key={value} value={value}>
+                  <SelectContent className="composer-reasoning-dropdown min-w-[7.5rem] rounded-xl border border-violet-200/40 bg-popover/85 p-1 shadow-[0_14px_34px_-16px_rgba(88,28,135,0.38)] ring-1 ring-white/15 backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-popover/70 dark:border-violet-300/15 dark:bg-popover/70">
+                    {reasoningOptions.map((value, index) => (
+                      <SelectItem
+                        key={value}
+                        value={value}
+                        className="composer-reasoning-item rounded-md transition-all duration-150 ease-out focus:translate-x-0.5 focus:bg-violet-50/70 focus:text-foreground data-[state=checked]:bg-violet-50/80 data-[state=checked]:font-medium dark:focus:bg-violet-400/[0.12] dark:data-[state=checked]:bg-violet-400/[0.14]"
+                        style={{ animationDelay: `${Math.min(index, 5) * 0.022}s` }}
+                      >
                         {t(REASONING_I18N_KEYS[value])}
                       </SelectItem>
                     ))}

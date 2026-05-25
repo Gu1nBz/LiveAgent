@@ -30,6 +30,17 @@ type StartConversationTitleJobParams = {
 
 const GATEWAY_BRIDGE_TITLE_MIN_INTERVAL_MS = 250;
 
+export function buildConversationTitleRuntime(
+  runtime: Parameters<typeof streamAssistantMessage>[0]["runtime"],
+): Parameters<typeof streamAssistantMessage>[0]["runtime"] {
+  return {
+    ...runtime,
+    reasoning: "off",
+    promptCachingEnabled: false,
+    nativeWebSearchEnabled: false,
+  };
+}
+
 export function startConversationTitleJob(params: StartConversationTitleJobParams) {
   const {
     providerId,
@@ -61,12 +72,15 @@ export function startConversationTitleJob(params: StartConversationTitleJobParam
     gatewayBridgeEvents.queueTitle(title, force);
   };
 
+  const titleRuntime = buildConversationTitleRuntime(runtime);
+
   const titlePromise = streamAssistantMessage({
     providerId,
     model,
-    runtime,
+    runtime: titleRuntime,
     signal,
     cacheRetention: "none",
+    nativeWebSearch: false,
     context: {
       systemPrompt: "You generate concise conversation titles. Output the title only, with no extra explanation.",
       messages: [

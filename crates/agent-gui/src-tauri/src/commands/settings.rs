@@ -1078,6 +1078,7 @@ pub(crate) fn load_gateway_settings_sync_snapshot(conn: &Connection) -> Result<V
         "memory".to_string(),
         load_memory(conn)?.unwrap_or(Value::Object(Map::new())),
     );
+    snapshot.insert("customSettings".to_string(), Value::Object(Map::new()));
     snapshot.insert("skills".to_string(), Value::Object(Map::new()));
     snapshot.insert(
         "chatRuntimeControls".to_string(),

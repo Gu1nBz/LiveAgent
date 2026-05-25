@@ -413,6 +413,14 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.deleteConfirm": "确认删除",
     "settings.deleteConfirmDesc": "此操作不可撤销。",
     "settings.deleteConfirmYes": "确定删除",
+    "settings.customSettings": "自定义设置",
+    "settings.openCustomSettings": "打开自定义设置",
+    "settings.closeCustomSettings": "关闭自定义设置",
+    "settings.conversationTitleGeneration": "对话标题生成",
+    "settings.conversationTitleModel": "标题生成模型",
+    "settings.conversationTitleModelFollowCurrent": "使用当前对话模型",
+    "settings.conversationTitleModelHint": "未选择时，标题生成会使用当前对话使用的模型。",
+    "settings.customSettingsModelEmpty": "当前 Provider 未配置模型。",
 
     /* ── Settings Prompt ── */
     "settings.agentsTitle": "全局提示词",
@@ -1196,6 +1204,14 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.deleteConfirm": "Confirm Delete",
     "settings.deleteConfirmDesc": "This action cannot be undone.",
     "settings.deleteConfirmYes": "Delete",
+    "settings.customSettings": "Custom Settings",
+    "settings.openCustomSettings": "Open custom settings",
+    "settings.closeCustomSettings": "Close custom settings",
+    "settings.conversationTitleGeneration": "Conversation title generation",
+    "settings.conversationTitleModel": "Title generation model",
+    "settings.conversationTitleModelFollowCurrent": "Use current chat model",
+    "settings.conversationTitleModelHint": "When unselected, title generation uses the model from the current chat.",
+    "settings.customSettingsModelEmpty": "No active models are configured for the current providers.",
 
     /* ── Settings Prompt ── */
     "settings.agentsTitle": "Prompt",

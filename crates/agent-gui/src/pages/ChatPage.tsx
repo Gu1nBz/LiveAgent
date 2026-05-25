@@ -362,6 +362,30 @@ function resolveMemorySummaryModelSelection(
   };
 }
 
+function resolveConversationTitleModelSelection(
+  settings: AppSettings,
+  fallback: EffectiveChatModelSelection,
+): EffectiveChatModelSelection {
+  const titleModel = settings.customSettings.conversationTitleModel;
+  if (!titleModel) {
+    return fallback;
+  }
+
+  const provider = settings.customProviders.find(
+    (item) => item.id === titleModel.customProviderId,
+  );
+  if (!provider || !provider.activeModels.includes(titleModel.model)) {
+    return fallback;
+  }
+
+  return {
+    selectedModel: titleModel,
+    provider,
+    providerId: provider.type,
+    model: titleModel.model,
+  };
+}
+
 function buildProviderRuntimeConfig(
   provider: AppSettings["customProviders"][number],
   model: string,
@@ -1618,17 +1642,26 @@ export function ChatPage(props: ChatPageProps) {
 
     let titlePromise: Promise<string | null> | null = null;
     if (isFirstTurn) {
+      const titleModelSelection = resolveConversationTitleModelSelection(
+        settings,
+        effectiveSelectedModel,
+      );
+      const titleProviderConfig = buildProviderRuntimeConfig(
+        titleModelSelection.provider,
+        titleModelSelection.model,
+        runtimeControls,
+      );
       titlePromise = startConversationTitleJob({
-        providerId,
-        model,
+        providerId: titleModelSelection.providerId,
+        model: titleModelSelection.model,
         runtime: {
-          baseUrl: providerConfig.baseUrl,
-          apiKey: providerConfig.apiKey,
-          requestFormat: providerConfig.requestFormat,
-          reasoning: providerConfig.reasoning,
-          promptCachingEnabled: providerConfig.promptCachingEnabled,
-          nativeWebSearchEnabled: providerConfig.nativeWebSearchEnabled,
-          modelConfig: providerConfig.modelConfig,
+          baseUrl: titleProviderConfig.baseUrl,
+          apiKey: titleProviderConfig.apiKey,
+          requestFormat: titleProviderConfig.requestFormat,
+          reasoning: titleProviderConfig.reasoning,
+          promptCachingEnabled: titleProviderConfig.promptCachingEnabled,
+          nativeWebSearchEnabled: titleProviderConfig.nativeWebSearchEnabled,
+          modelConfig: titleProviderConfig.modelConfig,
         },
         signal: requestController.signal,
         conversationId,

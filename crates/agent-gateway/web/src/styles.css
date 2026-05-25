@@ -223,12 +223,12 @@ html[data-liveagent-webui="gateway"] .mention-popup-scroll::-webkit-scrollbar {
   height: 8px;
 }
 
-@supports (content-visibility: auto) {
-  html[data-liveagent-webui="gateway"] .chat-history-row {
-    content-visibility: auto;
-    contain-intrinsic-size: 44px;
-  }
-}
+/*
+ * The history list already virtualizes once it grows large. Avoid
+ * content-visibility on rows: after pin/unpin reorders the list, WebView
+ * engines can keep the moved row in a skipped paint state and render only the
+ * row background, making the conversation title look blank.
+ */
 
 body {
   background:

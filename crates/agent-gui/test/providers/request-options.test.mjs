@@ -144,6 +144,33 @@ test("custom Codex Responses models prefer native image-capable input metadata",
   assert.deepEqual(model.input, ["text", "image"]);
 });
 
+test("custom Codex models append v1 to bare and prefixed base URLs", () => {
+  const bare = providers.createModelFromConfig(
+    "codex",
+    "custom-responses-model",
+    "https://api.openai.com",
+    "openai-responses",
+  );
+  const prefixed = providers.createModelFromConfig(
+    "codex",
+    "custom-responses-model",
+    "https://openrouter.ai/api",
+    "openai-responses",
+  );
+  const proxied = providers.createModelFromConfig(
+    "codex",
+    "custom-chat-model",
+    "http://127.0.0.1:18080/proxy/codex",
+    "openai-completions",
+    undefined,
+    "https://api.openai.com",
+  );
+
+  assert.equal(bare.baseUrl, "https://api.openai.com/v1");
+  assert.equal(prefixed.baseUrl, "https://openrouter.ai/api/v1");
+  assert.equal(proxied.baseUrl, "http://127.0.0.1:18080/proxy/codex/v1");
+});
+
 test("custom Codex Chat Completions models keep text-only input metadata", () => {
   const model = providers.createModelFromConfig(
     "codex",

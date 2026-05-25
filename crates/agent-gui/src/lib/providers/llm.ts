@@ -1266,9 +1266,10 @@ function maybeAppendCodexApiVersion(baseUrl: string) {
   try {
     const url = new URL(baseUrl);
     const pathname = url.pathname.replace(/\/+$/, "");
-    if (!pathname) {
-      url.pathname = "/v1";
-      return url.toString().replace(/\/+$/, "");
+    if (!/\/v1$/i.test(pathname)) {
+      url.pathname = `${pathname}/v1`;
+    } else {
+      url.pathname = pathname;
     }
     return url.toString().replace(/\/+$/, "");
   } catch {

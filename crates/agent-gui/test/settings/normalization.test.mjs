@@ -119,6 +119,44 @@ test("settings normalization drops stale selected models and preserves valid sel
   assert.deepEqual(valid.selectedModel, { customProviderId: "provider-1", model: "gpt-5" });
 });
 
+test("custom settings conversation title model only keeps enabled provider models", () => {
+  const customProviders = [
+    {
+      id: "provider-1",
+      name: "Provider",
+      type: "codex",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "key",
+      models: ["gpt-5", "gpt-5-mini"],
+      activeModels: ["gpt-5-mini"],
+    },
+  ];
+
+  const normalized = settings.normalizeSettings({
+    customProviders,
+    customSettings: {
+      conversationTitleModel: { customProviderId: "provider-1", model: "gpt-5-mini" },
+    },
+  });
+  assert.deepEqual(normalized.customSettings.conversationTitleModel, {
+    customProviderId: "provider-1",
+    model: "gpt-5-mini",
+  });
+
+  const stale = settings.normalizeSettings({
+    customProviders,
+    customSettings: {
+      conversationTitleModel: { customProviderId: "provider-1", model: "gpt-5" },
+    },
+  });
+  assert.equal(stale.customSettings.conversationTitleModel, undefined);
+
+  const cleared = settings.updateCustomSettings(normalized, {
+    conversationTitleModel: undefined,
+  });
+  assert.equal(cleared.customSettings.conversationTitleModel, undefined);
+});
+
 test("chat runtime controls default and follow provider reasoning support", () => {
   const defaults = settings.getDefaultSettings();
   assert.deepEqual(defaults.chatRuntimeControls, {
@@ -420,12 +458,16 @@ test("gateway settings sync payload redacts provider api keys", () => {
         gemini: "minimal",
       },
     },
+    customSettings: {
+      conversationTitleModel: { customProviderId: "provider-1", model: "gpt-5" },
+    },
   });
 
   const payload = sync.buildGatewaySettingsSyncPayload(appSettings);
   assert.equal(payload.customProviders[0].apiKey, undefined);
   assert.equal(payload.customProviders[0].apiKeyConfigured, true);
   assert.equal(payload.customProviders[0].nativeWebSearchEnabled, true);
+  assert.deepEqual(payload.customSettings, appSettings.customSettings);
   assert.deepEqual(payload.chatRuntimeControls, appSettings.chatRuntimeControls);
   assert.equal(payload.providerApiKeyUpdates, undefined);
 
@@ -477,6 +519,9 @@ test("gateway settings sync applies redacted providers without clearing local ap
         gemini: "xhigh",
       },
     },
+    customSettings: {
+      conversationTitleModel: { customProviderId: "provider-1", model: "gpt-5.4" },
+    },
   });
   assert.equal(redacted.customProviders[0].name, "Renamed");
   assert.equal(redacted.customProviders[0].apiKey, "old-key");
@@ -487,6 +532,10 @@ test("gateway settings sync applies redacted providers without clearing local ap
   assert.equal(redacted.chatRuntimeControls.reasoningByProvider.claude_code, "xhigh");
   assert.equal(redacted.chatRuntimeControls.reasoningByProvider.codex_openai_responses, "minimal");
   assert.equal(redacted.chatRuntimeControls.reasoningByProvider.gemini, "high");
+  assert.deepEqual(redacted.customSettings.conversationTitleModel, {
+    customProviderId: "provider-1",
+    model: "gpt-5.4",
+  });
 
   const updated = sync.applyGatewaySettingsSyncPayload(current, {
     customProviders: [

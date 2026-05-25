@@ -1,4 +1,4 @@
-import { memo, type ComponentProps } from "react";
+import { memo, useLayoutEffect, useRef, type ComponentProps } from "react";
 import { createPortal } from "react-dom";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
@@ -82,6 +82,87 @@ export const markdownReadOnlyComponents: Components = {
   ...markdownComponents,
   a: MarkdownReadOnlyLink,
 };
+
+const codeBlockSelector = '[data-streamdown="code-block"]';
+const codeCopyButtonSelector =
+  '[data-streamdown="code-block"] [data-streamdown="code-block-copy-button"]';
+const codeBlockBodySelector = '[data-streamdown="code-block-body"] pre';
+
+function enableCodeCopyButtons(root: HTMLElement) {
+  root.querySelectorAll<HTMLButtonElement>(codeCopyButtonSelector).forEach((button) => {
+    if (!button.disabled && !button.hasAttribute("disabled")) return;
+    button.disabled = false;
+    button.removeAttribute("disabled");
+  });
+}
+
+function getCodeBlockText(button: HTMLButtonElement) {
+  const codeBlock = button.closest(codeBlockSelector);
+  const codeBody = codeBlock?.querySelector<HTMLElement>(codeBlockBodySelector);
+  return codeBody?.textContent ?? null;
+}
+
+async function copyCodeBlockText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    console.error("Failed to copy code block", error);
+  }
+}
+
+function useEnabledCodeCopyButtons(enabled: boolean) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!enabled) return;
+
+    const root = rootRef.current;
+    if (!root) return;
+
+    // Streamdown disables copy controls while animating, but the copy handler
+    // can safely copy the current partial code during streaming.
+    enableCodeCopyButtons(root);
+
+    const handleCopyClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const button = target.closest(codeCopyButtonSelector);
+      if (!(button instanceof HTMLButtonElement) || !root.contains(button)) return;
+
+      const codeText = getCodeBlockText(button);
+      if (codeText === null) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      void copyCodeBlockText(codeText);
+    };
+
+    root.addEventListener("click", handleCopyClick, true);
+
+    let observer: MutationObserver | undefined;
+    if (typeof MutationObserver !== "undefined") {
+      observer = new MutationObserver(() => {
+        enableCodeCopyButtons(root);
+      });
+      observer.observe(root, {
+        attributes: true,
+        attributeFilter: ["disabled"],
+        childList: true,
+        subtree: true,
+      });
+    }
+
+    return () => {
+      root.removeEventListener("click", handleCopyClick, true);
+      observer?.disconnect();
+    };
+  }, [enabled]);
+
+  return rootRef;
+}
+
 const streamdownTranslations = {
   close: "关闭",
   copied: "已复制",
@@ -215,46 +296,51 @@ export const Markdown = memo(function Markdown(props: MarkdownProps) {
     showCaret = isAnimating,
     readOnly = false,
   } = props;
+  const useStreamingMode = isAnimating;
+  const isActivelyStreaming = showCaret;
+  const codeCopyRootRef = useEnabledCodeCopyButtons(!readOnly && isActivelyStreaming);
   // Keep Streamdown's caret pseudo-element mounted while in streaming mode;
   // `showCaret` only toggles visibility so the final token does not reflow.
-  const keepCaretSlot = isAnimating;
+  const keepCaretSlot = useStreamingMode;
 
   return (
-    <Streamdown
-      className={cn(
-        "chat-markdown max-w-none break-words",
-        isAnimating ? "chat-markdown--streaming" : "chat-markdown--static",
-        // Streamdown's memo equality does not include `caret` in its check,
-        // so toggling the caret prop alone does not invalidate the render.
-        // Mirror the visibility into a className modifier to force a re-render
-        // that recomputes the inline `--streamdown-caret` style.
-        showCaret ? "chat-markdown--caret-on" : "chat-markdown--caret-off",
-        className,
-      )}
-      plugins={streamdownPlugins}
-      remarkPlugins={remarkPlugins}
-      components={readOnly ? markdownReadOnlyComponents : markdownComponents}
-      mode={isAnimating ? "streaming" : "static"}
-      dir="auto"
-      parseIncompleteMarkdown
-      normalizeHtmlIndentation
-      isAnimating={isAnimating}
-      caret={keepCaretSlot ? "block" : undefined}
-      animated={false}
-      linkSafety={{
-        enabled: !readOnly,
-        renderModal: (modalProps) => <ExternalLinkModal {...modalProps} />,
-      }}
-      {...(isAnimating ? {} : { shikiTheme: ["github-light", "github-dark"] as const })}
-      controls={{
-        code: { copy: !readOnly, download: false },
-        mermaid: { copy: !readOnly, download: false, fullscreen: !readOnly, panZoom: !readOnly },
-        table: { copy: !readOnly, download: false, fullscreen: !readOnly },
-      }}
-      translations={streamdownTranslations}
-    >
-      {content}
-    </Streamdown>
+    <div ref={codeCopyRootRef} style={{ display: "contents" }}>
+      <Streamdown
+        className={cn(
+          "chat-markdown max-w-none break-words",
+          useStreamingMode ? "chat-markdown--streaming" : "chat-markdown--static",
+          // Streamdown's memo equality does not include `caret` in its check,
+          // so toggling the caret prop alone does not invalidate the render.
+          // Mirror the visibility into a className modifier to force a re-render
+          // that recomputes the inline `--streamdown-caret` style.
+          showCaret ? "chat-markdown--caret-on" : "chat-markdown--caret-off",
+          className,
+        )}
+        plugins={streamdownPlugins}
+        remarkPlugins={remarkPlugins}
+        components={readOnly ? markdownReadOnlyComponents : markdownComponents}
+        mode={useStreamingMode ? "streaming" : "static"}
+        dir="auto"
+        parseIncompleteMarkdown
+        normalizeHtmlIndentation
+        isAnimating={isActivelyStreaming}
+        caret={keepCaretSlot ? "block" : undefined}
+        animated={false}
+        linkSafety={{
+          enabled: !readOnly,
+          renderModal: (modalProps) => <ExternalLinkModal {...modalProps} />,
+        }}
+        {...(useStreamingMode ? {} : { shikiTheme: ["github-light", "github-dark"] as const })}
+        controls={{
+          code: { copy: !readOnly, download: false },
+          mermaid: { copy: !readOnly, download: false, fullscreen: !readOnly, panZoom: !readOnly },
+          table: { copy: !readOnly, download: false, fullscreen: !readOnly },
+        }}
+        translations={streamdownTranslations}
+      >
+        {content}
+      </Streamdown>
+    </div>
   );
 });
 

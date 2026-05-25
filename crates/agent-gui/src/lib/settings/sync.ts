@@ -20,6 +20,7 @@ export type GatewaySettingsSyncPayload = {
   hooks: AppSettings["hooks"];
   cron: AppSettings["cron"];
   memory: AppSettings["memory"];
+  customSettings: AppSettings["customSettings"];
   skills: AppSettings["skills"];
   chatRuntimeControls: AppSettings["chatRuntimeControls"];
   selectedModel: AppSettings["selectedModel"] | null;
@@ -138,6 +139,7 @@ export function buildGatewaySettingsSyncPayload(
     hooks: settings.hooks,
     cron: settings.cron,
     memory: settings.memory,
+    customSettings: settings.customSettings,
     skills: settings.skills,
     chatRuntimeControls: settings.chatRuntimeControls,
     selectedModel: settings.selectedModel ?? null,
@@ -167,6 +169,9 @@ export function applyGatewaySettingsSyncPayload(
   const memory = Object.prototype.hasOwnProperty.call(source, "memory")
     ? (source.memory as AppSettings["memory"] | null | undefined) ?? {}
     : current.memory;
+  const customSettings = Object.prototype.hasOwnProperty.call(source, "customSettings")
+    ? (source.customSettings as AppSettings["customSettings"] | null | undefined) ?? {}
+    : current.customSettings;
 
   return normalizeSettings({
     ...current,
@@ -181,6 +186,7 @@ export function applyGatewaySettingsSyncPayload(
     hooks: (source.hooks as AppSettings["hooks"] | undefined) ?? current.hooks,
     cron: (source.cron as AppSettings["cron"] | undefined) ?? current.cron,
     memory: memory as AppSettings["memory"],
+    customSettings: customSettings as AppSettings["customSettings"],
     skills: (source.skills as AppSettings["skills"] | undefined) ?? current.skills,
     chatRuntimeControls: Object.prototype.hasOwnProperty.call(source, "chatRuntimeControls")
       ? normalizeChatRuntimeControls(source.chatRuntimeControls)

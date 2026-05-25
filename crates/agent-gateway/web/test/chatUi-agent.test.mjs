@@ -352,6 +352,85 @@ test("hosted search finalization keeps stream order across non-text blocks", () 
   assert.equal(ui[1].rounds[0].blocks[1].item.id, "search-mid");
 });
 
+test("web UI hydrates persisted hosted search sources from answer links", () => {
+  const ui = uiMessages.buildUiMessages([
+    { role: "user", content: "请联网搜索 iDRAC 是什么", timestamp: 1 },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "hostedSearch",
+          id: "search-persisted-empty",
+          provider: "codex",
+          status: "completed",
+          queries: [],
+          sources: [],
+        },
+        {
+          type: "text",
+          text: "参考：\n- Dell 官方 iDRAC 页面：https://www.dell.com/en-us/lp/dt/open-manage-idrac",
+        },
+      ],
+      provider: "codex",
+      model: "gpt-5.5",
+      api: "openai-responses",
+      stopReason: "stop",
+      timestamp: 2,
+    },
+  ]);
+
+  const searchBlock = ui[1].rounds[0].blocks.find((block) => block.kind === "hostedSearch");
+  assert.deepEqual(searchBlock.item.sources, [
+    {
+      url: "https://www.dell.com/en-us/lp/dt/open-manage-idrac",
+      title: "Dell 官方 iDRAC 页面",
+      sourceType: "citation",
+    },
+  ]);
+});
+
+test("web UI keeps inferred sources scoped to each persisted search block", () => {
+  const ui = uiMessages.buildUiMessages([
+    { role: "user", content: "search twice", timestamp: 1 },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "hostedSearch",
+          id: "search-a",
+          provider: "codex",
+          status: "completed",
+          queries: [],
+          sources: [],
+        },
+        { type: "text", text: "A 来源：https://example.com/a\n" },
+        {
+          type: "hostedSearch",
+          id: "search-b",
+          provider: "codex",
+          status: "completed",
+          queries: [],
+          sources: [],
+        },
+        { type: "text", text: "B 来源：https://example.com/b" },
+      ],
+      provider: "codex",
+      model: "gpt-5.5",
+      api: "openai-responses",
+      stopReason: "stop",
+      timestamp: 2,
+    },
+  ]);
+
+  const searches = ui[1].rounds[0].blocks
+    .filter((block) => block.kind === "hostedSearch")
+    .map((block) => block.item);
+  assert.deepEqual(
+    searches.map((search) => search.sources.map((source) => source.url)),
+    [["https://example.com/a"], ["https://example.com/b"]],
+  );
+});
+
 test("hosted search finalization does not split a sentence at the stream event offset", () => {
   const search = {
     type: "hostedSearch",

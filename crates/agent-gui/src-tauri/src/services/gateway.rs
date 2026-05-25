@@ -30,6 +30,7 @@ pub mod proto {
 const UI_ONLY_SETTINGS_SYNC_FIELDS: &[&str] = &[
     "skills",
     "chatRuntimeControls",
+    "customSettings",
     "selectedModel",
     "theme",
     "locale",
@@ -1305,6 +1306,7 @@ mod tests {
                 "nativeWebSearchEnabled": true,
                 "reasoning": "high"
             },
+            "customSettings": {},
             "selectedModel": null,
         });
         let cached_snapshot = json!({
@@ -1315,6 +1317,12 @@ mod tests {
                 "thinkingEnabled": false,
                 "nativeWebSearchEnabled": false,
                 "reasoning": "xhigh"
+            },
+            "customSettings": {
+                "conversationTitleModel": {
+                    "customProviderId": "provider-a",
+                    "model": "gpt-5-mini"
+                }
             },
             "selectedModel": {
                 "customProviderId": "provider-a",
@@ -1335,6 +1343,15 @@ mod tests {
                 "thinkingEnabled": false,
                 "nativeWebSearchEnabled": false,
                 "reasoning": "xhigh"
+            })
+        );
+        assert_eq!(
+            merged["customSettings"],
+            json!({
+                "conversationTitleModel": {
+                    "customProviderId": "provider-a",
+                    "model": "gpt-5-mini"
+                }
             })
         );
         assert_eq!(
