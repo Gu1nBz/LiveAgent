@@ -109,8 +109,9 @@ Keychain 中必须是带私钥的 `Developer ID Application` identity。若 macO
 
 | 平台 | Runner | 产物 |
 |---|---|---|
-| macOS Intel | `macos-13` | `LiveAgent_<tag>_x64.dmg`，Developer ID 签名、公证、staple。 |
-| macOS Apple Silicon | `macos-14` | `LiveAgent_<tag>_aarch64.dmg`，Developer ID 签名、公证、staple。 |
-| Windows x64 | `windows-latest` | Tauri 生成的 `.msi` 和 NSIS `.exe`。 |
+| macOS Intel | `macos-15-intel` | `LiveAgent-vX.Y.Z-macOS-x64.dmg`，Developer ID 签名、公证、staple。 |
+| macOS Apple Silicon | `macos-14` | `LiveAgent-vX.Y.Z-macOS-aarch64.dmg`，Developer ID 签名、公证、staple。 |
+| Windows x64 | `windows-latest` | `LiveAgent-vX.Y.Z-Windows-x64.msi` 与 `LiveAgent-vX.Y.Z-Windows-x64-Setup.exe`。 |
+| Linux x64 | `ubuntu-latest` | `LiveAgent-vX.Y.Z-Linux-x86_64.AppImage`、`.deb`、`.rpm`。 |
 
 Windows 当前没有代码签名 secret，release workflow 会先自动发布 unsigned 包。接入 Windows `.p12/.pfx` 或 Trusted Signing 后再补签名步骤。

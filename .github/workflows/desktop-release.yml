@@ -25,7 +25,7 @@ jobs:
       matrix:
         include:
           - name: Intel
-            runner: macos-13
+            runner: macos-15-intel
             target: x86_64-apple-darwin
             suffix: x64
           - name: Apple Silicon
@@ -33,11 +33,11 @@ jobs:
             target: aarch64-apple-darwin
             suffix: aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -110,9 +110,9 @@ jobs:
           mkdir -p dist
           dmg_path="$(find "target/${{ matrix.target }}/release/bundle/dmg" -maxdepth 1 -name 'LiveAgent_*.dmg' -print -quit)"
           test -n "$dmg_path"
-          cp "$dmg_path" "dist/LiveAgent_${RELEASE_TAG}_${{ matrix.suffix }}.dmg"
+          cp "$dmg_path" "dist/LiveAgent-${RELEASE_TAG}-macOS-${{ matrix.suffix }}.dmg"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: liveagent-macos-${{ matrix.suffix }}
           path: dist/*.dmg
@@ -122,11 +122,11 @@ jobs:
     name: Windows x64
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -154,15 +154,89 @@ jobs:
 
       - name: Stage Windows artifacts
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          find target crates/agent-gui/src-tauri/target -type f \( -name '*.msi' -o -name '*.exe' \) -path '*bundle*' -exec cp {} dist/ \; 2>/dev/null || true
+          msi_path="$(find target crates/agent-gui/src-tauri/target -type f -name '*.msi' -path '*bundle*' -print -quit 2>/dev/null || true)"
+          exe_path="$(find target crates/agent-gui/src-tauri/target -type f -name '*.exe' -path '*bundle*' -print -quit 2>/dev/null || true)"
+          test -n "$msi_path"
+          test -n "$exe_path"
+          cp "$msi_path" "dist/LiveAgent-${RELEASE_TAG}-Windows-x64.msi"
+          cp "$exe_path" "dist/LiveAgent-${RELEASE_TAG}-Windows-x64-Setup.exe"
           test "$(find dist -type f | wc -l)" -gt 0
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: liveagent-windows-x64
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.32.1
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            protobuf-compiler \
+            rpm \
+            wget
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/agent-gui/src-tauri
+
+      - name: Install frontend dependencies
+        working-directory: crates/agent-gui
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Linux bundles
+        run: make desktop-build-linux
+
+      - name: Stage Linux artifacts
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          appimage_path="$(find crates/agent-gui/src-tauri/target target -type f -name '*.AppImage' -path '*bundle*' -print -quit 2>/dev/null || true)"
+          deb_path="$(find crates/agent-gui/src-tauri/target target -type f -name '*.deb' -path '*bundle*' -print -quit 2>/dev/null || true)"
+          rpm_path="$(find crates/agent-gui/src-tauri/target target -type f -name '*.rpm' -path '*bundle*' -print -quit 2>/dev/null || true)"
+          test -n "$appimage_path"
+          test -n "$deb_path"
+          test -n "$rpm_path"
+          cp "$appimage_path" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.AppImage"
+          cp "$deb_path" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.deb"
+          cp "$rpm_path" "dist/LiveAgent-${RELEASE_TAG}-Linux-x86_64.rpm"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: liveagent-linux-x64
           path: dist/*
           if-no-files-found: error
 
@@ -172,8 +246,9 @@ jobs:
     needs:
       - macos
       - windows
+      - linux
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           merge-multiple: true
@@ -185,5 +260,5 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
-            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes "Automated LiveAgent release."
+            gh release create "$RELEASE_TAG" --title "LiveAgent $RELEASE_TAG" --notes "Automated LiveAgent release."
           gh release upload "$RELEASE_TAG" release-artifacts/* --clobber
