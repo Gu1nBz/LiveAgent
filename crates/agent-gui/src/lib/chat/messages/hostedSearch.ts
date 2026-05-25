@@ -99,6 +99,80 @@ function normalizeSources(values: unknown[]): HostedSearchSource[] {
   return [...out.values()];
 }
 
+const MARKDOWN_LINK_RE = /\[([^\]\n]{1,180})\]\((https?:\/\/[^)\s]+)\)/gi;
+const PLAIN_URL_RE = /https?:\/\/[^\s<>"'`，。！？；：、]+/gi;
+
+function stripTrailingUrlPunctuation(value: string) {
+  return value.replace(/[)\].,!?;:，。！？；：、]+$/g, "");
+}
+
+function cleanInferredSourceTitle(value: string) {
+  const title = value
+    .replace(/^[\s>*\-+•\d.)、]+/g, "")
+    .replace(/(?:参考|来源|source|sources|reference|references)\s*[:：-]?\s*$/i, "")
+    .replace(/[:：\-–—|丨\s]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!title || title.length > 180) return "";
+  return title;
+}
+
+function inferSourceTitleFromLine(line: string, urlStart: number) {
+  const prefix = line.slice(0, urlStart);
+  const colonIndex = Math.max(prefix.lastIndexOf("："), prefix.lastIndexOf(":"));
+  const candidate = colonIndex >= 0 ? prefix.slice(0, colonIndex) : prefix;
+  return cleanInferredSourceTitle(candidate);
+}
+
+export function inferHostedSearchSourcesFromText(text: string): HostedSearchSource[] {
+  const sources = new Map<string, HostedSearchSource>();
+  const normalizedText = text.replace(/\r\n/g, "\n");
+
+  for (const match of normalizedText.matchAll(MARKDOWN_LINK_RE)) {
+    const title = cleanInferredSourceTitle(match[1] ?? "");
+    const url = stripTrailingUrlPunctuation(match[2] ?? "");
+    if (!url || !isHttpUrl(url)) continue;
+    sources.set(url, {
+      url,
+      ...(title ? { title } : {}),
+      sourceType: "citation",
+    });
+  }
+
+  for (const line of normalizedText.split("\n")) {
+    for (const match of line.matchAll(PLAIN_URL_RE)) {
+      const rawUrl = match[0] ?? "";
+      const url = stripTrailingUrlPunctuation(rawUrl);
+      if (!url || !isHttpUrl(url) || sources.has(url)) continue;
+      const title = inferSourceTitleFromLine(line, match.index ?? 0);
+      sources.set(url, {
+        url,
+        ...(title ? { title } : {}),
+        sourceType: "citation",
+      });
+    }
+  }
+
+  return [...sources.values()];
+}
+
+export function enrichHostedSearchBlockWithText(
+  block: HostedSearchBlock,
+  text: string,
+): HostedSearchBlock {
+  const inferredSources = inferHostedSearchSourcesFromText(text);
+  if (inferredSources.length === 0) return block;
+  return mergeHostedSearchBlocks(block, {
+    type: "hostedSearch",
+    id: block.id,
+    provider: block.provider,
+    status: block.status,
+    queries: [],
+    sources: inferredSources,
+    updatedAt: block.updatedAt,
+  });
+}
+
 export function normalizeHostedSearchStatus(value: unknown): HostedSearchStatus {
   return value === "completed" || value === "failed" || value === "searching"
     ? value
@@ -165,6 +239,43 @@ function isTextContentBlock(value: unknown): value is { type: "text"; text: stri
 
 function removeHostedSearchContent(content: unknown[]) {
   return content.filter((block) => !normalizeHostedSearchBlock(block));
+}
+
+function collectTextContent(content: unknown[], startIndex: number, endIndex: number) {
+  let text = "";
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const block = content[index];
+    if (isTextContentBlock(block)) text += block.text;
+  }
+  return text;
+}
+
+export function enrichHostedSearchContentWithText(content: unknown[]) {
+  const allText = collectTextContent(content, 0, content.length);
+  if (!allText) return content;
+
+  let changed = false;
+  const nextContent = content.slice();
+  for (let index = 0; index < nextContent.length; index += 1) {
+    const block = normalizeHostedSearchBlock(nextContent[index]);
+    if (!block || block.sources.length > 0) continue;
+
+    let nextSearchIndex = nextContent.length;
+    for (let probe = index + 1; probe < nextContent.length; probe += 1) {
+      if (normalizeHostedSearchBlock(nextContent[probe])) {
+        nextSearchIndex = probe;
+        break;
+      }
+    }
+
+    const nearbyText = collectTextContent(nextContent, index + 1, nextSearchIndex) || allText;
+    const enriched = enrichHostedSearchBlockWithText(block, nearbyText);
+    if (enriched.sources.length === block.sources.length) continue;
+    nextContent[index] = enriched;
+    changed = true;
+  }
+
+  return changed ? nextContent : content;
 }
 
 function sentenceEndAfter(text: string, index: number) {
@@ -418,9 +529,10 @@ export function applyHostedSearchOrderToAssistant<TMessage extends { content: un
   const orderedContent = nextContent;
   if (orderedContent.length === 0) return message;
   const originalContent = removeHostedSearchContent(message.content);
+  const content = insertHostedSearchesByTextOffset(originalContent, orderedContent);
   return {
     ...message,
-    content: insertHostedSearchesByTextOffset(originalContent, orderedContent),
+    content: enrichHostedSearchContentWithText(content),
   };
 }
 

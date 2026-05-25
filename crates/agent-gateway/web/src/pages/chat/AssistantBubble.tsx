@@ -305,6 +305,7 @@ function getUniqueHostedSearchSources(items: HostedSearchBlock[]) {
 function getLatestHostedSearchTitle(
   items: HostedSearchBlock[],
   t: (key: string) => string,
+  status: HostedSearchBlock["status"],
 ) {
   for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
     const item = items[itemIndex];
@@ -316,6 +317,7 @@ function getLatestHostedSearchTitle(
     if (latestSource?.title) return latestSource.title;
     if (latestSource?.url) return getSourceHost(latestSource.url);
   }
+  if (status !== "searching") return getHostedSearchStatusLabel(t, status);
   return t("chat.search.noQuery");
 }
 
@@ -340,7 +342,7 @@ function HostedSearchGroupView({
   const visibleSources = sources.slice(0, 10);
   const status = getHostedSearchGroupStatus(items);
   const statusLabel = getHostedSearchStatusLabel(t, status);
-  const latestTitle = getLatestHostedSearchTitle(items, t);
+  const latestTitle = getLatestHostedSearchTitle(items, t, status);
   const isSearching = status === "searching";
   const hasDetails = queries.length > 0 || visibleSources.length > 0;
   const statusBgClass =

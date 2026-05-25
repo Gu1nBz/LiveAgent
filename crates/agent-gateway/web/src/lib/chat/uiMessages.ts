@@ -17,6 +17,7 @@ import type {
   DelegateAgentResultDetails,
 } from "../tools/builtinTypes";
 import {
+  enrichHostedSearchContentWithText,
   mergeHostedSearchBlocks,
   normalizeHostedSearchBlock,
   resolveHostedSearchTextBoundary,
@@ -1357,7 +1358,10 @@ function buildUiRoundBlocks(
   toolResultById: Map<string, ToolResultMessage>,
 ) {
   let blocks: UiRoundContentBlock[] = [];
-  for (const block of assistant.content) {
+  const content = enrichHostedSearchContentWithText(
+    assistant.content,
+  ) as AssistantMessage["content"];
+  for (const block of content) {
     if (block.type === "text") {
       blocks = appendTextLikeBlock(blocks, "text", block.text);
       continue;
