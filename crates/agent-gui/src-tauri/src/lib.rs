@@ -284,6 +284,7 @@ pub fn run() {
         .setup({
             let allow_exit = Arc::clone(&allow_exit);
             move |app| {
+                commands::history_db::initialize_history_db()?;
                 configure_system_tray(app, Arc::clone(&allow_exit))?;
                 #[cfg(target_os = "windows")]
                 configure_windows_window_chrome(app)?;

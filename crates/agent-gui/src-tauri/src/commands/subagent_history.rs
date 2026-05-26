@@ -2,14 +2,13 @@ use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    fs,
-    path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::commands::delegate::{self, DelegateWorktreeCleanupTarget};
-
-const DB_FILENAME: &str = "chat-history.sqlite3";
+use crate::commands::{
+    delegate::{self, DelegateWorktreeCleanupTarget},
+    history_db,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -303,192 +302,8 @@ fn now_ms() -> i64 {
     duration.as_millis() as i64
 }
 
-fn chat_history_dir() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "无法定位用户目录".to_string())?;
-    let dir = home.join(format!(".{}", env!("CARGO_PKG_NAME")));
-    fs::create_dir_all(&dir).map_err(|e| format!("创建历史目录失败：{e}"))?;
-    Ok(dir)
-}
-
 fn open_db() -> Result<Connection, String> {
-    let db_path = chat_history_dir()?.join(DB_FILENAME);
-    let conn =
-        Connection::open(db_path).map_err(|e| format!("打开子 agent 历史数据库失败：{e}"))?;
-    conn.busy_timeout(Duration::from_secs(5))
-        .map_err(|e| format!("设置 SQLite busy_timeout 失败：{e}"))?;
-    initialize_db(&conn)?;
-    Ok(conn)
-}
-
-fn initialize_db(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "
-        PRAGMA foreign_keys = ON;
-
-        CREATE TABLE IF NOT EXISTS subagentIdentity (
-            parent_conversation_id TEXT NOT NULL,
-            logical_agent_id TEXT NOT NULL,
-            display_name TEXT NOT NULL,
-            role TEXT NOT NULL,
-            identity_prompt TEXT NOT NULL,
-            agent_id TEXT,
-            template_name TEXT,
-            default_mode TEXT NOT NULL,
-            default_task_intent TEXT NOT NULL,
-            default_apply_policy TEXT NOT NULL,
-            created_parent_tool_call_id TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (parent_conversation_id, logical_agent_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_subagentIdentity_parent_updated
-            ON subagentIdentity(parent_conversation_id, updated_at DESC);
-
-        CREATE TABLE IF NOT EXISTS subagentRun (
-            id TEXT PRIMARY KEY,
-            parent_conversation_id TEXT,
-            parent_session_id TEXT,
-            parent_tool_call_id TEXT NOT NULL,
-            parent_tool_name TEXT NOT NULL,
-            agent_index INTEGER NOT NULL,
-            agent_total INTEGER NOT NULL,
-            logical_agent_id TEXT NOT NULL DEFAULT '',
-            agent_id TEXT,
-            agent_name TEXT,
-            description TEXT NOT NULL,
-            mode TEXT NOT NULL,
-            status TEXT NOT NULL,
-            provider_id TEXT NOT NULL,
-            model TEXT NOT NULL,
-            session_id TEXT,
-            workdir TEXT,
-            worktree_root TEXT,
-            branch_name TEXT,
-            context_meta_json TEXT NOT NULL,
-            active_segment_index INTEGER NOT NULL,
-            total_segment_count INTEGER NOT NULL,
-            total_message_count INTEGER NOT NULL,
-            round_count INTEGER NOT NULL DEFAULT 0,
-            tool_call_count INTEGER NOT NULL DEFAULT 0,
-            compaction_count INTEGER NOT NULL DEFAULT 0,
-            summary TEXT,
-            error TEXT,
-            started_at INTEGER NOT NULL,
-            ended_at INTEGER,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_subagentRun_parent
-            ON subagentRun(parent_conversation_id, parent_tool_call_id, agent_index);
-
-        CREATE INDEX IF NOT EXISTS idx_subagentRun_updated_at
-            ON subagentRun(updated_at DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_subagentRun_parent_updated
-            ON subagentRun(parent_conversation_id, updated_at DESC);
-
-        CREATE TABLE IF NOT EXISTS subagentRunSegment (
-            run_id TEXT NOT NULL,
-            segment_index INTEGER NOT NULL,
-            segment_id TEXT NOT NULL,
-            summary_json TEXT,
-            messages_json TEXT NOT NULL,
-            message_count INTEGER NOT NULL,
-            start_message_id TEXT,
-            end_message_id TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            PRIMARY KEY (run_id, segment_index),
-            UNIQUE (run_id, segment_id),
-            FOREIGN KEY (run_id) REFERENCES subagentRun(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_subagentRunSegment_run_updated
-            ON subagentRunSegment(run_id, updated_at DESC);
-
-        CREATE TABLE IF NOT EXISTS subagentRunEvent (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            round_index INTEGER,
-            tool_call_id TEXT,
-            tool_name TEXT,
-            is_error INTEGER NOT NULL DEFAULT 0,
-            payload_json TEXT,
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (run_id) REFERENCES subagentRun(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_subagentRunEvent_run_id
-            ON subagentRunEvent(run_id, id ASC);
-
-        CREATE TABLE IF NOT EXISTS subagentMessageBusEntry (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            parent_conversation_id TEXT NOT NULL,
-            seq INTEGER NOT NULL,
-            sender_agent_id TEXT NOT NULL,
-            sender_display_name TEXT,
-            recipient_agent_id TEXT NOT NULL,
-            recipient_display_name TEXT,
-            channel TEXT NOT NULL,
-            subject TEXT,
-            body_markdown TEXT NOT NULL,
-            source_run_id TEXT,
-            source_tool_call_id TEXT,
-            created_at INTEGER NOT NULL,
-            UNIQUE (parent_conversation_id, seq)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_subagentMessageBusEntry_parent_seq
-            ON subagentMessageBusEntry(parent_conversation_id, seq ASC);
-
-        CREATE INDEX IF NOT EXISTS idx_subagentMessageBusEntry_parent_recipient_seq
-            ON subagentMessageBusEntry(parent_conversation_id, recipient_agent_id, seq ASC);
-
-        CREATE INDEX IF NOT EXISTS idx_subagentMessageBusEntry_parent_sender_seq
-            ON subagentMessageBusEntry(parent_conversation_id, sender_agent_id, seq ASC);
-
-        CREATE INDEX IF NOT EXISTS idx_subagentMessageBusEntry_source_run
-            ON subagentMessageBusEntry(source_run_id);
-        ",
-    )
-    .map_err(|e| format!("初始化子 agent 历史表失败：{e}"))?;
-
-    ensure_subagent_run_column(
-        conn,
-        "logical_agent_id",
-        "ALTER TABLE subagentRun ADD COLUMN logical_agent_id TEXT NOT NULL DEFAULT ''",
-    )?;
-    conn.execute(
-        "
-        CREATE INDEX IF NOT EXISTS idx_subagentRun_logical_agent
-            ON subagentRun(parent_conversation_id, logical_agent_id, updated_at DESC)
-        ",
-        [],
-    )
-    .map_err(|e| format!("创建子 agent 逻辑身份索引失败：{e}"))?;
-
-    Ok(())
-}
-
-fn ensure_subagent_run_column(conn: &Connection, column: &str, ddl: &str) -> Result<(), String> {
-    let mut stmt = conn
-        .prepare("PRAGMA table_info(subagentRun)")
-        .map_err(|e| format!("读取子 agent run 表结构失败：{e}"))?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| format!("查询子 agent run 表结构失败：{e}"))?;
-    for row in rows {
-        let name = row.map_err(|e| format!("读取子 agent run 列信息失败：{e}"))?;
-        if name == column {
-            return Ok(());
-        }
-    }
-    conn.execute(ddl, [])
-        .map_err(|e| format!("升级子 agent run 表结构失败：{e}"))?;
-    Ok(())
+    history_db::open_connection()
 }
 
 fn trimmed_opt(value: Option<&String>) -> Option<String> {
@@ -1307,7 +1122,6 @@ pub(crate) fn prune_subagent_runs_for_parent_tool_calls(
     parent_conversation_id: &str,
     keep_parent_tool_call_ids: &[String],
 ) -> Result<SubagentRunPruneResult, String> {
-    initialize_db(conn)?;
     let keep_parent_tool_call_ids = keep_parent_tool_call_ids
         .iter()
         .map(|id| id.trim())
@@ -1969,7 +1783,7 @@ mod tests {
             .map_err(|e| format!("打开测试子 agent 历史数据库失败：{e}"))?;
         conn.busy_timeout(Duration::from_secs(5))
             .map_err(|e| format!("设置测试 SQLite busy_timeout 失败：{e}"))?;
-        initialize_db(&conn)?;
+        history_db::initialize_connection(&conn)?;
         Ok(conn)
     }
 
