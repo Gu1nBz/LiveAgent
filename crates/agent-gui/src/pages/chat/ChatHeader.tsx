@@ -12,6 +12,7 @@ import {
   Sun,
 } from "../../components/icons";
 
+import { isMacOsTauri } from "../../components/MacOsTitleBarSpacer";
 import { Button } from "../../components/ui/button";
 import {
   DropdownMenu,
@@ -99,9 +100,9 @@ export const ChatHeader = memo(function ChatHeader(props: {
   const selectedOption = modelOptions.find((o) => o.value === selectedValue);
 
   return (
-    <header className="flex items-center justify-between gap-2 px-4 py-2.5">
+    <header data-tauri-drag-region className="flex items-center justify-between gap-2 px-4 py-2.5">
       <div className="flex min-w-0 items-center gap-1.5">
-        {!sidebarOpen ? (
+        {!sidebarOpen && !isMacOsTauri() ? (
           <Button
             variant="ghost"
             size="icon"
@@ -120,7 +121,7 @@ export const ChatHeader = memo(function ChatHeader(props: {
                 variant="ghost"
                 disabled={!hasModels}
                 className={cn(
-                  "model-selector-trigger h-9 max-w-[min(20rem,calc(100vw-8.5rem))] justify-between gap-1.5 overflow-hidden rounded-lg px-3 text-base font-semibold text-foreground transition-all duration-200 ease-out hover:bg-muted/60 dark:text-white",
+                  "model-selector-trigger h-9 max-w-[min(20rem,calc(100vw-8.5rem))] justify-between gap-1.5 overflow-hidden rounded-lg px-3 cursor-pointer text-xs font-normal text-foreground transition-all duration-200 ease-out hover:bg-muted/60 dark:text-white",
                   isModelMenuOpen && "bg-muted/70 shadow-sm",
                 )}
               />
@@ -251,15 +252,17 @@ export const ChatHeader = memo(function ChatHeader(props: {
             <Moon className="h-4.5 w-4.5" />
           )}
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => onOpenSettings()}
-          title={t("tooltip.settings")}
-          className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
-        >
-          <Settings className="h-4.5 w-4.5" />
-        </Button>
+        {!isMacOsTauri() && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onOpenSettings()}
+            title={t("tooltip.settings")}
+            className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
+          >
+            <Settings className="h-4.5 w-4.5" />
+          </Button>
+        )}
         {trailingActions}
       </div>
     </header>

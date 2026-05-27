@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { isMacOsTauri } from "../components/MacOsTitleBarSpacer";
 import {
   ArrowLeft,
   BookOpen,
@@ -59,24 +60,14 @@ function NavItem({ icon, label, active, onClick }: NavItemProps) {
     <button
       type="button"
       onClick={onClick}
-      className={`group w-full rounded-xl px-3 py-2.5 text-left transition-all ${
+      className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
         active
-          ? "bg-primary text-primary-foreground shadow-xs"
-          : "text-foreground hover:bg-accent/60"
+          ? "bg-accent font-medium text-foreground"
+          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
       }`}
     >
-      <div className="flex items-center gap-3">
-        <div
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-            active
-              ? "bg-primary-foreground/20 text-primary-foreground"
-              : "bg-accent text-muted-foreground group-hover:bg-accent/80"
-          }`}
-        >
-          {icon}
-        </div>
-        <div className="min-w-0 text-sm font-medium leading-none">{label}</div>
-      </div>
+      <span className="shrink-0 opacity-70">{icon}</span>
+      <span className="leading-none">{label}</span>
     </button>
   );
 }
@@ -84,35 +75,35 @@ function NavItem({ icon, label, active, onClick }: NavItemProps) {
 const NAV_ITEMS_STATIC: Array<{ id: SectionId; icon: ReactNode }> = [
   {
     id: "system",
-    icon: <Settings2 className="h-4 w-4" />,
+    icon: <Settings2 className="h-3.5 w-3.5" />,
   },
   {
     id: "providers",
-    icon: <Cpu className="h-4 w-4" />,
+    icon: <Cpu className="h-3.5 w-3.5" />,
   },
   {
     id: "agents",
-    icon: <BookOpen className="h-4 w-4" />,
+    icon: <BookOpen className="h-3.5 w-3.5" />,
   },
   {
     id: "memory",
-    icon: <Brain className="h-4 w-4" />,
+    icon: <Brain className="h-3.5 w-3.5" />,
   },
   {
     id: "hooks",
-    icon: <Zap className="h-4 w-4" />,
+    icon: <Zap className="h-3.5 w-3.5" />,
   },
   {
     id: "cron",
-    icon: <Clock3 className="h-4 w-4" />,
+    icon: <Clock3 className="h-3.5 w-3.5" />,
   },
   {
     id: "remote",
-    icon: <Cloud className="h-4 w-4" />,
+    icon: <Cloud className="h-3.5 w-3.5" />,
   },
   {
     id: "about",
-    icon: <Info className="h-4 w-4" />,
+    icon: <Info className="h-3.5 w-3.5" />,
   },
 ];
 
@@ -192,78 +183,90 @@ export function SettingsPage(props: SettingsPageProps) {
     }
   })();
 
+  const onMac = isMacOsTauri();
+
   return (
-    <div className="flex h-full bg-background">
-      <aside className="flex w-60 shrink-0 flex-col border-r bg-muted/30">
-        <div className="flex items-center gap-2.5 border-b px-4 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-            <Settings2 className="h-4 w-4 text-primary" />
-          </div>
-          <div>
-            <div className="text-sm font-semibold">{t("settings.title")}</div>
-            <div className="text-[11px] text-muted-foreground">LiveAgent</div>
-          </div>
-        </div>
-
-        <nav className="flex-1 space-y-1 px-3 py-3">
-          {navItems.map((item) => (
-            <NavItem
-              key={item.id}
-              icon={item.icon}
-              label={item.label}
-              active={section === item.id}
-              onClick={() => setSection(item.id)}
-            />
-          ))}
-        </nav>
-
-        <div className="border-t px-3 py-3">
+    <div className="flex h-full flex-col bg-background">
+      {onMac && (
+        <div data-tauri-drag-region className="flex h-[38px] shrink-0 items-center">
+          <div data-tauri-drag-region className="w-[76px] shrink-0" />
           <button
             type="button"
             onClick={onBack}
-            className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            className="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className="h-3.5 w-3.5 shrink-0" />
             <span>{t("settings.backToChat")}</span>
           </button>
+          <div data-tauri-drag-region className="flex-1" />
         </div>
-      </aside>
+      )}
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b px-6 py-4">
-          <div className="overflow-hidden">
+      <div className="flex min-h-0 flex-1">
+        <aside className="flex w-52 shrink-0 flex-col border-r bg-muted/20">
+          {!onMac && (
+            <div className="px-3 pb-1 pt-3">
+              <button
+                type="button"
+                onClick={onBack}
+                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+              >
+                <ArrowLeft className="h-4 w-4 shrink-0" />
+                <span>{t("settings.backToChat")}</span>
+              </button>
+            </div>
+          )}
+
+          <nav className="flex-1 space-y-0.5 px-3 py-2">
+            {navItems.map((item) => (
+              <NavItem
+                key={item.id}
+                icon={item.icon}
+                label={item.label}
+                active={section === item.id}
+                onClick={() => setSection(item.id)}
+              />
+            ))}
+          </nav>
+
+          <div className="border-t px-4 py-2.5">
+            <div
+              className="flex items-center gap-1.5 text-xs text-muted-foreground"
+              title={saveIndicator.title}
+            >
+              <div className={`h-1.5 w-1.5 rounded-full ${saveIndicator.dotClass}`} />
+              {saveIndicator.text}
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex min-w-0 flex-1 flex-col">
+          <div className="border-b px-6 py-3.5">
             <div key={section} className="settings-section-title-enter text-base font-semibold">
               {sectionLabels[section]}
             </div>
           </div>
-          <div
-            className="flex items-center gap-1.5 text-xs text-muted-foreground"
-            title={saveIndicator.title}
-          >
-            <div className={`h-1.5 w-1.5 rounded-full ${saveIndicator.dotClass}`} />
-            {saveIndicator.text}
-          </div>
-        </header>
 
-        <div
-          key={section}
-          className={`settings-section-enter flex-1 px-6 py-5 ${
-            section === "hooks" || section === "providers" || section === "memory"
-              ? "flex min-h-0 flex-col overflow-hidden"
-              : "overflow-auto"
-          }`}
-        >
           <div
-            className={`settings-section-shell ${
+            key={section}
+            className={`settings-section-enter flex-1 px-6 py-5 ${
               section === "hooks" || section === "providers" || section === "memory"
-                ? "flex min-h-0 flex-1 flex-col"
-                : "min-h-full"
+                ? "flex min-h-0 flex-col overflow-hidden"
+                : "overflow-auto"
             }`}
           >
-            {sectionContent}
+            <div
+              className={`settings-section-shell ${
+                section === "hooks" || section === "providers" || section === "memory"
+                  ? "flex min-h-0 flex-1 flex-col"
+                  : "min-h-full"
+              }`}
+            >
+              {sectionContent}
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
