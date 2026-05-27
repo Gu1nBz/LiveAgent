@@ -709,7 +709,7 @@ export default function App() {
     [historyWorkdirs, settings.system],
   );
   const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string>(
-    DEFAULT_WORKSPACE_PROJECT_ID,
+    () => settings.system.activeWorkspaceProjectId?.trim() || DEFAULT_WORKSPACE_PROJECT_ID,
   );
   const missingWorkspaceProjectPathKeys = useMemo(
     () => new Set(settings.system.missingWorkspaceProjectPaths.map(workspaceProjectPathKey)),
@@ -2119,6 +2119,7 @@ export default function App() {
           {
             ...prev.system,
             workspaceProjects,
+            activeWorkspaceProjectId: existing?.id ?? nextProject.id,
             hiddenWorkspaceProjectPaths: prev.system.hiddenWorkspaceProjectPaths.filter(
               (path) => workspaceProjectPathKey(path) !== normalizedPathKey,
             ),
@@ -5590,7 +5591,6 @@ export default function App() {
         <ChatHistorySidebar
           items={sidebarItems}
           currentConversationId={displayedConversationId}
-          isDraftConversation={conversationId === "" || isLocalDraftConversationId(conversationId)}
           isBusy={historyDetailLoading || historyMutating}
           runningConversationIds={sidebarRunningConversationIds}
           isLoading={historyListLoading && sidebarItems.length === 0}

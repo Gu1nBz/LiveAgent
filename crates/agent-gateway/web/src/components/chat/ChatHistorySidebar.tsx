@@ -49,7 +49,6 @@ import { Input } from "../ui/input";
 type ChatHistorySidebarProps = {
   items: ChatHistorySummary[];
   currentConversationId: string;
-  isDraftConversation: boolean;
   isBusy: boolean;
   runningConversationIds: ReadonlySet<string>;
   isLoading: boolean;
@@ -629,6 +628,7 @@ const ProjectRow = memo(function ProjectRow(props: {
   isMissing: boolean;
   isRunning: boolean;
   isRenaming: boolean;
+  isPendingRemove: boolean;
   renameDraft: string;
   onSelectProject: (project: WorkspaceProject) => void;
   onNewConversationForProject: (project: WorkspaceProject) => void;
@@ -637,6 +637,7 @@ const ProjectRow = memo(function ProjectRow(props: {
   onCommitProjectRename: () => void;
   onCancelProjectRename: () => void;
   onRemoveProject: (project: WorkspaceProject) => void;
+  onSetPendingRemove: (projectId: string | null) => void;
 }) {
   const {
     project,
@@ -644,6 +645,7 @@ const ProjectRow = memo(function ProjectRow(props: {
     isMissing,
     isRunning,
     isRenaming,
+    isPendingRemove,
     renameDraft,
     onSelectProject,
     onNewConversationForProject,
@@ -652,6 +654,7 @@ const ProjectRow = memo(function ProjectRow(props: {
     onCommitProjectRename,
     onCancelProjectRename,
     onRemoveProject,
+    onSetPendingRemove,
   } = props;
   const inputRef = useRef<HTMLInputElement | null>(null);
   const skipNextBlurCommitRef = useRef(false);
@@ -663,6 +666,54 @@ const ProjectRow = memo(function ProjectRow(props: {
     inputRef.current?.focus();
     inputRef.current?.select();
   }, [isRenaming]);
+
+  const handleRequestRemove = useCallback(() => {
+    onSetPendingRemove(project.id);
+  }, [onSetPendingRemove, project.id]);
+
+  const handleConfirmRemove = useCallback(() => {
+    onSetPendingRemove(null);
+    onRemoveProject(project);
+  }, [onRemoveProject, onSetPendingRemove, project]);
+
+  const handleCancelRemove = useCallback(() => {
+    onSetPendingRemove(null);
+  }, [onSetPendingRemove]);
+
+  if (isPendingRemove) {
+    return (
+      <div className="rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2.5 text-sm text-destructive shadow-xs shadow-black/5">
+        <p className="truncate font-medium leading-5 text-destructive">
+          移除「{project.name}」？
+        </p>
+        <p className="mt-0.5 text-[11px] leading-4 text-destructive/75">
+          {isRunning
+            ? "后台任务运行中，暂时不能移除。"
+            : "会删除此项目下的历史对话，不会删除文件夹。"}
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleCancelRemove}
+            className="h-7 rounded-xl border-border/60 bg-background text-xs font-normal text-muted-foreground hover:text-foreground"
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleConfirmRemove}
+            disabled={isRunning}
+            className="h-7 rounded-xl bg-destructive text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+          >
+            移除
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -801,7 +852,7 @@ const ProjectRow = memo(function ProjectRow(props: {
                 )}
                 title="移除项目"
                 aria-label="移除项目"
-                onClick={() => onRemoveProject(project)}
+                onClick={handleRequestRemove}
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
@@ -842,7 +893,7 @@ const ProjectRow = memo(function ProjectRow(props: {
                       修改标题
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      onSelect={() => onRemoveProject(project)}
+                      onSelect={handleRequestRemove}
                       className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -943,6 +994,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     onProjectsCollapsedChange,
     onRecentCollapsedChange,
     onCreateBlankProject,
+    onAddExistingProject,
     onSelectProject,
     onNewConversationForProject,
     onStartRenamingProject,
@@ -970,6 +1022,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   const { t } = useLocale();
 
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [pendingProjectRemoveId, setPendingProjectRemoveId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [isMobileMenuLayout, setIsMobileMenuLayout] = useState(isMobileSidebarLayout);
   const handleSelectConversation = useStableEvent(onSelectConversation);
@@ -1081,6 +1134,15 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     onLoadMore,
     recentCollapsed,
   ]);
+
+  useEffect(() => {
+    if (!pendingProjectRemoveId) {
+      return;
+    }
+    if (!projects.some((project) => project.id === pendingProjectRemoveId)) {
+      setPendingProjectRemoveId(null);
+    }
+  }, [pendingProjectRemoveId, projects]);
 
   const renderHistoryRow = useCallback(
     (item: ChatHistorySummary) => (
@@ -1268,10 +1330,18 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="right" align="start" sideOffset={6}>
-                  <DropdownMenuItem onSelect={() => onCreateBlankProject?.()} className="gap-2">
-                    <Plus className="h-3.5 w-3.5" />
-                    新建项目
-                  </DropdownMenuItem>
+                  {onCreateBlankProject ? (
+                    <DropdownMenuItem onSelect={() => onCreateBlankProject()} className="gap-2">
+                      <Plus className="h-3.5 w-3.5" />
+                      新建项目
+                    </DropdownMenuItem>
+                  ) : null}
+                  {onAddExistingProject ? (
+                    <DropdownMenuItem onSelect={() => onAddExistingProject()} className="gap-2">
+                      <Folder className="h-3.5 w-3.5" />
+                      添加已有项目
+                    </DropdownMenuItem>
+                  ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -1304,6 +1374,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                       isMissing={missingProjectPathKeys.has(pathKey)}
                       isRunning={runningProjectPathKeys.has(pathKey)}
                       isRenaming={projectRenamingId === project.id}
+                      isPendingRemove={pendingProjectRemoveId === project.id}
                       renameDraft={projectRenameDraft}
                       onSelectProject={handleSelectProject}
                       onNewConversationForProject={handleNewConversationForProject}
@@ -1312,6 +1383,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                       onCommitProjectRename={handleCommitProjectRename}
                       onCancelProjectRename={handleCancelProjectRename}
                       onRemoveProject={handleRemoveProject}
+                      onSetPendingRemove={setPendingProjectRemoveId}
                     />
                   );
                 })}

@@ -114,8 +114,16 @@ function mergeSyncedSystemSettings(
   }
 
   const incomingSystem = incoming as AppSettings["system"];
+  const activeWorkspaceProjectId =
+    typeof incomingSystem.activeWorkspaceProjectId === "string" &&
+    incomingSystem.activeWorkspaceProjectId.trim()
+      ? incomingSystem.activeWorkspaceProjectId.trim()
+      : current.activeWorkspaceProjectId;
   if (!Array.isArray(incomingSystem.workspaceProjects)) {
-    return incomingSystem;
+    return {
+      ...incomingSystem,
+      activeWorkspaceProjectId,
+    };
   }
 
   const currentActivityByPath = new Map<string, number>();
@@ -129,6 +137,7 @@ function mergeSyncedSystemSettings(
 
   return {
     ...incomingSystem,
+    activeWorkspaceProjectId,
     workspaceProjects: incomingSystem.workspaceProjects.map((project) => {
       const lastConversationAt = Math.max(
         readWorkspaceProjectLastConversationAt(project),

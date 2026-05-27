@@ -511,6 +511,14 @@ test("workspace project selection does not rewrite global system workdir or sync
   );
   assert.equal(Object.hasOwn(payload.system, "activeWorkspaceProjectId"), false);
   assert.equal(payload.system.workdir, "/default-workdir");
+
+  const synced = sync.applyGatewaySettingsSyncPayload(
+    settings.normalizeSettings({
+      system: resolvedSystem,
+    }),
+    payload,
+  );
+  assert.equal(synced.system.activeWorkspaceProjectId, "project-a");
 });
 
 test("gateway settings sync keeps newer project conversation activity", () => {

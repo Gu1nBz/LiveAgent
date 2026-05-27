@@ -558,7 +558,7 @@ export function ChatPage(props: ChatPageProps) {
     [historyWorkdirs, settings.system],
   );
   const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string>(
-    DEFAULT_WORKSPACE_PROJECT_ID,
+    () => settings.system.activeWorkspaceProjectId?.trim() || DEFAULT_WORKSPACE_PROJECT_ID,
   );
   const missingWorkspaceProjectPathKeys = useMemo(
     () => new Set(settings.system.missingWorkspaceProjectPaths.map(workspaceProjectPathKey)),
@@ -905,6 +905,7 @@ export function ChatPage(props: ChatPageProps) {
           {
             ...prev.system,
             workspaceProjects,
+            activeWorkspaceProjectId: existing?.id ?? nextProject.id,
             hiddenWorkspaceProjectPaths: prev.system.hiddenWorkspaceProjectPaths.filter(
               (path) => workspaceProjectPathKey(path) !== normalizedPathKey,
             ),
@@ -3823,7 +3824,6 @@ export function ChatPage(props: ChatPageProps) {
       <ChatHistorySidebar
         items={historyItems}
         currentConversationId={currentConversationId}
-        isDraftConversation={isDraftConversation}
         isBusy={isSending}
         runningConversationIds={sidebarRunningConversationIds}
         isLoading={historyLoading}
