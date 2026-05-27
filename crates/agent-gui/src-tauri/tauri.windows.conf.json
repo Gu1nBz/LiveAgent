@@ -19,15 +19,15 @@
       "msi"
     ],
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.png",
-      "icons/icon.ico"
+      "icons/32x32-windows.png",
+      "icons/128x128-windows.png",
+      "icons/128x128@2x-windows.png",
+      "icons/icon-windows.png",
+      "icons/icon-windows.ico"
     ],
     "windows": {
       "nsis": {
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon-windows.ico"
       }
     }
   }
