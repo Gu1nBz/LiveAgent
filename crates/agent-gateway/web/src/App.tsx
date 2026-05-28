@@ -50,13 +50,17 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import {
   findProviderModelConfig,
   getChatRuntimeReasoningLevelsForProvider,
+  getProjectToolsFileTreeProjectState,
   isAgentDevMode,
+  isProjectToolsFileTreeOpen,
   normalizeChatRuntimeControlsForProvider,
   normalizeSettings,
   resolveWorkspaceProjects,
   workspaceProjectPathKey,
   updateChatRuntimeControlsForProvider,
   updateCustomSettings,
+  updateProjectToolsFileTreeProjectState,
+  updateProjectToolsFileTreeOpen,
   type AppSettings,
   type ChatRuntimeControls,
   type CustomProvider,
@@ -6232,6 +6236,14 @@ export default function App() {
             theme={settings.theme}
             disabledMessage={terminalDisabledMessage}
             activeTab={settings.customSettings.projectToolsPanel.activeTab}
+            fileTreeOpen={isProjectToolsFileTreeOpen(
+              settings.customSettings,
+              terminalProjectPathKey,
+            )}
+            fileTreeState={getProjectToolsFileTreeProjectState(
+              settings.customSettings,
+              terminalProjectPathKey,
+            )}
             client={terminalClient}
             onWidthChange={(nextWidth) =>
               setSettings((prev) =>
@@ -6251,6 +6263,16 @@ export default function App() {
                     activeTab,
                   },
                 }),
+              )
+            }
+            onFileTreeOpenChange={(open) =>
+              setSettings((prev) =>
+                updateProjectToolsFileTreeOpen(prev, terminalProjectPathKey, open),
+              )
+            }
+            onFileTreeStateChange={(patch) =>
+              setSettings((prev) =>
+                updateProjectToolsFileTreeProjectState(prev, terminalProjectPathKey, patch),
               )
             }
             onSessionsChange={handleProjectTerminalSessionsChange}

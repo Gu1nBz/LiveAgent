@@ -1,5 +1,6 @@
 import {
   normalizeChatRuntimeControls,
+  normalizeProjectToolsFileTreeSettings,
   normalizeSettings,
   workspaceProjectPathKey,
   type AppSettings,
@@ -260,6 +261,45 @@ function mergeSyncedRemoteSettings(
   };
 }
 
+function mergeSyncedProjectToolsFileTreeSettings(
+  current: AppSettings["customSettings"]["projectToolsFileTree"],
+  incoming: unknown,
+): AppSettings["customSettings"]["projectToolsFileTree"] {
+  const currentState = normalizeProjectToolsFileTreeSettings(current);
+  const incomingState = normalizeProjectToolsFileTreeSettings(incoming);
+  const openFromIncoming = incomingState.openVersion >= currentState.openVersion;
+  const projects: AppSettings["customSettings"]["projectToolsFileTree"]["projects"] = {
+    ...currentState.projects,
+  };
+
+  for (const [pathKey, incomingProject] of Object.entries(incomingState.projects)) {
+    const currentProject = projects[pathKey];
+    if (!currentProject) {
+      projects[pathKey] = incomingProject;
+      continue;
+    }
+    const uiSource =
+      incomingProject.stateVersion >= currentProject.stateVersion
+        ? incomingProject
+        : currentProject;
+    projects[pathKey] = {
+      query: uiSource.query,
+      selectedPath: uiSource.selectedPath,
+      expandedPaths: uiSource.expandedPaths,
+      stateVersion: Math.max(currentProject.stateVersion, incomingProject.stateVersion),
+      revision: Math.max(currentProject.revision, incomingProject.revision),
+    };
+  }
+
+  return {
+    openProjectPathKeys: openFromIncoming
+      ? incomingState.openProjectPathKeys
+      : currentState.openProjectPathKeys,
+    openVersion: Math.max(currentState.openVersion, incomingState.openVersion),
+    projects,
+  };
+}
+
 export function buildGatewaySettingsSyncPayload(
   settings: AppSettings,
   options: { includeProviderApiKeyUpdates?: boolean } = {},
@@ -308,6 +348,7 @@ export function applyGatewaySettingsSyncPayload(
   const customSettings = Object.prototype.hasOwnProperty.call(source, "customSettings")
     ? (source.customSettings as AppSettings["customSettings"] | null | undefined) ?? {}
     : current.customSettings;
+  const incomingCustomSettings = customSettings as Partial<AppSettings["customSettings"]>;
 
   return normalizeSettings({
     ...current,
@@ -325,7 +366,16 @@ export function applyGatewaySettingsSyncPayload(
     cron: (source.cron as AppSettings["cron"] | undefined) ?? current.cron,
     memory: memory as AppSettings["memory"],
     customSettings: {
-      ...(customSettings as AppSettings["customSettings"]),
+      ...incomingCustomSettings,
+      projectToolsFileTree: Object.prototype.hasOwnProperty.call(
+        incomingCustomSettings,
+        "projectToolsFileTree",
+      )
+        ? mergeSyncedProjectToolsFileTreeSettings(
+            current.customSettings.projectToolsFileTree,
+            incomingCustomSettings.projectToolsFileTree,
+          )
+        : current.customSettings.projectToolsFileTree,
       chatSidebar: current.customSettings.chatSidebar,
       projectToolsPanel: current.customSettings.projectToolsPanel,
     },

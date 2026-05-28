@@ -11,14 +11,19 @@ import {
   useRef,
   useState,
 } from "react";
+import { useLocale } from "@/i18n";
+import type {
+  ProjectToolsFileTreeProjectState,
+  ProjectToolsFileTreeStatePatch,
+  ProjectToolsPanelTab,
+} from "@/lib/settings";
 import { cn } from "@/lib/shared/utils";
-import type { ProjectToolsPanelTab } from "@/lib/settings";
 import type {
   TerminalClient,
   TerminalEvent,
   TerminalSession,
-  TerminalSnapshot,
   TerminalShellOption,
+  TerminalSnapshot,
 } from "@/lib/terminal/types";
 import { Check, FolderTree, Plus, Terminal, X } from "../icons";
 import { Button } from "../ui/button";
@@ -44,9 +49,13 @@ type ProjectToolsPanelProps = {
   theme: "light" | "dark";
   disabledMessage?: string;
   activeTab: ProjectToolsPanelTab;
+  fileTreeOpen: boolean;
+  fileTreeState: ProjectToolsFileTreeProjectState;
   client: TerminalClient;
   onWidthChange: (width: number) => void;
   onActiveTabChange: (tab: ProjectToolsPanelTab) => void;
+  onFileTreeOpenChange: (open: boolean) => void;
+  onFileTreeStateChange: (patch: ProjectToolsFileTreeStatePatch) => void;
   onSessionsChange?: (sessions: TerminalSession[]) => void;
   onInsertFileMention?: (path: string, kind: "file" | "dir") => void;
   onClose?: () => void;
@@ -77,6 +86,12 @@ function areSessionsEqual(left: TerminalSession[], right: TerminalSession[]) {
       session.running === other.running
     );
   });
+}
+
+function formatTerminalSessionTitle(title: string, terminalLabel: string) {
+  const match = /^Terminal(?:\s+(\d+))?$/.exec(title.trim());
+  if (!match) return title;
+  return match[1] ? `${terminalLabel} ${match[1]}` : terminalLabel;
 }
 
 function terminalTheme(theme: "light" | "dark") {
@@ -361,13 +376,18 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     theme,
     disabledMessage,
     activeTab,
+    fileTreeOpen,
+    fileTreeState,
     client,
     onWidthChange,
     onActiveTabChange,
+    onFileTreeOpenChange,
+    onFileTreeStateChange,
     onSessionsChange,
     onInsertFileMention,
     onClose,
   } = props;
+  const { t } = useLocale();
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -378,9 +398,6 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const [shellOptions, setShellOptions] = useState<TerminalShellOption[]>([]);
   const [selectedShell, setSelectedShell] = useState("");
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
-  const [fileTreeInitializedByProject, setFileTreeInitializedByProject] = useState<
-    Record<string, boolean>
-  >({});
   const [shouldRenderContent, setShouldRenderContent] = useState(isOpen);
   const [widthCollapsed, setWidthCollapsed] = useState(!isOpen);
   const [, setIsResizing] = useState(false);
@@ -395,9 +412,8 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const panelWidth = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, draftWidth));
   const panelStyle = { "--project-tools-panel-width": `${panelWidth}px` } as CSSProperties;
   const isControlled = externalSessions !== undefined;
-  const fileTreeInitialized = Boolean(
-    projectPathKey && fileTreeInitializedByProject[projectPathKey],
-  );
+  const fileTreeInitialized = Boolean(projectPathKey && fileTreeOpen);
+  const previousFileTreeInitializedRef = useRef(fileTreeInitialized);
   const currentActiveTab: ProjectToolsPanelTab =
     activeTab === "fileTree" && fileTreeInitialized ? "fileTree" : "terminal";
 
@@ -409,6 +425,18 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     () => sessions.find((session) => session.id === pendingCloseSessionId) ?? null,
     [pendingCloseSessionId, sessions],
   );
+
+  useEffect(() => {
+    const previousFileTreeInitialized = previousFileTreeInitializedRef.current;
+    previousFileTreeInitializedRef.current = fileTreeInitialized;
+    if (fileTreeInitialized && !previousFileTreeInitialized) {
+      onActiveTabChange("fileTree");
+      return;
+    }
+    if (!fileTreeInitialized && previousFileTreeInitialized && activeTab === "fileTree") {
+      onActiveTabChange("terminal");
+    }
+  }, [activeTab, fileTreeInitialized, onActiveTabChange]);
 
   const publishSessions = useCallback(
     (nextSessions: TerminalSession[], options?: { notifyParent?: boolean }) => {
@@ -549,12 +577,9 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const setFileTreeInitialized = useCallback(
     (initialized: boolean) => {
       if (!projectPathKey) return;
-      setFileTreeInitializedByProject((current) => ({
-        ...current,
-        [projectPathKey]: initialized,
-      }));
+      onFileTreeOpenChange(initialized);
     },
-    [projectPathKey],
+    [onFileTreeOpenChange, projectPathKey],
   );
 
   useEffect(() => {
@@ -739,8 +764,8 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
           <>
             <button
               type="button"
-              aria-label="Resize project tools panel"
-              title="Resize project tools panel"
+              aria-label={t("projectTools.resizePanel")}
+              title={t("projectTools.resizePanel")}
               className="absolute inset-y-0 left-0 hidden w-1 cursor-col-resize border-0 bg-transparent p-0 md:block"
               onMouseDown={handleResizeStart}
             />
@@ -750,6 +775,10 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                 {sessions.map((session) => {
                   const isPendingClose = pendingCloseSessionId === session.id;
                   const isClosing = closingSessionId === session.id;
+                  const sessionTitle = formatTerminalSessionTitle(
+                    session.title,
+                    t("projectTools.terminalTitle"),
+                  );
                   return (
                     <div
                       key={session.id}
@@ -761,7 +790,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                         isPendingClose &&
                           "bg-destructive/10 text-destructive hover:bg-destructive/15",
                       )}
-                      title={session.title}
+                      title={sessionTitle}
                     >
                       <button
                         type="button"
@@ -772,7 +801,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                         className="flex min-w-0 flex-1 items-center gap-1.5 bg-transparent p-0 text-left text-inherit"
                       >
                         <Terminal className="h-3.5 w-3.5 shrink-0" />
-                        <span className="min-w-0 truncate">{session.title}</span>
+                        <span className="min-w-0 truncate">{sessionTitle}</span>
                         {!session.running ? (
                           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
                         ) : (
@@ -781,8 +810,12 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       </button>
                       <button
                         type="button"
-                        aria-label={`${isPendingClose ? "Confirm close" : "Close"} ${session.title}`}
-                        title={isPendingClose ? "Confirm close terminal" : "Close terminal"}
+                        aria-label={`${isPendingClose ? t("projectTools.confirmClose") : t("projectTools.close")} ${sessionTitle}`}
+                        title={
+                          isPendingClose
+                            ? t("projectTools.confirmCloseTerminal")
+                            : t("projectTools.closeTerminal")
+                        }
                         disabled={isClosing}
                         className={cn(
                           "ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
@@ -809,7 +842,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       "project-tools-panel-tab group flex h-8 max-w-[12rem] shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
                       currentActiveTab === "fileTree" && "bg-muted text-foreground",
                     )}
-                    title="File Tree"
+                    title={t("projectTools.fileTreeTitle")}
                   >
                     <button
                       type="button"
@@ -817,12 +850,12 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       className="flex min-w-0 flex-1 items-center gap-1.5 bg-transparent p-0 text-left text-inherit"
                     >
                       <FolderTree className="h-3.5 w-3.5 shrink-0" />
-                      <span className="min-w-0 truncate">File Tree</span>
+                      <span className="min-w-0 truncate">{t("projectTools.fileTreeTitle")}</span>
                     </button>
                     <button
                       type="button"
-                      aria-label="Close File Tree"
-                      title="Close File Tree"
+                      aria-label={t("projectTools.closeFileTree")}
+                      title={t("projectTools.closeFileTree")}
                       className="ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
                       onMouseDown={(event) => {
                         event.stopPropagation();
@@ -842,7 +875,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   value={selectedShell}
                   onChange={(event) => setSelectedShell(event.target.value)}
                   disabled={creating}
-                  title="Shell"
+                  title={t("projectTools.shell")}
                   className="project-tools-panel-shell-select h-8 max-w-[8rem] shrink-0 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none hover:bg-muted focus:ring-2 focus:ring-ring"
                 >
                   {shellOptions.map((option) => (
@@ -858,7 +891,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                     variant="ghost"
                     size="icon"
                     disabled={!projectReady || creating}
-                    title="New project tool"
+                    title={t("projectTools.newProjectTool")}
                     className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
                   >
                     <Plus className="h-4 w-4" />
@@ -871,7 +904,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                     className="gap-2 text-xs"
                   >
                     <Terminal className="h-3.5 w-3.5" />
-                    New Terminal
+                    {t("projectTools.newTerminal")}
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={startFileTree}
@@ -879,7 +912,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                     className="gap-2 text-xs"
                   >
                     <FolderTree className="h-3.5 w-3.5" />
-                    New File Tree
+                    {t("projectTools.newFileTree")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -888,7 +921,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   variant="ghost"
                   size="icon"
                   onClick={onClose}
-                  title="Close project tools panel"
+                  title={t("projectTools.closePanel")}
                   className="project-tools-panel-close h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground md:hidden"
                 >
                   <X className="h-4 w-4" />
@@ -899,7 +932,13 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
             {pendingCloseSession ? (
               <div className="flex shrink-0 items-center gap-2 border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 <span className="min-w-0 flex-1 truncate">
-                  Close running terminal "{pendingCloseSession.title}"?
+                  {t("projectTools.closeRunningTerminal").replace(
+                    "{title}",
+                    formatTerminalSessionTitle(
+                      pendingCloseSession.title,
+                      t("projectTools.terminalTitle"),
+                    ),
+                  )}
                 </span>
                 <Button
                   type="button"
@@ -908,7 +947,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   className="h-7 shrink-0 px-2.5 text-xs"
                   onClick={() => setPendingCloseSessionId("")}
                 >
-                  Cancel
+                  {t("settings.cancel")}
                 </Button>
                 <Button
                   type="button"
@@ -918,7 +957,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   disabled={closingSessionId === pendingCloseSession.id}
                   onClick={() => closeSession(pendingCloseSession)}
                 >
-                  Close
+                  {t("projectTools.close")}
                 </Button>
               </div>
             ) : null}
@@ -936,7 +975,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-background px-4 py-5 text-center text-sm text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
                 >
                   <Terminal className="h-8 w-8 text-muted-foreground" />
-                  <span className="font-medium">New Terminal</span>
+                  <span className="font-medium">{t("projectTools.newTerminal")}</span>
                 </button>
                 <button
                   type="button"
@@ -944,11 +983,11 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-background px-4 py-5 text-center text-sm text-foreground transition-colors hover:bg-muted"
                 >
                   <FolderTree className="h-8 w-8 text-muted-foreground" />
-                  <span className="font-medium">New File Tree</span>
+                  <span className="font-medium">{t("projectTools.newFileTree")}</span>
                 </button>
                 {loading ? (
                   <div className="col-span-full text-center text-xs text-muted-foreground">
-                    Loading...
+                    {t("projectTools.loading")}
                   </div>
                 ) : null}
                 {error ? (
@@ -970,7 +1009,9 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       projectPathKey={projectPathKey}
                       cwd={cwd}
                       initialized={fileTreeInitialized}
+                      syncState={fileTreeState}
                       onInitializedChange={setFileTreeInitialized}
+                      onSyncStateChange={onFileTreeStateChange}
                       onInsertFileMention={onInsertFileMention}
                     />
                   </div>
@@ -997,10 +1038,12 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
                       <Terminal className="h-8 w-8 text-muted-foreground" />
                       <Button onClick={handleCreate} disabled={!projectReady || creating}>
-                        New Terminal
+                        {t("projectTools.newTerminal")}
                       </Button>
                       {loading ? (
-                        <div className="text-xs text-muted-foreground">Loading...</div>
+                        <div className="text-xs text-muted-foreground">
+                          {t("projectTools.loading")}
+                        </div>
                       ) : null}
                       {error ? <div className="text-xs text-destructive">{error}</div> : null}
                     </div>

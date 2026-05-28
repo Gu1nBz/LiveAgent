@@ -460,6 +460,17 @@ test("gateway settings sync payload redacts provider api keys", () => {
     },
     customSettings: {
       conversationTitleModel: { customProviderId: "provider-1", model: "gpt-5" },
+      projectToolsFileTree: {
+        openProjectPathKeys: ["/workspace/b", "  ", "/workspace/a", "/workspace/a"],
+        projects: {
+          "/workspace/a": {
+            query: "src",
+            selectedPath: "src/main.ts",
+            expandedPaths: ["", "src", "src/../bad", "src"],
+            revision: 3,
+          },
+        },
+      },
     },
   });
 
@@ -474,6 +485,19 @@ test("gateway settings sync payload redacts provider api keys", () => {
   assert.deepEqual(payload.customSettings.chatSidebar, {
     projectsCollapsed: false,
     recentCollapsed: false,
+  });
+  assert.deepEqual(payload.customSettings.projectToolsFileTree, {
+    openProjectPathKeys: ["/workspace/a", "/workspace/b"],
+    openVersion: 0,
+    projects: {
+      "/workspace/a": {
+        query: "src",
+        selectedPath: "src/main.ts",
+        expandedPaths: ["", "src", "src/bad"],
+        revision: 3,
+        stateVersion: 0,
+      },
+    },
   });
   assert.equal(Object.hasOwn(payload.customSettings, "projectToolsPanel"), false);
   assert.deepEqual(payload.chatRuntimeControls, appSettings.chatRuntimeControls);
@@ -604,12 +628,53 @@ test("normalizes project tools panel from current and legacy terminal panel sett
   assert.equal(currentShape.customSettings.projectToolsPanel.activeTab, "terminal");
 });
 
+test("updates project file tree synced state per project", () => {
+  const base = settings.normalizeSettings({});
+  const updated = settings.updateProjectToolsFileTreeProjectState(base, "/workspace/app", {
+    query: "x".repeat(250),
+    selectedPath: "src/../main.ts",
+    expandedPaths: ["", "src", "src/../bad", "src\\components", "src"],
+    bumpRevision: true,
+    bumpStateVersion: true,
+  });
+
+  assert.deepEqual(updated.customSettings.projectToolsFileTree.projects["/workspace/app"], {
+    query: "x".repeat(200),
+    selectedPath: "src/main.ts",
+    expandedPaths: ["", "src", "src/bad", "src/components"],
+    revision: 1,
+    stateVersion: 1,
+  });
+
+  const reopened = settings.updateProjectToolsFileTreeOpen(updated, "/workspace/app", true);
+  assert.deepEqual(reopened.customSettings.projectToolsFileTree.openProjectPathKeys, [
+    "/workspace/app",
+  ]);
+  assert.equal(reopened.customSettings.projectToolsFileTree.openVersion, 1);
+  assert.equal(
+    settings.getProjectToolsFileTreeProjectState(reopened.customSettings, "/workspace/app")
+      .revision,
+    1,
+  );
+});
+
 test("gateway settings sync keeps project tools panel state local", () => {
   const current = settings.normalizeSettings({
     customSettings: {
       projectToolsPanel: {
         width: 612,
         activeTab: "terminal",
+      },
+      projectToolsFileTree: {
+        openProjectPathKeys: ["/desktop/project"],
+        projects: {
+          "/desktop/project": {
+            query: "desktop",
+            selectedPath: "desktop.ts",
+            expandedPaths: ["", "src"],
+            revision: 1,
+          },
+        },
       },
     },
   });
@@ -618,6 +683,17 @@ test("gateway settings sync keeps project tools panel state local", () => {
       projectToolsPanel: {
         width: 360,
         activeTab: "fileTree",
+      },
+      projectToolsFileTree: {
+        openProjectPathKeys: ["/web/project"],
+        projects: {
+          "/web/project": {
+            query: "web",
+            selectedPath: "web.ts",
+            expandedPaths: ["", "packages"],
+            revision: 2,
+          },
+        },
       },
     },
   });
@@ -638,6 +714,109 @@ test("gateway settings sync keeps project tools panel state local", () => {
 
   assert.equal(synced.customSettings.projectToolsPanel.width, 612);
   assert.equal(synced.customSettings.projectToolsPanel.activeTab, "terminal");
+  assert.deepEqual(synced.customSettings.projectToolsFileTree.openProjectPathKeys, [
+    "/web/project",
+  ]);
+  assert.deepEqual(synced.customSettings.projectToolsFileTree.projects["/web/project"], {
+    query: "web",
+    selectedPath: "web.ts",
+    expandedPaths: ["", "packages"],
+    revision: 2,
+    stateVersion: 0,
+  });
+
+  const { projectToolsFileTree: _projectToolsFileTree, ...legacyCustomSettings } =
+    payload.customSettings;
+  const legacySynced = sync.applyGatewaySettingsSyncPayload(current, {
+    ...payload,
+    customSettings: legacyCustomSettings,
+  });
+  assert.deepEqual(legacySynced.customSettings.projectToolsFileTree.openProjectPathKeys, [
+    "/desktop/project",
+  ]);
+  assert.deepEqual(legacySynced.customSettings.projectToolsFileTree.projects["/desktop/project"], {
+    query: "desktop",
+    selectedPath: "desktop.ts",
+    expandedPaths: ["", "src"],
+    revision: 1,
+    stateVersion: 0,
+  });
+});
+
+test("gateway settings sync ignores stale project file tree UI snapshots", () => {
+  const current = settings.normalizeSettings({
+    customSettings: {
+      projectToolsFileTree: {
+        openProjectPathKeys: ["/workspace/app"],
+        openVersion: 2,
+        projects: {
+          "/workspace/app": {
+            query: "",
+            selectedPath: "default-project/test",
+            expandedPaths: ["", "default-project", "default-project/test"],
+            revision: 1,
+            stateVersion: 3,
+          },
+        },
+      },
+    },
+  });
+
+  const staleSynced = sync.applyGatewaySettingsSyncPayload(current, {
+    customSettings: {
+      projectToolsFileTree: {
+        openProjectPathKeys: [],
+        openVersion: 1,
+        projects: {
+          "/workspace/app": {
+            query: "",
+            selectedPath: "default-project/test",
+            expandedPaths: ["", "default-project"],
+            revision: 5,
+            stateVersion: 2,
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(staleSynced.customSettings.projectToolsFileTree.openProjectPathKeys, [
+    "/workspace/app",
+  ]);
+  assert.deepEqual(staleSynced.customSettings.projectToolsFileTree.projects["/workspace/app"], {
+    query: "",
+    selectedPath: "default-project/test",
+    expandedPaths: ["", "default-project", "default-project/test"],
+    revision: 5,
+    stateVersion: 3,
+  });
+
+  const newerSynced = sync.applyGatewaySettingsSyncPayload(staleSynced, {
+    customSettings: {
+      projectToolsFileTree: {
+        openProjectPathKeys: [],
+        openVersion: 3,
+        projects: {
+          "/workspace/app": {
+            query: "",
+            selectedPath: "default-project/test",
+            expandedPaths: ["", "default-project"],
+            revision: 5,
+            stateVersion: 4,
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(newerSynced.customSettings.projectToolsFileTree.openProjectPathKeys, []);
+  assert.deepEqual(newerSynced.customSettings.projectToolsFileTree.projects["/workspace/app"], {
+    query: "",
+    selectedPath: "default-project/test",
+    expandedPaths: ["", "default-project"],
+    revision: 5,
+    stateVersion: 4,
+  });
 });
 
 test("gateway settings sync keeps newer project conversation activity", () => {

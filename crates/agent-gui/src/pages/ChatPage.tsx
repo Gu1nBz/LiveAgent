@@ -83,8 +83,10 @@ import {
   type ExecutionMode,
   findProviderModelConfig,
   getChatRuntimeReasoningLevelsForProvider,
+  getProjectToolsFileTreeProjectState,
   isAgentDevMode,
   isAgentExecutionMode,
+  isProjectToolsFileTreeOpen,
   normalizeChatRuntimeControlsForProvider,
   type ProviderId,
   type SelectedModel,
@@ -94,6 +96,8 @@ import {
   resolveWorkspaceProjects,
   workspaceProjectPathKey,
   updateCustomSettings,
+  updateProjectToolsFileTreeProjectState,
+  updateProjectToolsFileTreeOpen,
   updateChatRuntimeControlsForProvider,
   updateMcp,
   updateMemorySettings,
@@ -4189,6 +4193,14 @@ export function ChatPage(props: ChatPageProps) {
         theme={settings.theme}
         disabledMessage={terminalDisabledMessage}
         activeTab={settings.customSettings.projectToolsPanel.activeTab}
+        fileTreeOpen={isProjectToolsFileTreeOpen(
+          settings.customSettings,
+          terminalProjectPathKey,
+        )}
+        fileTreeState={getProjectToolsFileTreeProjectState(
+          settings.customSettings,
+          terminalProjectPathKey,
+        )}
         client={tauriTerminalClient}
         onWidthChange={(nextWidth) =>
           setSettings((prev) =>
@@ -4208,6 +4220,16 @@ export function ChatPage(props: ChatPageProps) {
                 activeTab,
               },
             }),
+          )
+        }
+        onFileTreeOpenChange={(open) =>
+          setSettings((prev) =>
+            updateProjectToolsFileTreeOpen(prev, terminalProjectPathKey, open),
+          )
+        }
+        onFileTreeStateChange={(patch) =>
+          setSettings((prev) =>
+            updateProjectToolsFileTreeProjectState(prev, terminalProjectPathKey, patch),
           )
         }
         onSessionsChange={setProjectTerminalSessions}

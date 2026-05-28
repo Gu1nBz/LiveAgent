@@ -129,6 +129,25 @@ export type ChatSidebarSettings = {
 
 export type ProjectToolsPanelTab = "terminal" | "fileTree";
 
+export type ProjectToolsFileTreeProjectState = {
+  query: string;
+  selectedPath: string;
+  expandedPaths: string[];
+  revision: number;
+  stateVersion: number;
+};
+
+export type ProjectToolsFileTreeSettings = {
+  openProjectPathKeys: string[];
+  openVersion: number;
+  projects: Record<string, ProjectToolsFileTreeProjectState>;
+};
+
+export type ProjectToolsFileTreeStatePatch = Partial<ProjectToolsFileTreeProjectState> & {
+  bumpRevision?: boolean;
+  bumpStateVersion?: boolean;
+};
+
 export type CustomSettings = {
   conversationTitleModel?: SelectedModel;
   chatSidebar: ChatSidebarSettings;
@@ -136,6 +155,7 @@ export type CustomSettings = {
     width: number;
     activeTab: ProjectToolsPanelTab;
   };
+  projectToolsFileTree: ProjectToolsFileTreeSettings;
 };
 
 export type UpdateSettings = {
@@ -432,6 +452,16 @@ export function normalizeWorkspaceProjectPath(path: unknown): string {
 
 export function workspaceProjectPathKey(path: unknown): string {
   return normalizeWorkspaceProjectPath(path);
+}
+
+export function normalizeProjectToolsFileTreePath(path: unknown): string {
+  if (typeof path !== "string") return "";
+  return path
+    .trim()
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/");
 }
 
 function normalizeWorkspaceProjectKind(input: unknown): WorkspaceProjectKind {
@@ -1402,6 +1432,72 @@ export function normalizeMemorySettings(
   };
 }
 
+const DEFAULT_PROJECT_TOOLS_FILE_TREE_PROJECT_STATE: ProjectToolsFileTreeProjectState = {
+  query: "",
+  selectedPath: "",
+  expandedPaths: [""],
+  revision: 0,
+  stateVersion: 0,
+};
+
+function normalizeProjectToolsFileTreeSearchQuery(query: unknown): string {
+  return typeof query === "string" ? query.slice(0, 200) : "";
+}
+
+function normalizeProjectToolsFileTreeExpandedPaths(paths: unknown): string[] {
+  if (!Array.isArray(paths)) return [""];
+  const normalized = Array.from(
+    new Set(
+      paths
+        .map((path) => normalizeProjectToolsFileTreePath(path))
+        .filter((path) => path.length <= 1024),
+    ),
+  );
+  return normalized.slice(0, 512);
+}
+
+function normalizeProjectToolsFileTreeProjectState(
+  input: unknown,
+): ProjectToolsFileTreeProjectState {
+  const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  return {
+    query: normalizeProjectToolsFileTreeSearchQuery(obj.query),
+    selectedPath: normalizeProjectToolsFileTreePath(obj.selectedPath),
+    expandedPaths: normalizeProjectToolsFileTreeExpandedPaths(obj.expandedPaths),
+    revision: normalizeIntegerInRange(obj.revision, 0, Number.MAX_SAFE_INTEGER, 0),
+    stateVersion: normalizeIntegerInRange(obj.stateVersion, 0, Number.MAX_SAFE_INTEGER, 0),
+  };
+}
+
+export function normalizeProjectToolsFileTreeSettings(
+  input: unknown,
+): ProjectToolsFileTreeSettings {
+  const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const openProjectPathKeys = Array.from(
+    new Set(
+      (Array.isArray(obj.openProjectPathKeys) ? obj.openProjectPathKeys : [])
+        .map((pathKey) => workspaceProjectPathKey(pathKey))
+        .filter(Boolean),
+    ),
+  ).sort();
+  const rawProjects = (
+    obj.projects && typeof obj.projects === "object" && !Array.isArray(obj.projects)
+      ? obj.projects
+      : {}
+  ) as Record<string, unknown>;
+  const projects: Record<string, ProjectToolsFileTreeProjectState> = {};
+  for (const [pathKey, projectState] of Object.entries(rawProjects)) {
+    const normalizedPathKey = workspaceProjectPathKey(pathKey);
+    if (!normalizedPathKey) continue;
+    projects[normalizedPathKey] = normalizeProjectToolsFileTreeProjectState(projectState);
+  }
+  return {
+    openProjectPathKeys,
+    openVersion: normalizeIntegerInRange(obj.openVersion, 0, Number.MAX_SAFE_INTEGER, 0),
+    projects,
+  };
+}
+
 export function normalizeCustomSettings(
   input: unknown,
   customProviders: CustomProvider[],
@@ -1422,6 +1518,11 @@ export function normalizeCustomSettings(
     projectToolsPanel.activeTab === "terminal" || projectToolsPanel.activeTab === "fileTree"
       ? projectToolsPanel.activeTab
       : "fileTree";
+  const projectToolsFileTree = (
+    obj.projectToolsFileTree && typeof obj.projectToolsFileTree === "object"
+      ? obj.projectToolsFileTree
+      : {}
+  ) as unknown;
   return {
     conversationTitleModel: normalizeSelectedModelForProviders(
       normalizeSelectedModel(obj.conversationTitleModel),
@@ -1440,6 +1541,7 @@ export function normalizeCustomSettings(
       ),
       activeTab: projectToolsPanelActiveTab,
     },
+    projectToolsFileTree: normalizeProjectToolsFileTreeSettings(projectToolsFileTree),
   };
 }
 
@@ -1603,6 +1705,114 @@ export function updateCustomSettings(
     customSettings: {
       ...prev.customSettings,
       ...patch,
+    },
+  });
+}
+
+export function isProjectToolsFileTreeOpen(
+  customSettings: CustomSettings,
+  projectPathKey: string,
+): boolean {
+  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
+  return (
+    normalizedPathKey !== "" &&
+    customSettings.projectToolsFileTree.openProjectPathKeys.includes(normalizedPathKey)
+  );
+}
+
+export function getProjectToolsFileTreeProjectState(
+  customSettings: CustomSettings,
+  projectPathKey: string,
+): ProjectToolsFileTreeProjectState {
+  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
+  if (!normalizedPathKey) return DEFAULT_PROJECT_TOOLS_FILE_TREE_PROJECT_STATE;
+  return (
+    customSettings.projectToolsFileTree.projects[normalizedPathKey] ??
+    DEFAULT_PROJECT_TOOLS_FILE_TREE_PROJECT_STATE
+  );
+}
+
+export function updateProjectToolsFileTreeOpen(
+  prev: AppSettings,
+  projectPathKey: string,
+  open: boolean,
+): AppSettings {
+  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
+  if (!normalizedPathKey) return prev;
+  const openProjectPathKeys = new Set(
+    prev.customSettings.projectToolsFileTree.openProjectPathKeys
+      .map((pathKey) => workspaceProjectPathKey(pathKey))
+      .filter(Boolean),
+  );
+  if (openProjectPathKeys.has(normalizedPathKey) === open) return prev;
+  if (open) {
+    openProjectPathKeys.add(normalizedPathKey);
+  } else {
+    openProjectPathKeys.delete(normalizedPathKey);
+  }
+  return updateCustomSettings(prev, {
+    projectToolsFileTree: {
+      ...prev.customSettings.projectToolsFileTree,
+      openProjectPathKeys: Array.from(openProjectPathKeys).sort(),
+      openVersion: prev.customSettings.projectToolsFileTree.openVersion + 1,
+    },
+  });
+}
+
+function projectToolsFileTreeProjectStateEqual(
+  left: ProjectToolsFileTreeProjectState,
+  right: ProjectToolsFileTreeProjectState,
+): boolean {
+  return (
+    left.query === right.query &&
+    left.selectedPath === right.selectedPath &&
+    left.revision === right.revision &&
+    left.stateVersion === right.stateVersion &&
+    left.expandedPaths.length === right.expandedPaths.length &&
+    left.expandedPaths.every((path, index) => path === right.expandedPaths[index])
+  );
+}
+
+export function updateProjectToolsFileTreeProjectState(
+  prev: AppSettings,
+  projectPathKey: string,
+  patch: ProjectToolsFileTreeStatePatch,
+): AppSettings {
+  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
+  if (!normalizedPathKey) return prev;
+  const current = getProjectToolsFileTreeProjectState(prev.customSettings, normalizedPathKey);
+  const next: ProjectToolsFileTreeProjectState = {
+    query:
+      patch.query !== undefined
+        ? normalizeProjectToolsFileTreeSearchQuery(patch.query)
+        : current.query,
+    selectedPath:
+      patch.selectedPath !== undefined
+        ? normalizeProjectToolsFileTreePath(patch.selectedPath)
+        : current.selectedPath,
+    expandedPaths:
+      patch.expandedPaths !== undefined
+        ? normalizeProjectToolsFileTreeExpandedPaths(patch.expandedPaths)
+        : current.expandedPaths,
+    revision: patch.bumpRevision
+      ? current.revision + 1
+      : patch.revision !== undefined
+        ? normalizeIntegerInRange(patch.revision, 0, Number.MAX_SAFE_INTEGER, 0)
+        : current.revision,
+    stateVersion: patch.bumpStateVersion
+      ? current.stateVersion + 1
+      : patch.stateVersion !== undefined
+        ? normalizeIntegerInRange(patch.stateVersion, 0, Number.MAX_SAFE_INTEGER, 0)
+        : current.stateVersion,
+  };
+  if (projectToolsFileTreeProjectStateEqual(current, next)) return prev;
+  return updateCustomSettings(prev, {
+    projectToolsFileTree: {
+      ...prev.customSettings.projectToolsFileTree,
+      projects: {
+        ...prev.customSettings.projectToolsFileTree.projects,
+        [normalizedPathKey]: next,
+      },
     },
   });
 }

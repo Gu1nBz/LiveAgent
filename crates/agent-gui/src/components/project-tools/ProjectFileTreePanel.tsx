@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocale } from "../../i18n";
+import type {
+  ProjectToolsFileTreeProjectState,
+  ProjectToolsFileTreeStatePatch,
+} from "../../lib/settings";
+import { cn } from "../../lib/shared/utils";
 import {
   Check,
   ChevronRight,
@@ -17,7 +23,6 @@ import {
 } from "../icons";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { cn } from "../../lib/shared/utils";
 
 type FileTreeKind = "file" | "dir";
 
@@ -50,6 +55,12 @@ type FileTreeState = {
 };
 
 type PendingAction = "file" | "folder" | "rename" | null;
+
+type ContextMenuState = {
+  x: number;
+  y: number;
+  path: string;
+};
 
 const ROOT_PATH = "";
 const DEFAULT_MAX_RESULTS = 1000;
@@ -118,6 +129,10 @@ function removeNodeSubtree(nodes: Record<string, FileTreeNode>, path: string) {
   return next;
 }
 
+function sameStringArray(left: string[], right: string[]) {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
 function toErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message.trim()) return error.message;
   const text = String(error ?? "").trim();
@@ -128,29 +143,47 @@ export function ProjectFileTreePanel(props: {
   projectPathKey: string;
   cwd: string;
   initialized: boolean;
+  syncState: ProjectToolsFileTreeProjectState;
   onInitializedChange: (initialized: boolean) => void;
+  onSyncStateChange: (patch: ProjectToolsFileTreeStatePatch) => void;
   onInsertFileMention?: (path: string, kind: FileTreeKind) => void;
 }) {
-  const { projectPathKey, cwd, initialized, onInitializedChange, onInsertFileMention } = props;
+  const {
+    projectPathKey,
+    cwd,
+    initialized,
+    syncState,
+    onInitializedChange,
+    onSyncStateChange,
+    onInsertFileMention,
+  } = props;
+  const { t } = useLocale();
   const [states, setStates] = useState<Record<string, FileTreeState>>({});
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(syncState.query);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<MentionListResponse["entries"]>([]);
   const [searchTruncated, setSearchTruncated] = useState(false);
+  const [searchRefreshKey, setSearchRefreshKey] = useState(0);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const [pendingTargetPath, setPendingTargetPath] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
   const [copiedPath, setCopiedPath] = useState("");
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const onSyncStateChangeRef = useRef(onSyncStateChange);
+  const lastRevisionRef = useRef(syncState.revision);
 
   const state = states[projectPathKey] ?? createInitialState(cwd);
   const selectedNode = state.nodes[state.selectedPath] ?? state.nodes[ROOT_PATH];
   const selectedPath = selectedNode?.path ?? ROOT_PATH;
-  const selectedKind = selectedNode?.kind ?? "dir";
-  const selectedDir = selectedKind === "dir" ? selectedPath : dirname(selectedPath);
-  const hasSelection = Boolean(selectedNode && selectedPath);
   const canMutate = initialized && Boolean(projectPathKey && cwd);
+
+  useEffect(() => {
+    onSyncStateChangeRef.current = onSyncStateChange;
+  }, [onSyncStateChange]);
 
   const setProjectState = useCallback(
     (updater: (state: FileTreeState) => FileTreeState) => {
@@ -166,6 +199,10 @@ export function ProjectFileTreePanel(props: {
     [cwd, projectPathKey],
   );
 
+  const syncFileTreeState = useCallback((patch: ProjectToolsFileTreeStatePatch) => {
+    onSyncStateChangeRef.current(patch);
+  }, []);
+
   const loadChildren = useCallback(
     async (path: string, options?: { force?: boolean }) => {
       if (!projectPathKey || !cwd.trim()) return;
@@ -176,7 +213,7 @@ export function ProjectFileTreePanel(props: {
           shouldLoad = false;
           return current;
         }
-        if (node.loaded && !options?.force) {
+        if ((node.loaded || node.loading) && !options?.force) {
           shouldLoad = false;
           return current;
         }
@@ -209,7 +246,7 @@ export function ProjectFileTreePanel(props: {
             children: childPaths,
             loaded: true,
             loading: false,
-            error: response.hasMore ? "Too many items. Showing the first page." : undefined,
+            error: response.hasMore ? t("projectTools.fileTree.tooManyItems") : undefined,
           };
           for (const entry of entries) {
             if (!entry.path) continue;
@@ -228,12 +265,8 @@ export function ProjectFileTreePanel(props: {
             ...current,
             initialized: true,
             nodes,
-            expanded: current.expanded.includes(path)
-              ? current.expanded
-              : [...current.expanded, path],
           };
         });
-        onInitializedChange(true);
       } catch (error) {
         setProjectState((current) => {
           const node = current.nodes[path] ?? createRootNode(cwd);
@@ -244,15 +277,64 @@ export function ProjectFileTreePanel(props: {
               [path]: {
                 ...node,
                 loading: false,
-                error: toErrorMessage(error, "Failed to read directory"),
+                error: toErrorMessage(error, t("projectTools.fileTree.readFailed")),
               },
             },
           };
         });
       }
     },
-    [cwd, onInitializedChange, projectPathKey, setProjectState],
+    [cwd, projectPathKey, setProjectState, t],
   );
+
+  useEffect(() => {
+    setQuery((current) => (current === syncState.query ? current : syncState.query));
+  }, [syncState.query]);
+
+  useEffect(() => {
+    if (!initialized || !projectPathKey || query === syncState.query) return;
+    const timer = window.setTimeout(() => {
+      syncFileTreeState({ query, bumpStateVersion: true });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [initialized, projectPathKey, query, syncFileTreeState, syncState.query]);
+
+  useEffect(() => {
+    if (!projectPathKey) return;
+    setProjectState((current) => {
+      const nextExpanded = syncState.expandedPaths;
+      const nextSelectedPath = syncState.selectedPath;
+      if (
+        current.selectedPath === nextSelectedPath &&
+        sameStringArray(current.expanded, nextExpanded)
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        selectedPath: nextSelectedPath,
+        expanded: nextExpanded,
+      };
+    });
+  }, [projectPathKey, setProjectState, syncState.expandedPaths, syncState.selectedPath]);
+
+  useEffect(() => {
+    if (!initialized || !projectPathKey) return;
+    for (const path of state.expanded) {
+      void loadChildren(path);
+    }
+  }, [initialized, loadChildren, projectPathKey, state.expanded]);
+
+  useEffect(() => {
+    const previousRevision = lastRevisionRef.current;
+    lastRevisionRef.current = syncState.revision;
+    if (!initialized || !projectPathKey || previousRevision === syncState.revision) return;
+    const pathsToReload = Array.from(new Set([ROOT_PATH, ...state.expanded]));
+    for (const path of pathsToReload) {
+      void loadChildren(path, { force: true });
+    }
+    setSearchRefreshKey((current) => current + 1);
+  }, [initialized, loadChildren, projectPathKey, state.expanded, syncState.revision]);
 
   useEffect(() => {
     if (!initialized || !projectPathKey) return;
@@ -260,6 +342,28 @@ export function ProjectFileTreePanel(props: {
   }, [initialized, loadChildren, projectPathKey]);
 
   useEffect(() => {
+    void projectPathKey;
+    setContextMenu(null);
+  }, [projectPathKey]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    void searchRefreshKey;
     if (!query.trim() || !cwd.trim() || !initialized) {
       setSearchResults([]);
       setSearchError(null);
@@ -284,7 +388,7 @@ export function ProjectFileTreePanel(props: {
         .catch((error) => {
           if (cancelled) return;
           setSearchResults([]);
-          setSearchError(toErrorMessage(error, "Search failed"));
+          setSearchError(toErrorMessage(error, t("projectTools.fileTree.searchFailed")));
         })
         .finally(() => {
           if (!cancelled) setSearchLoading(false);
@@ -294,7 +398,7 @@ export function ProjectFileTreePanel(props: {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [cwd, initialized, query]);
+  }, [cwd, initialized, query, searchRefreshKey, t]);
 
   const revealPath = useCallback(
     async (path: string, kind: FileTreeKind) => {
@@ -306,79 +410,170 @@ export function ProjectFileTreePanel(props: {
         current = joinPath(current, part);
         await loadChildren(current);
       }
+      const nextExpanded = Array.from(
+        new Set([
+          ...state.expanded,
+          ROOT_PATH,
+          ...dirs.map((_, index) => parts.slice(0, index + 1).join("/")),
+        ]),
+      );
       setProjectState((state) => ({
         ...state,
         selectedPath: path,
-        expanded: Array.from(new Set([...state.expanded, ROOT_PATH, ...dirs.map((_, index) => parts.slice(0, index + 1).join("/"))])),
+        expanded: nextExpanded,
       }));
+      syncFileTreeState({
+        selectedPath: path,
+        expandedPaths: nextExpanded,
+        bumpStateVersion: true,
+      });
     },
-    [loadChildren, setProjectState],
+    [loadChildren, setProjectState, state.expanded, syncFileTreeState],
+  );
+
+  const toggleDirectory = useCallback(
+    (path: string, expanded: boolean) => {
+      if (expanded) {
+        const nextExpanded = state.expanded.filter((item) => item !== path);
+        setProjectState((state) => ({
+          ...state,
+          expanded: nextExpanded,
+        }));
+        syncFileTreeState({ expandedPaths: nextExpanded, bumpStateVersion: true });
+      } else {
+        const nextExpanded = Array.from(new Set([...state.expanded, path]));
+        setProjectState((state) => ({
+          ...state,
+          expanded: state.expanded.includes(path) ? state.expanded : [...state.expanded, path],
+        }));
+        void loadChildren(path);
+        syncFileTreeState({ expandedPaths: nextExpanded, bumpStateVersion: true });
+      }
+    },
+    [loadChildren, setProjectState, state.expanded, syncFileTreeState],
+  );
+
+  const openContextMenu = useCallback(
+    (event: React.MouseEvent, path: string) => {
+      event.preventDefault();
+      event.stopPropagation();
+      window.getSelection()?.removeAllRanges();
+      const targetPath = state.nodes[path] ? path : ROOT_PATH;
+      setProjectState((state) => ({ ...state, selectedPath: targetPath }));
+      syncFileTreeState({ selectedPath: targetPath, bumpStateVersion: true });
+      const rect = panelRef.current?.getBoundingClientRect();
+      const menuWidth = 220;
+      const menuHeight = 260;
+      const panelLeft = rect?.left ?? 0;
+      const panelTop = rect?.top ?? 0;
+      const panelWidth = rect?.width ?? window.innerWidth;
+      const panelHeight = rect?.height ?? window.innerHeight;
+      const maxX = Math.max(8, panelWidth - menuWidth - 8);
+      const maxY = Math.max(8, panelHeight - menuHeight - 8);
+      const x = Math.max(8, Math.min(event.clientX - panelLeft, maxX));
+      const y = Math.max(8, Math.min(event.clientY - panelTop, maxY));
+      setContextMenu({ x, y, path: targetPath });
+    },
+    [setProjectState, state.nodes, syncFileTreeState],
   );
 
   const startAction = useCallback(
-    (action: Exclude<PendingAction, null>) => {
+    (action: Exclude<PendingAction, null>, targetPath = selectedPath) => {
+      const targetNode = state.nodes[targetPath] ?? state.nodes[ROOT_PATH];
+      const normalizedTargetPath = targetNode?.path ?? ROOT_PATH;
+      if (action === "rename" && !normalizedTargetPath) return;
+      setProjectState((state) => ({ ...state, selectedPath: normalizedTargetPath }));
+      syncFileTreeState({ selectedPath: normalizedTargetPath, bumpStateVersion: true });
+      setPendingTargetPath(normalizedTargetPath);
       setPendingAction(action);
       setActionError(null);
-      setDraftName(action === "rename" && selectedPath ? basename(selectedPath) : "");
+      setDraftName(action === "rename" ? basename(normalizedTargetPath) : "");
     },
-    [selectedPath],
+    [selectedPath, setProjectState, state.nodes, syncFileTreeState],
   );
 
   const finishAction = useCallback(async () => {
     if (!pendingAction || busyAction) return;
     const name = draftName.trim();
     if (!name) {
-      setActionError("Name is required");
+      setActionError(t("projectTools.fileTree.nameRequired"));
       return;
     }
     setBusyAction(true);
     setActionError(null);
     try {
+      const targetPath = pendingTargetPath ?? selectedPath;
+      const targetNode = state.nodes[targetPath] ?? state.nodes[ROOT_PATH];
+      const targetDir =
+        targetNode?.kind === "dir" ? targetNode.path : dirname(targetNode?.path ?? targetPath);
       if (pendingAction === "file") {
-        const nextPath = joinPath(selectedDir, name);
+        const nextPath = joinPath(targetDir, name);
         await invoke("fs_write_text", {
           workdir: cwd,
           path: nextPath,
           content: "",
           mode: "rewrite",
         });
-        await loadChildren(selectedDir, { force: true });
+        await loadChildren(targetDir, { force: true });
         setProjectState((state) => ({ ...state, selectedPath: nextPath }));
+        syncFileTreeState({
+          selectedPath: nextPath,
+          expandedPaths: Array.from(new Set([...state.expanded, targetDir])),
+          bumpRevision: true,
+          bumpStateVersion: true,
+        });
       } else if (pendingAction === "folder") {
-        const nextPath = joinPath(selectedDir, name);
+        const nextPath = joinPath(targetDir, name);
         await invoke("fs_create_dir", {
           workdir: cwd,
           path: nextPath,
         });
-        await loadChildren(selectedDir, { force: true });
+        await loadChildren(targetDir, { force: true });
         await loadChildren(nextPath);
+        const nextExpanded = Array.from(new Set([...state.expanded, targetDir, nextPath]));
         setProjectState((state) => ({
           ...state,
           selectedPath: nextPath,
-          expanded: Array.from(new Set([...state.expanded, selectedDir, nextPath])),
+          expanded: nextExpanded,
         }));
-      } else if (pendingAction === "rename" && selectedPath) {
-        const parent = dirname(selectedPath);
+        syncFileTreeState({
+          selectedPath: nextPath,
+          expandedPaths: nextExpanded,
+          bumpRevision: true,
+          bumpStateVersion: true,
+        });
+      } else if (pendingAction === "rename" && targetPath) {
+        const parent = dirname(targetPath);
         const nextPath = joinPath(parent, name);
         await invoke("fs_rename", {
           workdir: cwd,
-          from_path: selectedPath,
+          from_path: targetPath,
           to_path: nextPath,
         });
         await loadChildren(parent, { force: true });
+        const nextExpanded = state.expanded
+          .filter((item) => item !== targetPath && !item.startsWith(`${targetPath}/`))
+          .map((item) =>
+            item.startsWith(`${targetPath}/`) ? item.replace(targetPath, nextPath) : item,
+          );
         setProjectState((state) => ({
           ...state,
-          nodes: removeNodeSubtree(state.nodes, selectedPath),
+          nodes: removeNodeSubtree(state.nodes, targetPath),
           selectedPath: nextPath,
-          expanded: state.expanded
-            .filter((item) => item !== selectedPath && !item.startsWith(`${selectedPath}/`))
-            .map((item) => (item.startsWith(`${selectedPath}/`) ? item.replace(selectedPath, nextPath) : item)),
+          expanded: nextExpanded,
         }));
+        syncFileTreeState({
+          selectedPath: nextPath,
+          expandedPaths: nextExpanded,
+          bumpRevision: true,
+          bumpStateVersion: true,
+        });
       }
       setPendingAction(null);
+      setPendingTargetPath(null);
       setDraftName("");
     } catch (error) {
-      setActionError(toErrorMessage(error, "Action failed"));
+      setActionError(toErrorMessage(error, t("projectTools.fileTree.actionFailed")));
     } finally {
       setBusyAction(false);
     }
@@ -388,43 +583,80 @@ export function ProjectFileTreePanel(props: {
     draftName,
     loadChildren,
     pendingAction,
-    selectedDir,
+    pendingTargetPath,
     selectedPath,
     setProjectState,
+    state.expanded,
+    state.nodes,
+    syncFileTreeState,
+    t,
   ]);
 
-  const deleteSelected = useCallback(async () => {
-    if (!selectedPath || busyAction) return;
-    const confirmed = window.confirm(`Delete "${selectedPath}"?`);
-    if (!confirmed) return;
-    const parent = dirname(selectedPath);
-    setBusyAction(true);
-    setActionError(null);
-    try {
-      await invoke("fs_delete", { workdir: cwd, path: selectedPath });
-      setProjectState((state) => ({
-        ...state,
-        nodes: removeNodeSubtree(state.nodes, selectedPath),
-        selectedPath: parent,
-        expanded: state.expanded.filter(
-          (item) => item !== selectedPath && !item.startsWith(`${selectedPath}/`),
-        ),
-      }));
-      await loadChildren(parent, { force: true });
-    } catch (error) {
-      setActionError(toErrorMessage(error, "Delete failed"));
-    } finally {
-      setBusyAction(false);
-    }
-  }, [busyAction, cwd, loadChildren, selectedPath, setProjectState]);
+  const deletePath = useCallback(
+    async (targetPath = selectedPath) => {
+      if (!targetPath || busyAction) return;
+      const confirmed = window.confirm(
+        t("projectTools.fileTree.deleteConfirm").replace("{path}", targetPath),
+      );
+      if (!confirmed) return;
+      const parent = dirname(targetPath);
+      setBusyAction(true);
+      setActionError(null);
+      try {
+        await invoke("fs_delete", { workdir: cwd, path: targetPath });
+        const nextExpanded = state.expanded.filter(
+          (item) => item !== targetPath && !item.startsWith(`${targetPath}/`),
+        );
+        setProjectState((state) => ({
+          ...state,
+          nodes: removeNodeSubtree(state.nodes, targetPath),
+          selectedPath: parent,
+          expanded: nextExpanded,
+        }));
+        await loadChildren(parent, { force: true });
+        syncFileTreeState({
+          selectedPath: parent,
+          expandedPaths: nextExpanded,
+          bumpRevision: true,
+          bumpStateVersion: true,
+        });
+      } catch (error) {
+        setActionError(toErrorMessage(error, t("projectTools.fileTree.deleteFailed")));
+      } finally {
+        setBusyAction(false);
+      }
+    },
+    [
+      busyAction,
+      cwd,
+      loadChildren,
+      selectedPath,
+      setProjectState,
+      state.expanded,
+      syncFileTreeState,
+      t,
+    ],
+  );
 
-  const copySelectedPath = useCallback(() => {
-    if (!selectedPath) return;
-    void navigator.clipboard?.writeText(selectedPath).then(() => {
-      setCopiedPath(selectedPath);
-      window.setTimeout(() => setCopiedPath(""), 1200);
-    });
-  }, [selectedPath]);
+  const copyPath = useCallback(
+    (targetPath = selectedPath) => {
+      if (!targetPath) return;
+      void navigator.clipboard?.writeText(targetPath).then(() => {
+        setCopiedPath(targetPath);
+        window.setTimeout(() => setCopiedPath(""), 1200);
+      });
+    },
+    [selectedPath],
+  );
+
+  const insertMention = useCallback(
+    (targetPath = selectedPath) => {
+      const targetNode = state.nodes[targetPath];
+      if (!targetPath || !targetNode) return;
+      onInsertFileMention?.(targetPath, targetNode.kind);
+    },
+    [onInsertFileMention, selectedPath, state.nodes],
+  );
 
   const renderNode = useCallback(
     (path: string, depth: number): React.ReactNode => {
@@ -435,27 +667,23 @@ export function ProjectFileTreePanel(props: {
       return (
         <div key={path || "__root__"}>
           <div
+            role="treeitem"
+            tabIndex={-1}
             className={cn(
-              "group flex h-7 items-center gap-1 rounded-md pr-2 text-xs text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+              "group flex h-7 select-none items-center gap-1 rounded-md pr-2 text-xs text-muted-foreground hover:bg-muted/70 hover:text-foreground",
               selected && "bg-muted text-foreground",
             )}
             style={{ paddingLeft: 6 + depth * 14 }}
+            onContextMenu={(event) => openContextMenu(event, path)}
           >
             {node.kind === "dir" ? (
               <button
                 type="button"
                 className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-background"
-                onClick={() => {
-                  if (expanded) {
-                    setProjectState((state) => ({
-                      ...state,
-                      expanded: state.expanded.filter((item) => item !== path),
-                    }));
-                  } else {
-                    void loadChildren(path);
-                  }
-                }}
-                title={expanded ? "Collapse" : "Expand"}
+                onClick={() => toggleDirectory(path, expanded)}
+                title={
+                  expanded ? t("projectTools.fileTree.collapse") : t("projectTools.fileTree.expand")
+                }
               >
                 {node.loading ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -474,17 +702,11 @@ export function ProjectFileTreePanel(props: {
               title={path || cwd}
               onClick={() => {
                 setProjectState((state) => ({ ...state, selectedPath: path }));
+                syncFileTreeState({ selectedPath: path, bumpStateVersion: true });
               }}
               onDoubleClick={() => {
                 if (node.kind !== "dir") return;
-                if (expanded) {
-                  setProjectState((state) => ({
-                    ...state,
-                    expanded: state.expanded.filter((item) => item !== path),
-                  }));
-                } else {
-                  void loadChildren(path);
-                }
+                toggleDirectory(path, expanded);
               }}
             >
               {node.kind === "dir" ? (
@@ -499,22 +721,31 @@ export function ProjectFileTreePanel(props: {
               <span className="min-w-0 truncate">{node.name}</span>
             </button>
           </div>
-          {node.error ? <div className="px-3 py-1 text-[11px] text-amber-600">{node.error}</div> : null}
+          {node.error ? (
+            <div className="px-3 py-1 text-[11px] text-amber-600">{node.error}</div>
+          ) : null}
           {node.kind === "dir" && expanded
             ? node.children.map((childPath) => renderNode(childPath, depth + 1))
             : null}
         </div>
       );
     },
-    [cwd, loadChildren, setProjectState, state],
+    [cwd, openContextMenu, setProjectState, state, syncFileTreeState, t, toggleDirectory],
   );
 
   const actionPlaceholder = useMemo(() => {
-    if (pendingAction === "file") return "New file name";
-    if (pendingAction === "folder") return "New folder name";
-    if (pendingAction === "rename") return "New name";
+    if (pendingAction === "file") return t("projectTools.fileTree.newFilePlaceholder");
+    if (pendingAction === "folder") return t("projectTools.fileTree.newFolderPlaceholder");
+    if (pendingAction === "rename") return t("projectTools.fileTree.renamePlaceholder");
     return "";
-  }, [pendingAction]);
+  }, [pendingAction, t]);
+
+  const contextNode = contextMenu
+    ? (state.nodes[contextMenu.path] ?? state.nodes[ROOT_PATH])
+    : null;
+  const contextPath = contextNode?.path ?? ROOT_PATH;
+  const contextKind = contextNode?.kind ?? "dir";
+  const contextHasPathAction = Boolean(contextPath);
 
   if (!initialized) {
     return (
@@ -526,21 +757,21 @@ export function ProjectFileTreePanel(props: {
             void loadChildren(ROOT_PATH, { force: true });
           }}
         >
-          New File Tree
+          {t("projectTools.newFileTree")}
         </Button>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div ref={panelRef} className="relative flex h-full min-h-0 select-none flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search files"
+            placeholder={t("projectTools.fileTree.searchPlaceholder")}
             className="h-8 pl-7 text-xs"
           />
         </div>
@@ -548,42 +779,13 @@ export function ProjectFileTreePanel(props: {
           variant="ghost"
           size="icon"
           className="h-8 w-8 rounded-lg"
-          title="Refresh file tree"
-          onClick={() => void loadChildren(ROOT_PATH, { force: true })}
+          title={t("projectTools.fileTree.refresh")}
+          onClick={() => {
+            void loadChildren(ROOT_PATH, { force: true });
+            syncFileTreeState({ bumpRevision: true });
+          }}
         >
           <RefreshCw className="h-4 w-4" />
-        </Button>
-      </div>
-
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border/60 px-3 py-2">
-        <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" disabled={!canMutate} onClick={() => startAction("file")}>
-          <Plus className="h-3.5 w-3.5" />
-          File
-        </Button>
-        <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" disabled={!canMutate} onClick={() => startAction("folder")}>
-          <Folder className="h-3.5 w-3.5" />
-          Folder
-        </Button>
-        <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" disabled={!hasSelection || !canMutate} onClick={() => startAction("rename")}>
-          <Edit3 className="h-3.5 w-3.5" />
-          Rename
-        </Button>
-        <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive" disabled={!hasSelection || !canMutate} onClick={() => void deleteSelected()}>
-          <Trash2 className="h-3.5 w-3.5" />
-          Delete
-        </Button>
-        <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" disabled={!selectedPath} onClick={copySelectedPath}>
-          <Copy className="h-3.5 w-3.5" />
-          {copiedPath === selectedPath ? "Copied" : "Path"}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1 px-2 text-xs"
-          disabled={!selectedPath || !onInsertFileMention}
-          onClick={() => selectedPath && onInsertFileMention?.(selectedPath, selectedKind)}
-        >
-          @
         </Button>
       </div>
 
@@ -601,16 +803,35 @@ export function ProjectFileTreePanel(props: {
               if (event.key === "Escape") {
                 event.preventDefault();
                 setPendingAction(null);
+                setPendingTargetPath(null);
                 setActionError(null);
               }
             }}
             placeholder={actionPlaceholder}
             className="h-8 text-xs"
           />
-          <Button size="icon" variant="ghost" className="h-8 w-8 rounded-lg" disabled={busyAction} onClick={() => void finishAction()}>
-            {busyAction ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 rounded-lg"
+            disabled={busyAction}
+            onClick={() => void finishAction()}
+          >
+            {busyAction ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
           </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8 rounded-lg" onClick={() => setPendingAction(null)}>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 rounded-lg"
+            onClick={() => {
+              setPendingAction(null);
+              setPendingTargetPath(null);
+            }}
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -627,18 +848,20 @@ export function ProjectFileTreePanel(props: {
           {searchLoading ? (
             <div className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Searching...
+              {t("projectTools.fileTree.searching")}
             </div>
           ) : searchError ? (
             <div className="px-2 py-1 text-xs text-destructive">{searchError}</div>
           ) : searchResults.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-muted-foreground">No matches</div>
+            <div className="px-2 py-1 text-xs text-muted-foreground">
+              {t("projectTools.fileTree.noMatches")}
+            </div>
           ) : (
             searchResults.map((entry) => (
               <button
                 key={`${entry.kind}:${entry.path}`}
                 type="button"
-                className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="flex h-7 w-full select-none items-center gap-1.5 rounded-md px-2 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                 title={entry.path}
                 onClick={() => void revealPath(entry.path, entry.kind)}
               >
@@ -652,14 +875,133 @@ export function ProjectFileTreePanel(props: {
             ))
           )}
           {searchTruncated ? (
-            <div className="px-2 pt-1 text-[11px] text-muted-foreground">Results truncated</div>
+            <div className="px-2 pt-1 text-[11px] text-muted-foreground">
+              {t("projectTools.fileTree.resultsTruncated")}
+            </div>
           ) : null}
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
+      <div
+        role="tree"
+        className="min-h-0 flex-1 select-none overflow-auto px-2 py-2"
+        onContextMenu={(event) => openContextMenu(event, selectedPath || ROOT_PATH)}
+      >
         {renderNode(ROOT_PATH, 0)}
       </div>
+
+      {contextMenu ? (
+        <div
+          role="menu"
+          className="absolute z-[80] min-w-52 select-none overflow-hidden rounded-lg border border-border bg-popover py-1 text-xs text-popover-foreground shadow-xl"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-45"
+            disabled={!canMutate}
+            onClick={() => {
+              startAction("file", contextPath);
+              setContextMenu(null);
+            }}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t("projectTools.fileTree.newFile")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-45"
+            disabled={!canMutate}
+            onClick={() => {
+              startAction("folder", contextPath);
+              setContextMenu(null);
+            }}
+          >
+            <Folder className="h-3.5 w-3.5" />
+            {t("projectTools.fileTree.newFolder")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-45"
+            disabled={!canMutate || !contextHasPathAction}
+            onClick={() => {
+              startAction("rename", contextPath);
+              setContextMenu(null);
+            }}
+          >
+            <Edit3 className="h-3.5 w-3.5" />
+            {t("projectTools.fileTree.rename")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-45"
+            disabled={!canMutate || !contextHasPathAction}
+            onClick={() => {
+              void deletePath(contextPath);
+              setContextMenu(null);
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {t("projectTools.fileTree.delete")}
+          </button>
+          <div className="my-1 h-px bg-border/70" />
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-45"
+            disabled={!contextHasPathAction}
+            onClick={() => {
+              copyPath(contextPath);
+              setContextMenu(null);
+            }}
+          >
+            <Copy className="h-3.5 w-3.5" />
+            {copiedPath === contextPath
+              ? t("projectTools.fileTree.copiedPath")
+              : t("projectTools.fileTree.copyPath")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-45"
+            disabled={!contextHasPathAction || !onInsertFileMention}
+            onClick={() => {
+              insertMention(contextPath);
+              setContextMenu(null);
+            }}
+          >
+            <span className="flex h-3.5 w-3.5 items-center justify-center text-[11px] font-semibold">
+              @
+            </span>
+            {t("projectTools.fileTree.insertReference")}
+          </button>
+          <div className="my-1 h-px bg-border/70" />
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-45"
+            disabled={!contextNode}
+            onClick={() => {
+              void loadChildren(contextKind === "dir" ? contextPath : dirname(contextPath), {
+                force: true,
+              });
+              syncFileTreeState({ bumpRevision: true });
+              setContextMenu(null);
+            }}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {t("projectTools.fileTree.refresh")}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

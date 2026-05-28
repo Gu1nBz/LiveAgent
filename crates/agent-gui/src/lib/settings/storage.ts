@@ -6,6 +6,7 @@ import {
   type ChatRuntimeControls,
   getDefaultSettings,
   normalizeChatRuntimeControls,
+  normalizeProjectToolsFileTreeSettings,
   normalizeSelectedModel,
   normalizeSettings,
   normalizeSkillsSettings,
@@ -48,6 +49,15 @@ export type SettingsSaveState =
   | { status: "saved" }
   | { status: "error"; message: string };
 
+function toPersistedLocalCustomSettings(
+  customSettings: AppSettings["customSettings"],
+): AppSettings["customSettings"] {
+  return {
+    ...customSettings,
+    projectToolsFileTree: normalizeProjectToolsFileTreeSettings({}),
+  };
+}
+
 function readLocalUiSettings(): {
   skills: SkillsSettings;
   chatRuntimeControls: ChatRuntimeControls;
@@ -61,26 +71,29 @@ function readLocalUiSettings(): {
 
   function normalizeLocalCustomSettings(input: unknown): AppSettings["customSettings"] {
     const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
-    const chatSidebar = (obj.chatSidebar && typeof obj.chatSidebar === "object"
-      ? obj.chatSidebar
-      : {}) as Record<string, unknown>;
-    const legacyTerminalPanel = (obj.terminalPanel && typeof obj.terminalPanel === "object"
-      ? obj.terminalPanel
-      : {}) as Record<string, unknown>;
-    const projectToolsPanel = (obj.projectToolsPanel && typeof obj.projectToolsPanel === "object"
-      ? obj.projectToolsPanel
-      : {}) as Record<string, unknown>;
+    const chatSidebar = (
+      obj.chatSidebar && typeof obj.chatSidebar === "object" ? obj.chatSidebar : {}
+    ) as Record<string, unknown>;
+    const legacyTerminalPanel = (
+      obj.terminalPanel && typeof obj.terminalPanel === "object" ? obj.terminalPanel : {}
+    ) as Record<string, unknown>;
+    const projectToolsPanel = (
+      obj.projectToolsPanel && typeof obj.projectToolsPanel === "object"
+        ? obj.projectToolsPanel
+        : {}
+    ) as Record<string, unknown>;
     const projectToolsPanelWidth =
       typeof projectToolsPanel.width === "number" || typeof projectToolsPanel.width === "string"
         ? Number(projectToolsPanel.width)
-        : typeof legacyTerminalPanel.width === "number" || typeof legacyTerminalPanel.width === "string"
+        : typeof legacyTerminalPanel.width === "number" ||
+            typeof legacyTerminalPanel.width === "string"
           ? Number(legacyTerminalPanel.width)
           : 420;
     const projectToolsPanelActiveTab =
       projectToolsPanel.activeTab === "terminal" || projectToolsPanel.activeTab === "fileTree"
         ? projectToolsPanel.activeTab
         : "fileTree";
-    return {
+    return toPersistedLocalCustomSettings({
       conversationTitleModel: normalizeSelectedModel(obj.conversationTitleModel),
       chatSidebar: {
         projectsCollapsed: chatSidebar.projectsCollapsed === true,
@@ -92,7 +105,8 @@ function readLocalUiSettings(): {
           : 420,
         activeTab: projectToolsPanelActiveTab,
       },
-    };
+      projectToolsFileTree: normalizeProjectToolsFileTreeSettings({}),
+    });
   }
 
   try {
@@ -151,7 +165,7 @@ function writeLocalUiSettings(
   const payload = {
     skills: settings.skills,
     chatRuntimeControls: settings.chatRuntimeControls,
-    customSettings: settings.customSettings,
+    customSettings: toPersistedLocalCustomSettings(settings.customSettings),
     updates: settings.updates,
     selectedModel: settings.selectedModel,
     theme: settings.theme,
@@ -233,6 +247,8 @@ export async function loadPersistedSettings(): Promise<AppSettings> {
 
 export async function persistSettings(prev: AppSettings, next: AppSettings): Promise<void> {
   const tasks: Promise<unknown>[] = [];
+  const prevLocalCustomSettings = toPersistedLocalCustomSettings(prev.customSettings);
+  const nextLocalCustomSettings = toPersistedLocalCustomSettings(next.customSettings);
 
   if (hasChanged(prev.customProviders, next.customProviders)) {
     tasks.push(
@@ -301,7 +317,7 @@ export async function persistSettings(prev: AppSettings, next: AppSettings): Pro
   if (
     hasChanged(prev.skills, next.skills) ||
     hasChanged(prev.chatRuntimeControls, next.chatRuntimeControls) ||
-    hasChanged(prev.customSettings, next.customSettings) ||
+    hasChanged(prevLocalCustomSettings, nextLocalCustomSettings) ||
     hasChanged(prev.updates, next.updates) ||
     hasChanged(prev.selectedModel ?? null, next.selectedModel ?? null) ||
     hasChanged(prev.theme, next.theme) ||
@@ -310,7 +326,7 @@ export async function persistSettings(prev: AppSettings, next: AppSettings): Pro
     writeLocalUiSettings({
       skills: next.skills,
       chatRuntimeControls: next.chatRuntimeControls,
-      customSettings: next.customSettings,
+      customSettings: nextLocalCustomSettings,
       updates: next.updates,
       selectedModel: next.selectedModel,
       theme: next.theme,
