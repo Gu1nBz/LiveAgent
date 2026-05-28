@@ -462,6 +462,16 @@ func (c *websocketConnection) dispatch(req websocketRequest) {
 		c.handleFsListDirs(req)
 	case "fs.create_project_folder":
 		c.handleFsCreateProjectFolder(req)
+	case "fs.list":
+		c.handleFsList(req)
+	case "fs.write_text":
+		c.handleFsWriteText(req)
+	case "fs.create_dir":
+		c.handleFsCreateDir(req)
+	case "fs.rename":
+		c.handleFsRename(req)
+	case "fs.delete":
+		c.handleFsDelete(req)
 	case "history.list":
 		c.handleHistoryList(req)
 	case "history.workdirs":
@@ -685,6 +695,311 @@ func (c *websocketConnection) handleFsCreateProjectFolder(req websocketRequest) 
 	_ = c.writeResponse(req.ID, map[string]any{
 		"path": strings.TrimSpace(resp.GetPath()),
 	})
+}
+
+func (c *websocketConnection) handleFsList(req websocketRequest) {
+	type payload struct {
+		Workdir    string `json:"workdir"`
+		Path       string `json:"path"`
+		Depth      *int   `json:"depth"`
+		Offset     *int   `json:"offset"`
+		MaxResults *int   `json:"max_results"`
+	}
+
+	var body payload
+	if err := decodeWebSocketPayload(req.Payload, &body); err != nil {
+		_ = c.writeError(req.ID, "invalid fs.list payload")
+		return
+	}
+
+	workdir := strings.TrimSpace(body.Workdir)
+	if workdir == "" {
+		_ = c.writeError(req.ID, "workdir is required")
+		return
+	}
+
+	depth, err := websocketOptionalUint32(body.Depth, "depth")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
+		return
+	}
+	offset, err := websocketOptionalUint32(body.Offset, "offset")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
+		return
+	}
+	maxResults, err := websocketOptionalUint32(body.MaxResults, "max_results")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
+		return
+	}
+
+	response, err := c.awaitAgentResponse(req.ID, &gatewayv1.GatewayEnvelope{
+		RequestId: req.ID,
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.GatewayEnvelope_FsList{
+			FsList: &gatewayv1.FsListRequest{
+				Workdir:    workdir,
+				Path:       strings.TrimSpace(body.Path),
+				Depth:      depth,
+				Offset:     offset,
+				MaxResults: maxResults,
+			},
+		},
+	})
+	if err != nil {
+		_ = c.writeError(req.ID, websocketErrorMessage(err))
+		return
+	}
+	if errResp := response.GetError(); errResp != nil {
+		_ = c.writeError(req.ID, errResp.GetMessage())
+		return
+	}
+
+	resp := response.GetFsListResp()
+	if resp == nil {
+		_ = c.writeError(req.ID, "unexpected agent response")
+		return
+	}
+
+	_ = c.writeResponse(req.ID, websocketFsListResponsePayload(resp))
+}
+
+func (c *websocketConnection) handleFsWriteText(req websocketRequest) {
+	type payload struct {
+		Workdir             string  `json:"workdir"`
+		Path                string  `json:"path"`
+		Content             string  `json:"content"`
+		Mode                string  `json:"mode"`
+		ExpectedMtimeMs     *uint64 `json:"expected_mtime_ms"`
+		ExpectedContentHash *string `json:"expected_content_hash"`
+	}
+
+	var body payload
+	if err := decodeWebSocketPayload(req.Payload, &body); err != nil {
+		_ = c.writeError(req.ID, "invalid fs.write_text payload")
+		return
+	}
+
+	workdir := strings.TrimSpace(body.Workdir)
+	path := strings.TrimSpace(body.Path)
+	if workdir == "" {
+		_ = c.writeError(req.ID, "workdir is required")
+		return
+	}
+	if path == "" {
+		_ = c.writeError(req.ID, "path is required")
+		return
+	}
+	mode := strings.TrimSpace(body.Mode)
+	if mode == "" {
+		mode = "rewrite"
+	}
+	expectedHash := ""
+	hasExpectedHash := false
+	if body.ExpectedContentHash != nil {
+		expectedHash = strings.TrimSpace(*body.ExpectedContentHash)
+		hasExpectedHash = true
+	}
+	expectedMtime := uint64(0)
+	hasExpectedMtime := false
+	if body.ExpectedMtimeMs != nil {
+		expectedMtime = *body.ExpectedMtimeMs
+		hasExpectedMtime = true
+	}
+
+	response, err := c.awaitAgentResponse(req.ID, &gatewayv1.GatewayEnvelope{
+		RequestId: req.ID,
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.GatewayEnvelope_FsWriteText{
+			FsWriteText: &gatewayv1.FsWriteTextRequest{
+				Workdir:                workdir,
+				Path:                   path,
+				Content:                body.Content,
+				Mode:                   mode,
+				ExpectedMtimeMs:        expectedMtime,
+				ExpectedContentHash:    expectedHash,
+				HasExpectedMtimeMs:     hasExpectedMtime,
+				HasExpectedContentHash: hasExpectedHash,
+			},
+		},
+	})
+	if err != nil {
+		_ = c.writeError(req.ID, websocketErrorMessage(err))
+		return
+	}
+	if errResp := response.GetError(); errResp != nil {
+		_ = c.writeError(req.ID, errResp.GetMessage())
+		return
+	}
+
+	resp := response.GetFsWriteTextResp()
+	if resp == nil {
+		_ = c.writeError(req.ID, "unexpected agent response")
+		return
+	}
+
+	_ = c.writeResponse(req.ID, websocketFsWriteTextResponsePayload(resp))
+}
+
+func (c *websocketConnection) handleFsCreateDir(req websocketRequest) {
+	type payload struct {
+		Workdir string `json:"workdir"`
+		Path    string `json:"path"`
+	}
+
+	var body payload
+	if err := decodeWebSocketPayload(req.Payload, &body); err != nil {
+		_ = c.writeError(req.ID, "invalid fs.create_dir payload")
+		return
+	}
+
+	workdir := strings.TrimSpace(body.Workdir)
+	path := strings.TrimSpace(body.Path)
+	if workdir == "" {
+		_ = c.writeError(req.ID, "workdir is required")
+		return
+	}
+	if path == "" {
+		_ = c.writeError(req.ID, "path is required")
+		return
+	}
+
+	response, err := c.awaitAgentResponse(req.ID, &gatewayv1.GatewayEnvelope{
+		RequestId: req.ID,
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.GatewayEnvelope_FsCreateDir{
+			FsCreateDir: &gatewayv1.FsCreateDirRequest{
+				Workdir: workdir,
+				Path:    path,
+			},
+		},
+	})
+	if err != nil {
+		_ = c.writeError(req.ID, websocketErrorMessage(err))
+		return
+	}
+	if errResp := response.GetError(); errResp != nil {
+		_ = c.writeError(req.ID, errResp.GetMessage())
+		return
+	}
+
+	resp := response.GetFsCreateDirResp()
+	if resp == nil {
+		_ = c.writeError(req.ID, "unexpected agent response")
+		return
+	}
+
+	_ = c.writeResponse(req.ID, websocketFsCreateDirResponsePayload(resp))
+}
+
+func (c *websocketConnection) handleFsRename(req websocketRequest) {
+	type payload struct {
+		Workdir  string `json:"workdir"`
+		FromPath string `json:"from_path"`
+		ToPath   string `json:"to_path"`
+	}
+
+	var body payload
+	if err := decodeWebSocketPayload(req.Payload, &body); err != nil {
+		_ = c.writeError(req.ID, "invalid fs.rename payload")
+		return
+	}
+
+	workdir := strings.TrimSpace(body.Workdir)
+	fromPath := strings.TrimSpace(body.FromPath)
+	toPath := strings.TrimSpace(body.ToPath)
+	if workdir == "" {
+		_ = c.writeError(req.ID, "workdir is required")
+		return
+	}
+	if fromPath == "" {
+		_ = c.writeError(req.ID, "from_path is required")
+		return
+	}
+	if toPath == "" {
+		_ = c.writeError(req.ID, "to_path is required")
+		return
+	}
+
+	response, err := c.awaitAgentResponse(req.ID, &gatewayv1.GatewayEnvelope{
+		RequestId: req.ID,
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.GatewayEnvelope_FsRename{
+			FsRename: &gatewayv1.FsRenameRequest{
+				Workdir:  workdir,
+				FromPath: fromPath,
+				ToPath:   toPath,
+			},
+		},
+	})
+	if err != nil {
+		_ = c.writeError(req.ID, websocketErrorMessage(err))
+		return
+	}
+	if errResp := response.GetError(); errResp != nil {
+		_ = c.writeError(req.ID, errResp.GetMessage())
+		return
+	}
+
+	resp := response.GetFsRenameResp()
+	if resp == nil {
+		_ = c.writeError(req.ID, "unexpected agent response")
+		return
+	}
+
+	_ = c.writeResponse(req.ID, websocketFsRenameResponsePayload(resp))
+}
+
+func (c *websocketConnection) handleFsDelete(req websocketRequest) {
+	type payload struct {
+		Workdir string `json:"workdir"`
+		Path    string `json:"path"`
+	}
+
+	var body payload
+	if err := decodeWebSocketPayload(req.Payload, &body); err != nil {
+		_ = c.writeError(req.ID, "invalid fs.delete payload")
+		return
+	}
+
+	workdir := strings.TrimSpace(body.Workdir)
+	path := strings.TrimSpace(body.Path)
+	if workdir == "" {
+		_ = c.writeError(req.ID, "workdir is required")
+		return
+	}
+	if path == "" {
+		_ = c.writeError(req.ID, "path is required")
+		return
+	}
+
+	response, err := c.awaitAgentResponse(req.ID, &gatewayv1.GatewayEnvelope{
+		RequestId: req.ID,
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.GatewayEnvelope_FsDelete{
+			FsDelete: &gatewayv1.FsDeleteRequest{
+				Workdir: workdir,
+				Path:    path,
+			},
+		},
+	})
+	if err != nil {
+		_ = c.writeError(req.ID, websocketErrorMessage(err))
+		return
+	}
+	if errResp := response.GetError(); errResp != nil {
+		_ = c.writeError(req.ID, errResp.GetMessage())
+		return
+	}
+
+	resp := response.GetFsDeleteResp()
+	if resp == nil {
+		_ = c.writeError(req.ID, "unexpected agent response")
+		return
+	}
+
+	_ = c.writeResponse(req.ID, websocketFsDeleteResponsePayload(resp))
 }
 
 func (c *websocketConnection) handleHistoryList(req websocketRequest) {
@@ -2188,6 +2503,65 @@ func (c *websocketConnection) handleSkillManage(req websocketRequest) {
 	}
 
 	_ = c.writeResponse(req.ID, payload)
+}
+
+func websocketFsListResponsePayload(resp *gatewayv1.FsListResponse) map[string]any {
+	entryPayload := make([]map[string]any, 0, len(resp.GetEntries()))
+	for _, entry := range resp.GetEntries() {
+		entryPayload = append(entryPayload, map[string]any{
+			"path": entry.GetPath(),
+			"kind": entry.GetKind(),
+		})
+	}
+
+	var path any
+	if resp.GetHasPath() {
+		path = resp.GetPath()
+	}
+
+	return map[string]any{
+		"path":       path,
+		"depth":      resp.GetDepth(),
+		"offset":     resp.GetOffset(),
+		"maxResults": resp.GetMaxResults(),
+		"total":      resp.GetTotal(),
+		"hasMore":    resp.GetHasMore(),
+		"entries":    entryPayload,
+	}
+}
+
+func websocketFsWriteTextResponsePayload(resp *gatewayv1.FsWriteTextResponse) map[string]any {
+	return map[string]any{
+		"path":          resp.GetPath(),
+		"mode":          resp.GetMode(),
+		"existedBefore": resp.GetExistedBefore(),
+		"bytesWritten":  resp.GetBytesWritten(),
+		"mtimeMs":       resp.GetMtimeMs(),
+		"contentHash":   resp.GetContentHash(),
+		"totalLines":    resp.GetTotalLines(),
+	}
+}
+
+func websocketFsCreateDirResponsePayload(resp *gatewayv1.FsCreateDirResponse) map[string]any {
+	return map[string]any{
+		"path": resp.GetPath(),
+		"kind": resp.GetKind(),
+	}
+}
+
+func websocketFsRenameResponsePayload(resp *gatewayv1.FsRenameResponse) map[string]any {
+	return map[string]any{
+		"fromPath": resp.GetFromPath(),
+		"path":     resp.GetPath(),
+		"kind":     resp.GetKind(),
+	}
+}
+
+func websocketFsDeleteResponsePayload(resp *gatewayv1.FsDeleteResponse) map[string]any {
+	return map[string]any{
+		"path": resp.GetPath(),
+		"kind": resp.GetKind(),
+	}
 }
 
 func nullableTrimmedString(value string) any {

@@ -82,7 +82,7 @@ function collectProviderApiKeyUpdates(
 
 function syncableCustomSettings(customSettings: AppSettings["customSettings"]) {
   const syncable = { ...customSettings } as Partial<AppSettings["customSettings"]>;
-  delete syncable.terminalPanel;
+  delete syncable.projectToolsPanel;
   return {
     ...syncable,
     chatSidebar: {
@@ -321,7 +321,7 @@ export function applyGatewaySettingsSyncPayload(
     customSettings: {
       ...(customSettings as AppSettings["customSettings"]),
       chatSidebar: current.customSettings.chatSidebar,
-      terminalPanel: current.customSettings.terminalPanel,
+      projectToolsPanel: current.customSettings.projectToolsPanel,
     },
     skills: (source.skills as AppSettings["skills"] | undefined) ?? current.skills,
     chatRuntimeControls: Object.hasOwn(source, "chatRuntimeControls")

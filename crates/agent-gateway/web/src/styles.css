@@ -75,11 +75,11 @@ html[data-liveagent-webui="gateway"] .chat-history-row {
   contain: layout paint style;
 }
 
-html[data-liveagent-webui="gateway"] .gateway-terminal-panel-toggle {
+html[data-liveagent-webui="gateway"] .gateway-project-tools-panel-toggle {
   margin-right: 6px;
 }
 
-html[data-liveagent-webui="gateway"] .project-terminal-panel-handle {
+html[data-liveagent-webui="gateway"] .project-tools-panel-handle {
   display: none;
 }
 
@@ -1465,7 +1465,7 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
     padding-bottom: 100px;
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel {
+  html[data-liveagent-webui="gateway"] .project-tools-panel {
     inset: 0;
     z-index: 50;
     width: 100%;
@@ -1479,11 +1479,11 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
     backdrop-filter: blur(18px);
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-inner {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-inner {
     min-width: 0;
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-handle {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-handle {
     display: block;
     width: 36px;
     height: 4px;
@@ -1494,27 +1494,27 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
     background: hsl(var(--muted-foreground) / 0.24);
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-header {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-header {
     height: auto;
     min-height: 44px;
     gap: 6px;
     padding: 6px 8px 8px;
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-tabs {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-tabs {
     padding-bottom: 1px;
     scrollbar-width: none;
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-tabs::-webkit-scrollbar {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-tabs::-webkit-scrollbar {
     display: none;
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-tab {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-tab {
     max-width: min(12rem, calc(100vw - 10rem));
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-shell-select {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-shell-select {
     max-width: 6.75rem;
   }
 
@@ -2326,7 +2326,7 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
     height: 7px;
   }
 
-  html[data-liveagent-webui="gateway"] .gateway-terminal-panel-toggle {
+  html[data-liveagent-webui="gateway"] .gateway-project-tools-panel-toggle {
     margin-right: 8px;
   }
 }
@@ -2346,13 +2346,13 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
     max-width: clamp(6.25rem, calc(100vw - 12.5rem), 13rem) !important;
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-tab {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-tab {
     max-width: min(10rem, calc(100vw - 8.5rem));
     padding-left: 6px;
     padding-right: 6px;
   }
 
-  html[data-liveagent-webui="gateway"] .project-terminal-panel-shell-select {
+  html[data-liveagent-webui="gateway"] .project-tools-panel-shell-select {
     max-width: 5.8rem;
   }
 

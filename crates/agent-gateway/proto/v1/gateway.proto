@@ -55,6 +55,11 @@ message GatewayEnvelope {
     SkillManageRequest skill_manage = 53;
     FsCreateProjectFolderRequest fs_create_project_folder = 54;
     TerminalRequest terminal_request = 55;
+    FsListRequest fs_list = 56;
+    FsWriteTextRequest fs_write_text = 57;
+    FsCreateDirRequest fs_create_dir = 58;
+    FsRenameRequest fs_rename = 59;
+    FsDeleteRequest fs_delete = 60;
   }
 }
 
@@ -94,6 +99,11 @@ message AgentEnvelope {
     FsCreateProjectFolderResponse fs_create_project_folder_resp = 55;
     TerminalResponse terminal_response = 57;
     TerminalEvent terminal_event = 58;
+    FsListResponse fs_list_resp = 59;
+    FsWriteTextResponse fs_write_text_resp = 60;
+    FsCreateDirResponse fs_create_dir_resp = 61;
+    FsRenameResponse fs_rename_resp = 62;
+    FsDeleteResponse fs_delete_resp = 63;
     ErrorResponse error = 99;
   }
 }
@@ -500,6 +510,83 @@ message FsCreateProjectFolderRequest {
 
 message FsCreateProjectFolderResponse {
   string path = 1;
+}
+
+message FsListRequest {
+  string workdir = 1;
+  string path = 2;
+  uint32 depth = 3;
+  uint32 offset = 4;
+  uint32 max_results = 5;
+}
+
+message FsListEntry {
+  string path = 1;
+  string kind = 2;
+}
+
+message FsListResponse {
+  string path = 1;
+  bool has_path = 2;
+  uint32 depth = 3;
+  uint32 offset = 4;
+  uint32 max_results = 5;
+  uint32 total = 6;
+  bool has_more = 7;
+  repeated FsListEntry entries = 8;
+}
+
+message FsWriteTextRequest {
+  string workdir = 1;
+  string path = 2;
+  string content = 3;
+  string mode = 4;
+  uint64 expected_mtime_ms = 5;
+  string expected_content_hash = 6;
+  bool has_expected_mtime_ms = 7;
+  bool has_expected_content_hash = 8;
+}
+
+message FsWriteTextResponse {
+  string path = 1;
+  string mode = 2;
+  bool existed_before = 3;
+  uint64 bytes_written = 4;
+  uint64 mtime_ms = 5;
+  string content_hash = 6;
+  uint64 total_lines = 7;
+}
+
+message FsCreateDirRequest {
+  string workdir = 1;
+  string path = 2;
+}
+
+message FsCreateDirResponse {
+  string path = 1;
+  string kind = 2;
+}
+
+message FsRenameRequest {
+  string workdir = 1;
+  string from_path = 2;
+  string to_path = 3;
+}
+
+message FsRenameResponse {
+  string from_path = 1;
+  string path = 2;
+  string kind = 3;
+}
+
+message FsDeleteRequest {
+  string workdir = 1;
+  string path = 2;
+}
+
+message FsDeleteResponse {
+  string path = 1;
+  string kind = 2;
 }
 
 message PingRequest {

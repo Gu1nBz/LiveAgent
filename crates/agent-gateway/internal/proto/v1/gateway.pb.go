@@ -240,6 +240,11 @@ type GatewayEnvelope struct {
 	//	*GatewayEnvelope_SkillManage
 	//	*GatewayEnvelope_FsCreateProjectFolder
 	//	*GatewayEnvelope_TerminalRequest
+	//	*GatewayEnvelope_FsList
+	//	*GatewayEnvelope_FsWriteText
+	//	*GatewayEnvelope_FsCreateDir
+	//	*GatewayEnvelope_FsRename
+	//	*GatewayEnvelope_FsDelete
 	Payload       isGatewayEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -557,6 +562,51 @@ func (x *GatewayEnvelope) GetTerminalRequest() *TerminalRequest {
 	return nil
 }
 
+func (x *GatewayEnvelope) GetFsList() *FsListRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayEnvelope_FsList); ok {
+			return x.FsList
+		}
+	}
+	return nil
+}
+
+func (x *GatewayEnvelope) GetFsWriteText() *FsWriteTextRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayEnvelope_FsWriteText); ok {
+			return x.FsWriteText
+		}
+	}
+	return nil
+}
+
+func (x *GatewayEnvelope) GetFsCreateDir() *FsCreateDirRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayEnvelope_FsCreateDir); ok {
+			return x.FsCreateDir
+		}
+	}
+	return nil
+}
+
+func (x *GatewayEnvelope) GetFsRename() *FsRenameRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayEnvelope_FsRename); ok {
+			return x.FsRename
+		}
+	}
+	return nil
+}
+
+func (x *GatewayEnvelope) GetFsDelete() *FsDeleteRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayEnvelope_FsDelete); ok {
+			return x.FsDelete
+		}
+	}
+	return nil
+}
+
 type isGatewayEnvelope_Payload interface {
 	isGatewayEnvelope_Payload()
 }
@@ -677,6 +727,26 @@ type GatewayEnvelope_TerminalRequest struct {
 	TerminalRequest *TerminalRequest `protobuf:"bytes,55,opt,name=terminal_request,json=terminalRequest,proto3,oneof"`
 }
 
+type GatewayEnvelope_FsList struct {
+	FsList *FsListRequest `protobuf:"bytes,56,opt,name=fs_list,json=fsList,proto3,oneof"`
+}
+
+type GatewayEnvelope_FsWriteText struct {
+	FsWriteText *FsWriteTextRequest `protobuf:"bytes,57,opt,name=fs_write_text,json=fsWriteText,proto3,oneof"`
+}
+
+type GatewayEnvelope_FsCreateDir struct {
+	FsCreateDir *FsCreateDirRequest `protobuf:"bytes,58,opt,name=fs_create_dir,json=fsCreateDir,proto3,oneof"`
+}
+
+type GatewayEnvelope_FsRename struct {
+	FsRename *FsRenameRequest `protobuf:"bytes,59,opt,name=fs_rename,json=fsRename,proto3,oneof"`
+}
+
+type GatewayEnvelope_FsDelete struct {
+	FsDelete *FsDeleteRequest `protobuf:"bytes,60,opt,name=fs_delete,json=fsDelete,proto3,oneof"`
+}
+
 func (*GatewayEnvelope_ChatRequest) isGatewayEnvelope_Payload() {}
 
 func (*GatewayEnvelope_CancelChat) isGatewayEnvelope_Payload() {}
@@ -735,6 +805,16 @@ func (*GatewayEnvelope_FsCreateProjectFolder) isGatewayEnvelope_Payload() {}
 
 func (*GatewayEnvelope_TerminalRequest) isGatewayEnvelope_Payload() {}
 
+func (*GatewayEnvelope_FsList) isGatewayEnvelope_Payload() {}
+
+func (*GatewayEnvelope_FsWriteText) isGatewayEnvelope_Payload() {}
+
+func (*GatewayEnvelope_FsCreateDir) isGatewayEnvelope_Payload() {}
+
+func (*GatewayEnvelope_FsRename) isGatewayEnvelope_Payload() {}
+
+func (*GatewayEnvelope_FsDelete) isGatewayEnvelope_Payload() {}
+
 type AgentEnvelope struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	RequestId string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
@@ -772,6 +852,11 @@ type AgentEnvelope struct {
 	//	*AgentEnvelope_FsCreateProjectFolderResp
 	//	*AgentEnvelope_TerminalResponse
 	//	*AgentEnvelope_TerminalEvent
+	//	*AgentEnvelope_FsListResp
+	//	*AgentEnvelope_FsWriteTextResp
+	//	*AgentEnvelope_FsCreateDirResp
+	//	*AgentEnvelope_FsRenameResp
+	//	*AgentEnvelope_FsDeleteResp
 	//	*AgentEnvelope_Error
 	Payload       isAgentEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
@@ -1108,6 +1193,51 @@ func (x *AgentEnvelope) GetTerminalEvent() *TerminalEvent {
 	return nil
 }
 
+func (x *AgentEnvelope) GetFsListResp() *FsListResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentEnvelope_FsListResp); ok {
+			return x.FsListResp
+		}
+	}
+	return nil
+}
+
+func (x *AgentEnvelope) GetFsWriteTextResp() *FsWriteTextResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentEnvelope_FsWriteTextResp); ok {
+			return x.FsWriteTextResp
+		}
+	}
+	return nil
+}
+
+func (x *AgentEnvelope) GetFsCreateDirResp() *FsCreateDirResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentEnvelope_FsCreateDirResp); ok {
+			return x.FsCreateDirResp
+		}
+	}
+	return nil
+}
+
+func (x *AgentEnvelope) GetFsRenameResp() *FsRenameResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentEnvelope_FsRenameResp); ok {
+			return x.FsRenameResp
+		}
+	}
+	return nil
+}
+
+func (x *AgentEnvelope) GetFsDeleteResp() *FsDeleteResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentEnvelope_FsDeleteResp); ok {
+			return x.FsDeleteResp
+		}
+	}
+	return nil
+}
+
 func (x *AgentEnvelope) GetError() *ErrorResponse {
 	if x != nil {
 		if x, ok := x.Payload.(*AgentEnvelope_Error); ok {
@@ -1245,6 +1375,26 @@ type AgentEnvelope_TerminalEvent struct {
 	TerminalEvent *TerminalEvent `protobuf:"bytes,58,opt,name=terminal_event,json=terminalEvent,proto3,oneof"`
 }
 
+type AgentEnvelope_FsListResp struct {
+	FsListResp *FsListResponse `protobuf:"bytes,59,opt,name=fs_list_resp,json=fsListResp,proto3,oneof"`
+}
+
+type AgentEnvelope_FsWriteTextResp struct {
+	FsWriteTextResp *FsWriteTextResponse `protobuf:"bytes,60,opt,name=fs_write_text_resp,json=fsWriteTextResp,proto3,oneof"`
+}
+
+type AgentEnvelope_FsCreateDirResp struct {
+	FsCreateDirResp *FsCreateDirResponse `protobuf:"bytes,61,opt,name=fs_create_dir_resp,json=fsCreateDirResp,proto3,oneof"`
+}
+
+type AgentEnvelope_FsRenameResp struct {
+	FsRenameResp *FsRenameResponse `protobuf:"bytes,62,opt,name=fs_rename_resp,json=fsRenameResp,proto3,oneof"`
+}
+
+type AgentEnvelope_FsDeleteResp struct {
+	FsDeleteResp *FsDeleteResponse `protobuf:"bytes,63,opt,name=fs_delete_resp,json=fsDeleteResp,proto3,oneof"`
+}
+
 type AgentEnvelope_Error struct {
 	Error *ErrorResponse `protobuf:"bytes,99,opt,name=error,proto3,oneof"`
 }
@@ -1310,6 +1460,16 @@ func (*AgentEnvelope_FsCreateProjectFolderResp) isAgentEnvelope_Payload() {}
 func (*AgentEnvelope_TerminalResponse) isAgentEnvelope_Payload() {}
 
 func (*AgentEnvelope_TerminalEvent) isAgentEnvelope_Payload() {}
+
+func (*AgentEnvelope_FsListResp) isAgentEnvelope_Payload() {}
+
+func (*AgentEnvelope_FsWriteTextResp) isAgentEnvelope_Payload() {}
+
+func (*AgentEnvelope_FsCreateDirResp) isAgentEnvelope_Payload() {}
+
+func (*AgentEnvelope_FsRenameResp) isAgentEnvelope_Payload() {}
+
+func (*AgentEnvelope_FsDeleteResp) isAgentEnvelope_Payload() {}
 
 func (*AgentEnvelope_Error) isAgentEnvelope_Payload() {}
 
@@ -5361,6 +5521,754 @@ func (x *FsCreateProjectFolderResponse) GetPath() string {
 	return ""
 }
 
+type FsListRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Workdir       string                 `protobuf:"bytes,1,opt,name=workdir,proto3" json:"workdir,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Depth         uint32                 `protobuf:"varint,3,opt,name=depth,proto3" json:"depth,omitempty"`
+	Offset        uint32                 `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
+	MaxResults    uint32                 `protobuf:"varint,5,opt,name=max_results,json=maxResults,proto3" json:"max_results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsListRequest) Reset() {
+	*x = FsListRequest{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[74]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsListRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsListRequest) ProtoMessage() {}
+
+func (x *FsListRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[74]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsListRequest.ProtoReflect.Descriptor instead.
+func (*FsListRequest) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{74}
+}
+
+func (x *FsListRequest) GetWorkdir() string {
+	if x != nil {
+		return x.Workdir
+	}
+	return ""
+}
+
+func (x *FsListRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FsListRequest) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
+func (x *FsListRequest) GetOffset() uint32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *FsListRequest) GetMaxResults() uint32 {
+	if x != nil {
+		return x.MaxResults
+	}
+	return 0
+}
+
+type FsListEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsListEntry) Reset() {
+	*x = FsListEntry{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[75]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsListEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsListEntry) ProtoMessage() {}
+
+func (x *FsListEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[75]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsListEntry.ProtoReflect.Descriptor instead.
+func (*FsListEntry) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{75}
+}
+
+func (x *FsListEntry) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FsListEntry) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+type FsListResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	HasPath       bool                   `protobuf:"varint,2,opt,name=has_path,json=hasPath,proto3" json:"has_path,omitempty"`
+	Depth         uint32                 `protobuf:"varint,3,opt,name=depth,proto3" json:"depth,omitempty"`
+	Offset        uint32                 `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
+	MaxResults    uint32                 `protobuf:"varint,5,opt,name=max_results,json=maxResults,proto3" json:"max_results,omitempty"`
+	Total         uint32                 `protobuf:"varint,6,opt,name=total,proto3" json:"total,omitempty"`
+	HasMore       bool                   `protobuf:"varint,7,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	Entries       []*FsListEntry         `protobuf:"bytes,8,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsListResponse) Reset() {
+	*x = FsListResponse{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[76]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsListResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsListResponse) ProtoMessage() {}
+
+func (x *FsListResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[76]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsListResponse.ProtoReflect.Descriptor instead.
+func (*FsListResponse) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{76}
+}
+
+func (x *FsListResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FsListResponse) GetHasPath() bool {
+	if x != nil {
+		return x.HasPath
+	}
+	return false
+}
+
+func (x *FsListResponse) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
+func (x *FsListResponse) GetOffset() uint32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *FsListResponse) GetMaxResults() uint32 {
+	if x != nil {
+		return x.MaxResults
+	}
+	return 0
+}
+
+func (x *FsListResponse) GetTotal() uint32 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+func (x *FsListResponse) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
+func (x *FsListResponse) GetEntries() []*FsListEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+type FsWriteTextRequest struct {
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Workdir                string                 `protobuf:"bytes,1,opt,name=workdir,proto3" json:"workdir,omitempty"`
+	Path                   string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Content                string                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	Mode                   string                 `protobuf:"bytes,4,opt,name=mode,proto3" json:"mode,omitempty"`
+	ExpectedMtimeMs        uint64                 `protobuf:"varint,5,opt,name=expected_mtime_ms,json=expectedMtimeMs,proto3" json:"expected_mtime_ms,omitempty"`
+	ExpectedContentHash    string                 `protobuf:"bytes,6,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
+	HasExpectedMtimeMs     bool                   `protobuf:"varint,7,opt,name=has_expected_mtime_ms,json=hasExpectedMtimeMs,proto3" json:"has_expected_mtime_ms,omitempty"`
+	HasExpectedContentHash bool                   `protobuf:"varint,8,opt,name=has_expected_content_hash,json=hasExpectedContentHash,proto3" json:"has_expected_content_hash,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *FsWriteTextRequest) Reset() {
+	*x = FsWriteTextRequest{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[77]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsWriteTextRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsWriteTextRequest) ProtoMessage() {}
+
+func (x *FsWriteTextRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[77]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsWriteTextRequest.ProtoReflect.Descriptor instead.
+func (*FsWriteTextRequest) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{77}
+}
+
+func (x *FsWriteTextRequest) GetWorkdir() string {
+	if x != nil {
+		return x.Workdir
+	}
+	return ""
+}
+
+func (x *FsWriteTextRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FsWriteTextRequest) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *FsWriteTextRequest) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *FsWriteTextRequest) GetExpectedMtimeMs() uint64 {
+	if x != nil {
+		return x.ExpectedMtimeMs
+	}
+	return 0
+}
+
+func (x *FsWriteTextRequest) GetExpectedContentHash() string {
+	if x != nil {
+		return x.ExpectedContentHash
+	}
+	return ""
+}
+
+func (x *FsWriteTextRequest) GetHasExpectedMtimeMs() bool {
+	if x != nil {
+		return x.HasExpectedMtimeMs
+	}
+	return false
+}
+
+func (x *FsWriteTextRequest) GetHasExpectedContentHash() bool {
+	if x != nil {
+		return x.HasExpectedContentHash
+	}
+	return false
+}
+
+type FsWriteTextResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Mode          string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
+	ExistedBefore bool                   `protobuf:"varint,3,opt,name=existed_before,json=existedBefore,proto3" json:"existed_before,omitempty"`
+	BytesWritten  uint64                 `protobuf:"varint,4,opt,name=bytes_written,json=bytesWritten,proto3" json:"bytes_written,omitempty"`
+	MtimeMs       uint64                 `protobuf:"varint,5,opt,name=mtime_ms,json=mtimeMs,proto3" json:"mtime_ms,omitempty"`
+	ContentHash   string                 `protobuf:"bytes,6,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	TotalLines    uint64                 `protobuf:"varint,7,opt,name=total_lines,json=totalLines,proto3" json:"total_lines,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsWriteTextResponse) Reset() {
+	*x = FsWriteTextResponse{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[78]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsWriteTextResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsWriteTextResponse) ProtoMessage() {}
+
+func (x *FsWriteTextResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[78]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsWriteTextResponse.ProtoReflect.Descriptor instead.
+func (*FsWriteTextResponse) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{78}
+}
+
+func (x *FsWriteTextResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FsWriteTextResponse) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *FsWriteTextResponse) GetExistedBefore() bool {
+	if x != nil {
+		return x.ExistedBefore
+	}
+	return false
+}
+
+func (x *FsWriteTextResponse) GetBytesWritten() uint64 {
+	if x != nil {
+		return x.BytesWritten
+	}
+	return 0
+}
+
+func (x *FsWriteTextResponse) GetMtimeMs() uint64 {
+	if x != nil {
+		return x.MtimeMs
+	}
+	return 0
+}
+
+func (x *FsWriteTextResponse) GetContentHash() string {
+	if x != nil {
+		return x.ContentHash
+	}
+	return ""
+}
+
+func (x *FsWriteTextResponse) GetTotalLines() uint64 {
+	if x != nil {
+		return x.TotalLines
+	}
+	return 0
+}
+
+type FsCreateDirRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Workdir       string                 `protobuf:"bytes,1,opt,name=workdir,proto3" json:"workdir,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsCreateDirRequest) Reset() {
+	*x = FsCreateDirRequest{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[79]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsCreateDirRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsCreateDirRequest) ProtoMessage() {}
+
+func (x *FsCreateDirRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[79]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsCreateDirRequest.ProtoReflect.Descriptor instead.
+func (*FsCreateDirRequest) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{79}
+}
+
+func (x *FsCreateDirRequest) GetWorkdir() string {
+	if x != nil {
+		return x.Workdir
+	}
+	return ""
+}
+
+func (x *FsCreateDirRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type FsCreateDirResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsCreateDirResponse) Reset() {
+	*x = FsCreateDirResponse{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[80]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsCreateDirResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsCreateDirResponse) ProtoMessage() {}
+
+func (x *FsCreateDirResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[80]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsCreateDirResponse.ProtoReflect.Descriptor instead.
+func (*FsCreateDirResponse) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{80}
+}
+
+func (x *FsCreateDirResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FsCreateDirResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+type FsRenameRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Workdir       string                 `protobuf:"bytes,1,opt,name=workdir,proto3" json:"workdir,omitempty"`
+	FromPath      string                 `protobuf:"bytes,2,opt,name=from_path,json=fromPath,proto3" json:"from_path,omitempty"`
+	ToPath        string                 `protobuf:"bytes,3,opt,name=to_path,json=toPath,proto3" json:"to_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsRenameRequest) Reset() {
+	*x = FsRenameRequest{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[81]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsRenameRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsRenameRequest) ProtoMessage() {}
+
+func (x *FsRenameRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[81]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsRenameRequest.ProtoReflect.Descriptor instead.
+func (*FsRenameRequest) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{81}
+}
+
+func (x *FsRenameRequest) GetWorkdir() string {
+	if x != nil {
+		return x.Workdir
+	}
+	return ""
+}
+
+func (x *FsRenameRequest) GetFromPath() string {
+	if x != nil {
+		return x.FromPath
+	}
+	return ""
+}
+
+func (x *FsRenameRequest) GetToPath() string {
+	if x != nil {
+		return x.ToPath
+	}
+	return ""
+}
+
+type FsRenameResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FromPath      string                 `protobuf:"bytes,1,opt,name=from_path,json=fromPath,proto3" json:"from_path,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Kind          string                 `protobuf:"bytes,3,opt,name=kind,proto3" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsRenameResponse) Reset() {
+	*x = FsRenameResponse{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[82]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsRenameResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsRenameResponse) ProtoMessage() {}
+
+func (x *FsRenameResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[82]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsRenameResponse.ProtoReflect.Descriptor instead.
+func (*FsRenameResponse) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{82}
+}
+
+func (x *FsRenameResponse) GetFromPath() string {
+	if x != nil {
+		return x.FromPath
+	}
+	return ""
+}
+
+func (x *FsRenameResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FsRenameResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+type FsDeleteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Workdir       string                 `protobuf:"bytes,1,opt,name=workdir,proto3" json:"workdir,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsDeleteRequest) Reset() {
+	*x = FsDeleteRequest{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[83]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsDeleteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsDeleteRequest) ProtoMessage() {}
+
+func (x *FsDeleteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[83]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsDeleteRequest.ProtoReflect.Descriptor instead.
+func (*FsDeleteRequest) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{83}
+}
+
+func (x *FsDeleteRequest) GetWorkdir() string {
+	if x != nil {
+		return x.Workdir
+	}
+	return ""
+}
+
+func (x *FsDeleteRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type FsDeleteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsDeleteResponse) Reset() {
+	*x = FsDeleteResponse{}
+	mi := &file_proto_v1_gateway_proto_msgTypes[84]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsDeleteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsDeleteResponse) ProtoMessage() {}
+
+func (x *FsDeleteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_v1_gateway_proto_msgTypes[84]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsDeleteResponse.ProtoReflect.Descriptor instead.
+func (*FsDeleteResponse) Descriptor() ([]byte, []int) {
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{84}
+}
+
+func (x *FsDeleteResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FsDeleteResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
 type PingRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Timestamp     int64                  `protobuf:"varint,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
@@ -5370,7 +6278,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_proto_v1_gateway_proto_msgTypes[74]
+	mi := &file_proto_v1_gateway_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5382,7 +6290,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_v1_gateway_proto_msgTypes[74]
+	mi := &file_proto_v1_gateway_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5395,7 +6303,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{74}
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *PingRequest) GetTimestamp() int64 {
@@ -5414,7 +6322,7 @@ type PongResponse struct {
 
 func (x *PongResponse) Reset() {
 	*x = PongResponse{}
-	mi := &file_proto_v1_gateway_proto_msgTypes[75]
+	mi := &file_proto_v1_gateway_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5426,7 +6334,7 @@ func (x *PongResponse) String() string {
 func (*PongResponse) ProtoMessage() {}
 
 func (x *PongResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_v1_gateway_proto_msgTypes[75]
+	mi := &file_proto_v1_gateway_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5439,7 +6347,7 @@ func (x *PongResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PongResponse.ProtoReflect.Descriptor instead.
 func (*PongResponse) Descriptor() ([]byte, []int) {
-	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{75}
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *PongResponse) GetTimestamp() int64 {
@@ -5459,7 +6367,7 @@ type ErrorResponse struct {
 
 func (x *ErrorResponse) Reset() {
 	*x = ErrorResponse{}
-	mi := &file_proto_v1_gateway_proto_msgTypes[76]
+	mi := &file_proto_v1_gateway_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5471,7 +6379,7 @@ func (x *ErrorResponse) String() string {
 func (*ErrorResponse) ProtoMessage() {}
 
 func (x *ErrorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_v1_gateway_proto_msgTypes[76]
+	mi := &file_proto_v1_gateway_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5484,7 +6392,7 @@ func (x *ErrorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorResponse.ProtoReflect.Descriptor instead.
 func (*ErrorResponse) Descriptor() ([]byte, []int) {
-	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{76}
+	return file_proto_v1_gateway_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *ErrorResponse) GetCode() int32 {
@@ -5514,7 +6422,7 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x03 \x01(\tR\tsessionId\"\x86\x14\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\"\xf2\x16\n" +
 	"\x0fGatewayEnvelope\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1c\n" +
@@ -5553,8 +6461,13 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\rmemory_manage\x184 \x01(\v2).liveagent.gateway.v1.MemoryManageRequestH\x00R\fmemoryManage\x12M\n" +
 	"\fskill_manage\x185 \x01(\v2(.liveagent.gateway.v1.SkillManageRequestH\x00R\vskillManage\x12m\n" +
 	"\x18fs_create_project_folder\x186 \x01(\v22.liveagent.gateway.v1.FsCreateProjectFolderRequestH\x00R\x15fsCreateProjectFolder\x12R\n" +
-	"\x10terminal_request\x187 \x01(\v2%.liveagent.gateway.v1.TerminalRequestH\x00R\x0fterminalRequestB\t\n" +
-	"\apayload\"\xd8\x17\n" +
+	"\x10terminal_request\x187 \x01(\v2%.liveagent.gateway.v1.TerminalRequestH\x00R\x0fterminalRequest\x12>\n" +
+	"\afs_list\x188 \x01(\v2#.liveagent.gateway.v1.FsListRequestH\x00R\x06fsList\x12N\n" +
+	"\rfs_write_text\x189 \x01(\v2(.liveagent.gateway.v1.FsWriteTextRequestH\x00R\vfsWriteText\x12N\n" +
+	"\rfs_create_dir\x18: \x01(\v2(.liveagent.gateway.v1.FsCreateDirRequestH\x00R\vfsCreateDir\x12D\n" +
+	"\tfs_rename\x18; \x01(\v2%.liveagent.gateway.v1.FsRenameRequestH\x00R\bfsRename\x12D\n" +
+	"\tfs_delete\x18< \x01(\v2%.liveagent.gateway.v1.FsDeleteRequestH\x00R\bfsDeleteB\t\n" +
+	"\apayload\"\xf6\x1a\n" +
 	"\rAgentEnvelope\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1c\n" +
@@ -5591,7 +6504,13 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\x11skill_manage_resp\x186 \x01(\v2).liveagent.gateway.v1.SkillManageResponseH\x00R\x0fskillManageResp\x12w\n" +
 	"\x1dfs_create_project_folder_resp\x187 \x01(\v23.liveagent.gateway.v1.FsCreateProjectFolderResponseH\x00R\x19fsCreateProjectFolderResp\x12U\n" +
 	"\x11terminal_response\x189 \x01(\v2&.liveagent.gateway.v1.TerminalResponseH\x00R\x10terminalResponse\x12L\n" +
-	"\x0eterminal_event\x18: \x01(\v2#.liveagent.gateway.v1.TerminalEventH\x00R\rterminalEvent\x12;\n" +
+	"\x0eterminal_event\x18: \x01(\v2#.liveagent.gateway.v1.TerminalEventH\x00R\rterminalEvent\x12H\n" +
+	"\ffs_list_resp\x18; \x01(\v2$.liveagent.gateway.v1.FsListResponseH\x00R\n" +
+	"fsListResp\x12X\n" +
+	"\x12fs_write_text_resp\x18< \x01(\v2).liveagent.gateway.v1.FsWriteTextResponseH\x00R\x0ffsWriteTextResp\x12X\n" +
+	"\x12fs_create_dir_resp\x18= \x01(\v2).liveagent.gateway.v1.FsCreateDirResponseH\x00R\x0ffsCreateDirResp\x12N\n" +
+	"\x0efs_rename_resp\x18> \x01(\v2&.liveagent.gateway.v1.FsRenameResponseH\x00R\ffsRenameResp\x12N\n" +
+	"\x0efs_delete_resp\x18? \x01(\v2&.liveagent.gateway.v1.FsDeleteResponseH\x00R\ffsDeleteResp\x12;\n" +
 	"\x05error\x18c \x01(\v2#.liveagent.gateway.v1.ErrorResponseH\x00R\x05errorB\t\n" +
 	"\apayload\"|\n" +
 	"\x11ChatSelectedModel\x12,\n" +
@@ -5887,7 +6806,65 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\x06parent\x18\x01 \x01(\tR\x06parent\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"3\n" +
 	"\x1dFsCreateProjectFolderResponse\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"+\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\x8c\x01\n" +
+	"\rFsListRequest\x12\x18\n" +
+	"\aworkdir\x18\x01 \x01(\tR\aworkdir\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x14\n" +
+	"\x05depth\x18\x03 \x01(\rR\x05depth\x12\x16\n" +
+	"\x06offset\x18\x04 \x01(\rR\x06offset\x12\x1f\n" +
+	"\vmax_results\x18\x05 \x01(\rR\n" +
+	"maxResults\"5\n" +
+	"\vFsListEntry\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\"\xfc\x01\n" +
+	"\x0eFsListResponse\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x19\n" +
+	"\bhas_path\x18\x02 \x01(\bR\ahasPath\x12\x14\n" +
+	"\x05depth\x18\x03 \x01(\rR\x05depth\x12\x16\n" +
+	"\x06offset\x18\x04 \x01(\rR\x06offset\x12\x1f\n" +
+	"\vmax_results\x18\x05 \x01(\rR\n" +
+	"maxResults\x12\x14\n" +
+	"\x05total\x18\x06 \x01(\rR\x05total\x12\x19\n" +
+	"\bhas_more\x18\a \x01(\bR\ahasMore\x12;\n" +
+	"\aentries\x18\b \x03(\v2!.liveagent.gateway.v1.FsListEntryR\aentries\"\xbe\x02\n" +
+	"\x12FsWriteTextRequest\x12\x18\n" +
+	"\aworkdir\x18\x01 \x01(\tR\aworkdir\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\tR\acontent\x12\x12\n" +
+	"\x04mode\x18\x04 \x01(\tR\x04mode\x12*\n" +
+	"\x11expected_mtime_ms\x18\x05 \x01(\x04R\x0fexpectedMtimeMs\x122\n" +
+	"\x15expected_content_hash\x18\x06 \x01(\tR\x13expectedContentHash\x121\n" +
+	"\x15has_expected_mtime_ms\x18\a \x01(\bR\x12hasExpectedMtimeMs\x129\n" +
+	"\x19has_expected_content_hash\x18\b \x01(\bR\x16hasExpectedContentHash\"\xe8\x01\n" +
+	"\x13FsWriteTextResponse\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04mode\x18\x02 \x01(\tR\x04mode\x12%\n" +
+	"\x0eexisted_before\x18\x03 \x01(\bR\rexistedBefore\x12#\n" +
+	"\rbytes_written\x18\x04 \x01(\x04R\fbytesWritten\x12\x19\n" +
+	"\bmtime_ms\x18\x05 \x01(\x04R\amtimeMs\x12!\n" +
+	"\fcontent_hash\x18\x06 \x01(\tR\vcontentHash\x12\x1f\n" +
+	"\vtotal_lines\x18\a \x01(\x04R\n" +
+	"totalLines\"B\n" +
+	"\x12FsCreateDirRequest\x12\x18\n" +
+	"\aworkdir\x18\x01 \x01(\tR\aworkdir\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"=\n" +
+	"\x13FsCreateDirResponse\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\"a\n" +
+	"\x0fFsRenameRequest\x12\x18\n" +
+	"\aworkdir\x18\x01 \x01(\tR\aworkdir\x12\x1b\n" +
+	"\tfrom_path\x18\x02 \x01(\tR\bfromPath\x12\x17\n" +
+	"\ato_path\x18\x03 \x01(\tR\x06toPath\"W\n" +
+	"\x10FsRenameResponse\x12\x1b\n" +
+	"\tfrom_path\x18\x01 \x01(\tR\bfromPath\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
+	"\x04kind\x18\x03 \x01(\tR\x04kind\"?\n" +
+	"\x0fFsDeleteRequest\x12\x18\n" +
+	"\aworkdir\x18\x01 \x01(\tR\aworkdir\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\":\n" +
+	"\x10FsDeleteResponse\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\"+\n" +
 	"\vPingRequest\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\",\n" +
 	"\fPongResponse\x12\x1c\n" +
@@ -5912,7 +6889,7 @@ func file_proto_v1_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_v1_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 77)
+var file_proto_v1_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 88)
 var file_proto_v1_gateway_proto_goTypes = []any{
 	(ChatEvent_ChatEventType)(0),          // 0: liveagent.gateway.v1.ChatEvent.ChatEventType
 	(*AuthRequest)(nil),                   // 1: liveagent.gateway.v1.AuthRequest
@@ -5989,9 +6966,20 @@ var file_proto_v1_gateway_proto_goTypes = []any{
 	(*FsListDirsResponse)(nil),            // 72: liveagent.gateway.v1.FsListDirsResponse
 	(*FsCreateProjectFolderRequest)(nil),  // 73: liveagent.gateway.v1.FsCreateProjectFolderRequest
 	(*FsCreateProjectFolderResponse)(nil), // 74: liveagent.gateway.v1.FsCreateProjectFolderResponse
-	(*PingRequest)(nil),                   // 75: liveagent.gateway.v1.PingRequest
-	(*PongResponse)(nil),                  // 76: liveagent.gateway.v1.PongResponse
-	(*ErrorResponse)(nil),                 // 77: liveagent.gateway.v1.ErrorResponse
+	(*FsListRequest)(nil),                 // 75: liveagent.gateway.v1.FsListRequest
+	(*FsListEntry)(nil),                   // 76: liveagent.gateway.v1.FsListEntry
+	(*FsListResponse)(nil),                // 77: liveagent.gateway.v1.FsListResponse
+	(*FsWriteTextRequest)(nil),            // 78: liveagent.gateway.v1.FsWriteTextRequest
+	(*FsWriteTextResponse)(nil),           // 79: liveagent.gateway.v1.FsWriteTextResponse
+	(*FsCreateDirRequest)(nil),            // 80: liveagent.gateway.v1.FsCreateDirRequest
+	(*FsCreateDirResponse)(nil),           // 81: liveagent.gateway.v1.FsCreateDirResponse
+	(*FsRenameRequest)(nil),               // 82: liveagent.gateway.v1.FsRenameRequest
+	(*FsRenameResponse)(nil),              // 83: liveagent.gateway.v1.FsRenameResponse
+	(*FsDeleteRequest)(nil),               // 84: liveagent.gateway.v1.FsDeleteRequest
+	(*FsDeleteResponse)(nil),              // 85: liveagent.gateway.v1.FsDeleteResponse
+	(*PingRequest)(nil),                   // 86: liveagent.gateway.v1.PingRequest
+	(*PongResponse)(nil),                  // 87: liveagent.gateway.v1.PongResponse
+	(*ErrorResponse)(nil),                 // 88: liveagent.gateway.v1.ErrorResponse
 }
 var file_proto_v1_gateway_proto_depIdxs = []int32{
 	20, // 0: liveagent.gateway.v1.GatewayEnvelope.chat_request:type_name -> liveagent.gateway.v1.ChatRequest
@@ -6017,76 +7005,87 @@ var file_proto_v1_gateway_proto_depIdxs = []int32{
 	9,  // 20: liveagent.gateway.v1.GatewayEnvelope.upload_readable_files:type_name -> liveagent.gateway.v1.UploadReadableFilesRequest
 	68, // 21: liveagent.gateway.v1.GatewayEnvelope.fs_roots:type_name -> liveagent.gateway.v1.FsRootsRequest
 	70, // 22: liveagent.gateway.v1.GatewayEnvelope.fs_list_dirs:type_name -> liveagent.gateway.v1.FsListDirsRequest
-	75, // 23: liveagent.gateway.v1.GatewayEnvelope.ping:type_name -> liveagent.gateway.v1.PingRequest
+	86, // 23: liveagent.gateway.v1.GatewayEnvelope.ping:type_name -> liveagent.gateway.v1.PingRequest
 	11, // 24: liveagent.gateway.v1.GatewayEnvelope.uploaded_image_preview:type_name -> liveagent.gateway.v1.UploadedImagePreviewRequest
 	13, // 25: liveagent.gateway.v1.GatewayEnvelope.memory_manage:type_name -> liveagent.gateway.v1.MemoryManageRequest
 	62, // 26: liveagent.gateway.v1.GatewayEnvelope.skill_manage:type_name -> liveagent.gateway.v1.SkillManageRequest
 	73, // 27: liveagent.gateway.v1.GatewayEnvelope.fs_create_project_folder:type_name -> liveagent.gateway.v1.FsCreateProjectFolderRequest
 	15, // 28: liveagent.gateway.v1.GatewayEnvelope.terminal_request:type_name -> liveagent.gateway.v1.TerminalRequest
-	22, // 29: liveagent.gateway.v1.AgentEnvelope.chat_event:type_name -> liveagent.gateway.v1.ChatEvent
-	24, // 30: liveagent.gateway.v1.AgentEnvelope.cron_manage_resp:type_name -> liveagent.gateway.v1.CronManageResponse
-	26, // 31: liveagent.gateway.v1.AgentEnvelope.history_list_resp:type_name -> liveagent.gateway.v1.HistoryListResponse
-	29, // 32: liveagent.gateway.v1.AgentEnvelope.history_get_resp:type_name -> liveagent.gateway.v1.HistoryGetResponse
-	31, // 33: liveagent.gateway.v1.AgentEnvelope.history_rename_resp:type_name -> liveagent.gateway.v1.HistoryRenameResponse
-	45, // 34: liveagent.gateway.v1.AgentEnvelope.history_delete_resp:type_name -> liveagent.gateway.v1.HistoryDeleteResponse
-	48, // 35: liveagent.gateway.v1.AgentEnvelope.history_sync:type_name -> liveagent.gateway.v1.HistorySyncEvent
-	47, // 36: liveagent.gateway.v1.AgentEnvelope.history_truncate_resp:type_name -> liveagent.gateway.v1.HistoryTruncateResponse
-	33, // 37: liveagent.gateway.v1.AgentEnvelope.history_pin_resp:type_name -> liveagent.gateway.v1.HistoryPinResponse
-	36, // 38: liveagent.gateway.v1.AgentEnvelope.history_share_get_resp:type_name -> liveagent.gateway.v1.HistoryShareGetResponse
-	38, // 39: liveagent.gateway.v1.AgentEnvelope.history_share_set_resp:type_name -> liveagent.gateway.v1.HistoryShareSetResponse
-	40, // 40: liveagent.gateway.v1.AgentEnvelope.history_share_resolve_resp:type_name -> liveagent.gateway.v1.HistoryShareResolveResponse
-	43, // 41: liveagent.gateway.v1.AgentEnvelope.history_workdirs_resp:type_name -> liveagent.gateway.v1.HistoryWorkdirsResponse
-	50, // 42: liveagent.gateway.v1.AgentEnvelope.provider_list_resp:type_name -> liveagent.gateway.v1.ProviderListResponse
-	52, // 43: liveagent.gateway.v1.AgentEnvelope.settings_get_resp:type_name -> liveagent.gateway.v1.SettingsGetResponse
-	54, // 44: liveagent.gateway.v1.AgentEnvelope.settings_update_resp:type_name -> liveagent.gateway.v1.SettingsUpdateResponse
-	55, // 45: liveagent.gateway.v1.AgentEnvelope.settings_sync:type_name -> liveagent.gateway.v1.SettingsSyncEvent
-	57, // 46: liveagent.gateway.v1.AgentEnvelope.skill_files_list_resp:type_name -> liveagent.gateway.v1.SkillFilesListResponse
-	59, // 47: liveagent.gateway.v1.AgentEnvelope.skill_metadata_read_resp:type_name -> liveagent.gateway.v1.SkillMetadataReadResponse
-	61, // 48: liveagent.gateway.v1.AgentEnvelope.skill_text_read_resp:type_name -> liveagent.gateway.v1.SkillTextReadResponse
-	66, // 49: liveagent.gateway.v1.AgentEnvelope.file_mention_list_resp:type_name -> liveagent.gateway.v1.FileMentionListResponse
-	10, // 50: liveagent.gateway.v1.AgentEnvelope.upload_readable_files_resp:type_name -> liveagent.gateway.v1.UploadReadableFilesResponse
-	69, // 51: liveagent.gateway.v1.AgentEnvelope.fs_roots_resp:type_name -> liveagent.gateway.v1.FsRootsResponse
-	76, // 52: liveagent.gateway.v1.AgentEnvelope.pong:type_name -> liveagent.gateway.v1.PongResponse
-	72, // 53: liveagent.gateway.v1.AgentEnvelope.fs_list_dirs_resp:type_name -> liveagent.gateway.v1.FsListDirsResponse
-	12, // 54: liveagent.gateway.v1.AgentEnvelope.uploaded_image_preview_resp:type_name -> liveagent.gateway.v1.UploadedImagePreviewResponse
-	14, // 55: liveagent.gateway.v1.AgentEnvelope.memory_manage_resp:type_name -> liveagent.gateway.v1.MemoryManageResponse
-	63, // 56: liveagent.gateway.v1.AgentEnvelope.skill_manage_resp:type_name -> liveagent.gateway.v1.SkillManageResponse
-	74, // 57: liveagent.gateway.v1.AgentEnvelope.fs_create_project_folder_resp:type_name -> liveagent.gateway.v1.FsCreateProjectFolderResponse
-	18, // 58: liveagent.gateway.v1.AgentEnvelope.terminal_response:type_name -> liveagent.gateway.v1.TerminalResponse
-	19, // 59: liveagent.gateway.v1.AgentEnvelope.terminal_event:type_name -> liveagent.gateway.v1.TerminalEvent
-	77, // 60: liveagent.gateway.v1.AgentEnvelope.error:type_name -> liveagent.gateway.v1.ErrorResponse
-	8,  // 61: liveagent.gateway.v1.UploadReadableFilesRequest.files:type_name -> liveagent.gateway.v1.UploadReadableFile
-	7,  // 62: liveagent.gateway.v1.UploadReadableFilesResponse.files:type_name -> liveagent.gateway.v1.ChatUploadedFile
-	16, // 63: liveagent.gateway.v1.TerminalResponse.sessions:type_name -> liveagent.gateway.v1.TerminalSession
-	16, // 64: liveagent.gateway.v1.TerminalResponse.session:type_name -> liveagent.gateway.v1.TerminalSession
-	17, // 65: liveagent.gateway.v1.TerminalResponse.shell_options:type_name -> liveagent.gateway.v1.TerminalShellOption
-	16, // 66: liveagent.gateway.v1.TerminalEvent.session:type_name -> liveagent.gateway.v1.TerminalSession
-	5,  // 67: liveagent.gateway.v1.ChatRequest.selected_model:type_name -> liveagent.gateway.v1.ChatSelectedModel
-	7,  // 68: liveagent.gateway.v1.ChatRequest.uploaded_files:type_name -> liveagent.gateway.v1.ChatUploadedFile
-	6,  // 69: liveagent.gateway.v1.ChatRequest.runtime_controls:type_name -> liveagent.gateway.v1.ChatRuntimeControls
-	0,  // 70: liveagent.gateway.v1.ChatEvent.type:type_name -> liveagent.gateway.v1.ChatEvent.ChatEventType
-	27, // 71: liveagent.gateway.v1.HistoryListResponse.conversations:type_name -> liveagent.gateway.v1.ConversationSummary
-	27, // 72: liveagent.gateway.v1.HistoryGetResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
-	27, // 73: liveagent.gateway.v1.HistoryRenameResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
-	27, // 74: liveagent.gateway.v1.HistoryPinResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
-	34, // 75: liveagent.gateway.v1.HistoryShareGetResponse.share:type_name -> liveagent.gateway.v1.HistoryShareStatus
-	34, // 76: liveagent.gateway.v1.HistoryShareSetResponse.share:type_name -> liveagent.gateway.v1.HistoryShareStatus
-	27, // 77: liveagent.gateway.v1.HistoryShareResolveResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
-	42, // 78: liveagent.gateway.v1.HistoryWorkdirsResponse.workdirs:type_name -> liveagent.gateway.v1.HistoryWorkdirSummary
-	27, // 79: liveagent.gateway.v1.HistoryTruncateResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
-	27, // 80: liveagent.gateway.v1.HistorySyncEvent.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
-	65, // 81: liveagent.gateway.v1.FileMentionListResponse.entries:type_name -> liveagent.gateway.v1.FileMentionEntry
-	67, // 82: liveagent.gateway.v1.FsRootsResponse.roots:type_name -> liveagent.gateway.v1.FsRoot
-	71, // 83: liveagent.gateway.v1.FsListDirsResponse.entries:type_name -> liveagent.gateway.v1.FsDirEntry
-	4,  // 84: liveagent.gateway.v1.AgentGateway.AgentConnect:input_type -> liveagent.gateway.v1.AgentEnvelope
-	1,  // 85: liveagent.gateway.v1.AgentGateway.Authenticate:input_type -> liveagent.gateway.v1.AuthRequest
-	3,  // 86: liveagent.gateway.v1.AgentGateway.AgentConnect:output_type -> liveagent.gateway.v1.GatewayEnvelope
-	2,  // 87: liveagent.gateway.v1.AgentGateway.Authenticate:output_type -> liveagent.gateway.v1.AuthResponse
-	86, // [86:88] is the sub-list for method output_type
-	84, // [84:86] is the sub-list for method input_type
-	84, // [84:84] is the sub-list for extension type_name
-	84, // [84:84] is the sub-list for extension extendee
-	0,  // [0:84] is the sub-list for field type_name
+	75, // 29: liveagent.gateway.v1.GatewayEnvelope.fs_list:type_name -> liveagent.gateway.v1.FsListRequest
+	78, // 30: liveagent.gateway.v1.GatewayEnvelope.fs_write_text:type_name -> liveagent.gateway.v1.FsWriteTextRequest
+	80, // 31: liveagent.gateway.v1.GatewayEnvelope.fs_create_dir:type_name -> liveagent.gateway.v1.FsCreateDirRequest
+	82, // 32: liveagent.gateway.v1.GatewayEnvelope.fs_rename:type_name -> liveagent.gateway.v1.FsRenameRequest
+	84, // 33: liveagent.gateway.v1.GatewayEnvelope.fs_delete:type_name -> liveagent.gateway.v1.FsDeleteRequest
+	22, // 34: liveagent.gateway.v1.AgentEnvelope.chat_event:type_name -> liveagent.gateway.v1.ChatEvent
+	24, // 35: liveagent.gateway.v1.AgentEnvelope.cron_manage_resp:type_name -> liveagent.gateway.v1.CronManageResponse
+	26, // 36: liveagent.gateway.v1.AgentEnvelope.history_list_resp:type_name -> liveagent.gateway.v1.HistoryListResponse
+	29, // 37: liveagent.gateway.v1.AgentEnvelope.history_get_resp:type_name -> liveagent.gateway.v1.HistoryGetResponse
+	31, // 38: liveagent.gateway.v1.AgentEnvelope.history_rename_resp:type_name -> liveagent.gateway.v1.HistoryRenameResponse
+	45, // 39: liveagent.gateway.v1.AgentEnvelope.history_delete_resp:type_name -> liveagent.gateway.v1.HistoryDeleteResponse
+	48, // 40: liveagent.gateway.v1.AgentEnvelope.history_sync:type_name -> liveagent.gateway.v1.HistorySyncEvent
+	47, // 41: liveagent.gateway.v1.AgentEnvelope.history_truncate_resp:type_name -> liveagent.gateway.v1.HistoryTruncateResponse
+	33, // 42: liveagent.gateway.v1.AgentEnvelope.history_pin_resp:type_name -> liveagent.gateway.v1.HistoryPinResponse
+	36, // 43: liveagent.gateway.v1.AgentEnvelope.history_share_get_resp:type_name -> liveagent.gateway.v1.HistoryShareGetResponse
+	38, // 44: liveagent.gateway.v1.AgentEnvelope.history_share_set_resp:type_name -> liveagent.gateway.v1.HistoryShareSetResponse
+	40, // 45: liveagent.gateway.v1.AgentEnvelope.history_share_resolve_resp:type_name -> liveagent.gateway.v1.HistoryShareResolveResponse
+	43, // 46: liveagent.gateway.v1.AgentEnvelope.history_workdirs_resp:type_name -> liveagent.gateway.v1.HistoryWorkdirsResponse
+	50, // 47: liveagent.gateway.v1.AgentEnvelope.provider_list_resp:type_name -> liveagent.gateway.v1.ProviderListResponse
+	52, // 48: liveagent.gateway.v1.AgentEnvelope.settings_get_resp:type_name -> liveagent.gateway.v1.SettingsGetResponse
+	54, // 49: liveagent.gateway.v1.AgentEnvelope.settings_update_resp:type_name -> liveagent.gateway.v1.SettingsUpdateResponse
+	55, // 50: liveagent.gateway.v1.AgentEnvelope.settings_sync:type_name -> liveagent.gateway.v1.SettingsSyncEvent
+	57, // 51: liveagent.gateway.v1.AgentEnvelope.skill_files_list_resp:type_name -> liveagent.gateway.v1.SkillFilesListResponse
+	59, // 52: liveagent.gateway.v1.AgentEnvelope.skill_metadata_read_resp:type_name -> liveagent.gateway.v1.SkillMetadataReadResponse
+	61, // 53: liveagent.gateway.v1.AgentEnvelope.skill_text_read_resp:type_name -> liveagent.gateway.v1.SkillTextReadResponse
+	66, // 54: liveagent.gateway.v1.AgentEnvelope.file_mention_list_resp:type_name -> liveagent.gateway.v1.FileMentionListResponse
+	10, // 55: liveagent.gateway.v1.AgentEnvelope.upload_readable_files_resp:type_name -> liveagent.gateway.v1.UploadReadableFilesResponse
+	69, // 56: liveagent.gateway.v1.AgentEnvelope.fs_roots_resp:type_name -> liveagent.gateway.v1.FsRootsResponse
+	87, // 57: liveagent.gateway.v1.AgentEnvelope.pong:type_name -> liveagent.gateway.v1.PongResponse
+	72, // 58: liveagent.gateway.v1.AgentEnvelope.fs_list_dirs_resp:type_name -> liveagent.gateway.v1.FsListDirsResponse
+	12, // 59: liveagent.gateway.v1.AgentEnvelope.uploaded_image_preview_resp:type_name -> liveagent.gateway.v1.UploadedImagePreviewResponse
+	14, // 60: liveagent.gateway.v1.AgentEnvelope.memory_manage_resp:type_name -> liveagent.gateway.v1.MemoryManageResponse
+	63, // 61: liveagent.gateway.v1.AgentEnvelope.skill_manage_resp:type_name -> liveagent.gateway.v1.SkillManageResponse
+	74, // 62: liveagent.gateway.v1.AgentEnvelope.fs_create_project_folder_resp:type_name -> liveagent.gateway.v1.FsCreateProjectFolderResponse
+	18, // 63: liveagent.gateway.v1.AgentEnvelope.terminal_response:type_name -> liveagent.gateway.v1.TerminalResponse
+	19, // 64: liveagent.gateway.v1.AgentEnvelope.terminal_event:type_name -> liveagent.gateway.v1.TerminalEvent
+	77, // 65: liveagent.gateway.v1.AgentEnvelope.fs_list_resp:type_name -> liveagent.gateway.v1.FsListResponse
+	79, // 66: liveagent.gateway.v1.AgentEnvelope.fs_write_text_resp:type_name -> liveagent.gateway.v1.FsWriteTextResponse
+	81, // 67: liveagent.gateway.v1.AgentEnvelope.fs_create_dir_resp:type_name -> liveagent.gateway.v1.FsCreateDirResponse
+	83, // 68: liveagent.gateway.v1.AgentEnvelope.fs_rename_resp:type_name -> liveagent.gateway.v1.FsRenameResponse
+	85, // 69: liveagent.gateway.v1.AgentEnvelope.fs_delete_resp:type_name -> liveagent.gateway.v1.FsDeleteResponse
+	88, // 70: liveagent.gateway.v1.AgentEnvelope.error:type_name -> liveagent.gateway.v1.ErrorResponse
+	8,  // 71: liveagent.gateway.v1.UploadReadableFilesRequest.files:type_name -> liveagent.gateway.v1.UploadReadableFile
+	7,  // 72: liveagent.gateway.v1.UploadReadableFilesResponse.files:type_name -> liveagent.gateway.v1.ChatUploadedFile
+	16, // 73: liveagent.gateway.v1.TerminalResponse.sessions:type_name -> liveagent.gateway.v1.TerminalSession
+	16, // 74: liveagent.gateway.v1.TerminalResponse.session:type_name -> liveagent.gateway.v1.TerminalSession
+	17, // 75: liveagent.gateway.v1.TerminalResponse.shell_options:type_name -> liveagent.gateway.v1.TerminalShellOption
+	16, // 76: liveagent.gateway.v1.TerminalEvent.session:type_name -> liveagent.gateway.v1.TerminalSession
+	5,  // 77: liveagent.gateway.v1.ChatRequest.selected_model:type_name -> liveagent.gateway.v1.ChatSelectedModel
+	7,  // 78: liveagent.gateway.v1.ChatRequest.uploaded_files:type_name -> liveagent.gateway.v1.ChatUploadedFile
+	6,  // 79: liveagent.gateway.v1.ChatRequest.runtime_controls:type_name -> liveagent.gateway.v1.ChatRuntimeControls
+	0,  // 80: liveagent.gateway.v1.ChatEvent.type:type_name -> liveagent.gateway.v1.ChatEvent.ChatEventType
+	27, // 81: liveagent.gateway.v1.HistoryListResponse.conversations:type_name -> liveagent.gateway.v1.ConversationSummary
+	27, // 82: liveagent.gateway.v1.HistoryGetResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
+	27, // 83: liveagent.gateway.v1.HistoryRenameResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
+	27, // 84: liveagent.gateway.v1.HistoryPinResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
+	34, // 85: liveagent.gateway.v1.HistoryShareGetResponse.share:type_name -> liveagent.gateway.v1.HistoryShareStatus
+	34, // 86: liveagent.gateway.v1.HistoryShareSetResponse.share:type_name -> liveagent.gateway.v1.HistoryShareStatus
+	27, // 87: liveagent.gateway.v1.HistoryShareResolveResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
+	42, // 88: liveagent.gateway.v1.HistoryWorkdirsResponse.workdirs:type_name -> liveagent.gateway.v1.HistoryWorkdirSummary
+	27, // 89: liveagent.gateway.v1.HistoryTruncateResponse.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
+	27, // 90: liveagent.gateway.v1.HistorySyncEvent.conversation:type_name -> liveagent.gateway.v1.ConversationSummary
+	65, // 91: liveagent.gateway.v1.FileMentionListResponse.entries:type_name -> liveagent.gateway.v1.FileMentionEntry
+	67, // 92: liveagent.gateway.v1.FsRootsResponse.roots:type_name -> liveagent.gateway.v1.FsRoot
+	71, // 93: liveagent.gateway.v1.FsListDirsResponse.entries:type_name -> liveagent.gateway.v1.FsDirEntry
+	76, // 94: liveagent.gateway.v1.FsListResponse.entries:type_name -> liveagent.gateway.v1.FsListEntry
+	4,  // 95: liveagent.gateway.v1.AgentGateway.AgentConnect:input_type -> liveagent.gateway.v1.AgentEnvelope
+	1,  // 96: liveagent.gateway.v1.AgentGateway.Authenticate:input_type -> liveagent.gateway.v1.AuthRequest
+	3,  // 97: liveagent.gateway.v1.AgentGateway.AgentConnect:output_type -> liveagent.gateway.v1.GatewayEnvelope
+	2,  // 98: liveagent.gateway.v1.AgentGateway.Authenticate:output_type -> liveagent.gateway.v1.AuthResponse
+	97, // [97:99] is the sub-list for method output_type
+	95, // [95:97] is the sub-list for method input_type
+	95, // [95:95] is the sub-list for extension type_name
+	95, // [95:95] is the sub-list for extension extendee
+	0,  // [0:95] is the sub-list for field type_name
 }
 
 func init() { file_proto_v1_gateway_proto_init() }
@@ -6124,6 +7123,11 @@ func file_proto_v1_gateway_proto_init() {
 		(*GatewayEnvelope_SkillManage)(nil),
 		(*GatewayEnvelope_FsCreateProjectFolder)(nil),
 		(*GatewayEnvelope_TerminalRequest)(nil),
+		(*GatewayEnvelope_FsList)(nil),
+		(*GatewayEnvelope_FsWriteText)(nil),
+		(*GatewayEnvelope_FsCreateDir)(nil),
+		(*GatewayEnvelope_FsRename)(nil),
+		(*GatewayEnvelope_FsDelete)(nil),
 	}
 	file_proto_v1_gateway_proto_msgTypes[3].OneofWrappers = []any{
 		(*AgentEnvelope_ChatEvent)(nil),
@@ -6157,6 +7161,11 @@ func file_proto_v1_gateway_proto_init() {
 		(*AgentEnvelope_FsCreateProjectFolderResp)(nil),
 		(*AgentEnvelope_TerminalResponse)(nil),
 		(*AgentEnvelope_TerminalEvent)(nil),
+		(*AgentEnvelope_FsListResp)(nil),
+		(*AgentEnvelope_FsWriteTextResp)(nil),
+		(*AgentEnvelope_FsCreateDirResp)(nil),
+		(*AgentEnvelope_FsRenameResp)(nil),
+		(*AgentEnvelope_FsDeleteResp)(nil),
 		(*AgentEnvelope_Error)(nil),
 	}
 	file_proto_v1_gateway_proto_msgTypes[36].OneofWrappers = []any{}
@@ -6166,7 +7175,7 @@ func file_proto_v1_gateway_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_v1_gateway_proto_rawDesc), len(file_proto_v1_gateway_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   77,
+			NumMessages:   88,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -95,6 +95,42 @@ type FsListDirsResponse = {
   truncated: boolean;
 };
 
+type FsListResponse = {
+  path?: string | null;
+  depth: number;
+  offset: number;
+  maxResults: number;
+  total: number;
+  hasMore: boolean;
+  entries: Array<{ path: string; kind: "file" | "dir" }>;
+};
+
+type FsWriteTextResponse = {
+  path: string;
+  mode: string;
+  existedBefore: boolean;
+  bytesWritten: number;
+  mtimeMs: number;
+  contentHash: string;
+  totalLines: number;
+};
+
+type FsCreateDirResponse = {
+  path: string;
+  kind: "dir";
+};
+
+type FsRenameResponse = {
+  fromPath: string;
+  path: string;
+  kind: "file" | "dir" | "symlink";
+};
+
+type FsDeleteResponse = {
+  path: string;
+  kind: "file" | "dir" | "symlink";
+};
+
 export type UploadedImagePreviewResponse = {
   mimeType: string;
   data: string;
@@ -974,6 +1010,56 @@ export class GatewayWebSocketClient {
     });
   }
 
+  async listFiles(
+    workdir: string,
+    path?: string,
+    depth?: number,
+    offset?: number,
+    maxResults?: number,
+  ): Promise<FsListResponse> {
+    return this.requestWithRecovery<FsListResponse>("fs.list", {
+      workdir,
+      path,
+      depth,
+      offset,
+      max_results: maxResults,
+    });
+  }
+
+  async writeTextFile(params: {
+    workdir: string;
+    path: string;
+    content: string;
+    mode?: string;
+    expectedMtimeMs?: number;
+    expectedContentHash?: string;
+  }): Promise<FsWriteTextResponse> {
+    return this.request<FsWriteTextResponse>("fs.write_text", {
+      workdir: params.workdir,
+      path: params.path,
+      content: params.content,
+      mode: params.mode ?? "rewrite",
+      expected_mtime_ms: params.expectedMtimeMs,
+      expected_content_hash: params.expectedContentHash,
+    });
+  }
+
+  async createDir(workdir: string, path: string): Promise<FsCreateDirResponse> {
+    return this.request<FsCreateDirResponse>("fs.create_dir", { workdir, path });
+  }
+
+  async renamePath(workdir: string, fromPath: string, toPath: string): Promise<FsRenameResponse> {
+    return this.request<FsRenameResponse>("fs.rename", {
+      workdir,
+      from_path: fromPath,
+      to_path: toPath,
+    });
+  }
+
+  async deletePath(workdir: string, path: string): Promise<FsDeleteResponse> {
+    return this.request<FsDeleteResponse>("fs.delete", { workdir, path });
+  }
+
   async readUploadedImagePreview(
     workdir: string,
     absolutePath: string,
@@ -1780,6 +1866,24 @@ export type GatewayWebSocketClientLike = {
   listFsRoots(): Promise<FsRootsResponse>;
   listDirs(path: string, maxResults?: number): Promise<FsListDirsResponse>;
   createProjectFolder(parent: string, name: string): Promise<CreateProjectFolderResponse>;
+  listFiles(
+    workdir: string,
+    path?: string,
+    depth?: number,
+    offset?: number,
+    maxResults?: number,
+  ): Promise<FsListResponse>;
+  writeTextFile(params: {
+    workdir: string;
+    path: string;
+    content: string;
+    mode?: string;
+    expectedMtimeMs?: number;
+    expectedContentHash?: string;
+  }): Promise<FsWriteTextResponse>;
+  createDir(workdir: string, path: string): Promise<FsCreateDirResponse>;
+  renamePath(workdir: string, fromPath: string, toPath: string): Promise<FsRenameResponse>;
+  deletePath(workdir: string, path: string): Promise<FsDeleteResponse>;
   readUploadedImagePreview(
     workdir: string,
     absolutePath: string,
@@ -2442,6 +2546,56 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
       parent,
       name,
     });
+  }
+
+  async listFiles(
+    workdir: string,
+    path?: string,
+    depth?: number,
+    offset?: number,
+    maxResults?: number,
+  ): Promise<FsListResponse> {
+    return this.request<FsListResponse>("fs.list", {
+      workdir,
+      path,
+      depth,
+      offset,
+      max_results: maxResults,
+    });
+  }
+
+  async writeTextFile(params: {
+    workdir: string;
+    path: string;
+    content: string;
+    mode?: string;
+    expectedMtimeMs?: number;
+    expectedContentHash?: string;
+  }): Promise<FsWriteTextResponse> {
+    return this.request<FsWriteTextResponse>("fs.write_text", {
+      workdir: params.workdir,
+      path: params.path,
+      content: params.content,
+      mode: params.mode ?? "rewrite",
+      expected_mtime_ms: params.expectedMtimeMs,
+      expected_content_hash: params.expectedContentHash,
+    });
+  }
+
+  async createDir(workdir: string, path: string): Promise<FsCreateDirResponse> {
+    return this.request<FsCreateDirResponse>("fs.create_dir", { workdir, path });
+  }
+
+  async renamePath(workdir: string, fromPath: string, toPath: string): Promise<FsRenameResponse> {
+    return this.request<FsRenameResponse>("fs.rename", {
+      workdir,
+      from_path: fromPath,
+      to_path: toPath,
+    });
+  }
+
+  async deletePath(workdir: string, path: string): Promise<FsDeleteResponse> {
+    return this.request<FsDeleteResponse>("fs.delete", { workdir, path });
   }
 
   async readUploadedImagePreview(

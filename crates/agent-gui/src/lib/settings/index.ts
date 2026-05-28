@@ -127,11 +127,14 @@ export type ChatSidebarSettings = {
   recentCollapsed: boolean;
 };
 
+export type ProjectToolsPanelTab = "terminal" | "fileTree";
+
 export type CustomSettings = {
   conversationTitleModel?: SelectedModel;
   chatSidebar: ChatSidebarSettings;
-  terminalPanel: {
+  projectToolsPanel: {
     width: number;
+    activeTab: ProjectToolsPanelTab;
   };
 };
 
@@ -1407,9 +1410,18 @@ export function normalizeCustomSettings(
   const chatSidebar = (
     obj.chatSidebar && typeof obj.chatSidebar === "object" ? obj.chatSidebar : {}
   ) as Record<string, unknown>;
-  const terminalPanel = (
+  const legacyTerminalPanel = (
     obj.terminalPanel && typeof obj.terminalPanel === "object" ? obj.terminalPanel : {}
   ) as Record<string, unknown>;
+  const projectToolsPanel = (
+    obj.projectToolsPanel && typeof obj.projectToolsPanel === "object"
+      ? obj.projectToolsPanel
+      : {}
+  ) as Record<string, unknown>;
+  const projectToolsPanelActiveTab =
+    projectToolsPanel.activeTab === "terminal" || projectToolsPanel.activeTab === "fileTree"
+      ? projectToolsPanel.activeTab
+      : "fileTree";
   return {
     conversationTitleModel: normalizeSelectedModelForProviders(
       normalizeSelectedModel(obj.conversationTitleModel),
@@ -1419,8 +1431,14 @@ export function normalizeCustomSettings(
       projectsCollapsed: chatSidebar.projectsCollapsed === true,
       recentCollapsed: chatSidebar.recentCollapsed === true,
     },
-    terminalPanel: {
-      width: normalizeIntegerInRange(obj.terminalPanelWidth ?? terminalPanel.width, 320, 720, 420),
+    projectToolsPanel: {
+      width: normalizeIntegerInRange(
+        obj.terminalPanelWidth ?? projectToolsPanel.width ?? legacyTerminalPanel.width,
+        320,
+        720,
+        420,
+      ),
+      activeTab: projectToolsPanelActiveTab,
     },
   };
 }

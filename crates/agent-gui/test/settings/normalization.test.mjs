@@ -475,7 +475,7 @@ test("gateway settings sync payload redacts provider api keys", () => {
     projectsCollapsed: false,
     recentCollapsed: false,
   });
-  assert.equal(Object.hasOwn(payload.customSettings, "terminalPanel"), false);
+  assert.equal(Object.hasOwn(payload.customSettings, "projectToolsPanel"), false);
   assert.deepEqual(payload.chatRuntimeControls, appSettings.chatRuntimeControls);
   assert.equal(payload.providerApiKeyUpdates, undefined);
 
@@ -579,36 +579,65 @@ test("gateway settings sync preserves active workspace project by path when ids 
   assert.equal(synced.system.activeWorkspaceProjectId, "desktop-project-a");
 });
 
-test("gateway settings sync keeps terminal panel width local", () => {
-  const current = settings.normalizeSettings({
+test("normalizes project tools panel from current and legacy terminal panel settings", () => {
+  const normalized = settings.normalizeSettings({
     customSettings: {
       terminalPanel: {
         width: 612,
       },
     },
   });
+
+  assert.equal(normalized.customSettings.projectToolsPanel.width, 612);
+  assert.equal(normalized.customSettings.projectToolsPanel.activeTab, "fileTree");
+
+  const currentShape = settings.normalizeSettings({
+    customSettings: {
+      projectToolsPanel: {
+        width: 544,
+        activeTab: "terminal",
+      },
+    },
+  });
+
+  assert.equal(currentShape.customSettings.projectToolsPanel.width, 544);
+  assert.equal(currentShape.customSettings.projectToolsPanel.activeTab, "terminal");
+});
+
+test("gateway settings sync keeps project tools panel state local", () => {
+  const current = settings.normalizeSettings({
+    customSettings: {
+      projectToolsPanel: {
+        width: 612,
+        activeTab: "terminal",
+      },
+    },
+  });
   const incoming = settings.normalizeSettings({
     customSettings: {
-      terminalPanel: {
+      projectToolsPanel: {
         width: 360,
+        activeTab: "fileTree",
       },
     },
   });
 
   const payload = sync.buildGatewaySettingsSyncPayload(incoming);
-  assert.equal(Object.hasOwn(payload.customSettings, "terminalPanel"), false);
+  assert.equal(Object.hasOwn(payload.customSettings, "projectToolsPanel"), false);
 
   const synced = sync.applyGatewaySettingsSyncPayload(current, {
     ...payload,
     customSettings: {
       ...payload.customSettings,
-      terminalPanel: {
+      projectToolsPanel: {
         width: 360,
+        activeTab: "fileTree",
       },
     },
   });
 
-  assert.equal(synced.customSettings.terminalPanel.width, 612);
+  assert.equal(synced.customSettings.projectToolsPanel.width, 612);
+  assert.equal(synced.customSettings.projectToolsPanel.activeTab, "terminal");
 });
 
 test("gateway settings sync keeps newer project conversation activity", () => {

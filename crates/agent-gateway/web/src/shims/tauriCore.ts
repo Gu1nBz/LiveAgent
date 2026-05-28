@@ -208,6 +208,41 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
         maxResults,
       )) as T;
     }
+    case "fs_list":
+      return (await getGatewayWebSocketClient(loadToken().trim()).listFiles(
+        String(args?.workdir ?? ""),
+        typeof args?.path === "string" ? args.path : undefined,
+        typeof args?.depth === "number" ? args.depth : undefined,
+        typeof args?.offset === "number" ? args.offset : undefined,
+        typeof args?.max_results === "number" ? args.max_results : undefined,
+      )) as T;
+    case "fs_write_text":
+      return (await getGatewayWebSocketClient(loadToken().trim()).writeTextFile({
+        workdir: String(args?.workdir ?? ""),
+        path: String(args?.path ?? ""),
+        content: typeof args?.content === "string" ? args.content : "",
+        mode: typeof args?.mode === "string" ? args.mode : undefined,
+        expectedMtimeMs:
+          typeof args?.expected_mtime_ms === "number" ? args.expected_mtime_ms : undefined,
+        expectedContentHash:
+          typeof args?.expected_content_hash === "string" ? args.expected_content_hash : undefined,
+      })) as T;
+    case "fs_create_dir":
+      return (await getGatewayWebSocketClient(loadToken().trim()).createDir(
+        String(args?.workdir ?? ""),
+        String(args?.path ?? ""),
+      )) as T;
+    case "fs_rename":
+      return (await getGatewayWebSocketClient(loadToken().trim()).renamePath(
+        String(args?.workdir ?? ""),
+        String(args?.from_path ?? ""),
+        String(args?.to_path ?? ""),
+      )) as T;
+    case "fs_delete":
+      return (await getGatewayWebSocketClient(loadToken().trim()).deletePath(
+        String(args?.workdir ?? ""),
+        String(args?.path ?? ""),
+      )) as T;
     case "fs_mention_list":
       return (await getGatewayWebSocketClient(loadToken().trim()).listMentionFiles(
         String(args?.workdir ?? ""),

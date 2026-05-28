@@ -14,7 +14,7 @@ import type {
 import { type NotifyItem, NotifyToast } from "../components/chat/NotifyToast";
 import { SharedHistoryManagerModal } from "../components/chat/SharedHistoryManagerModal";
 import { Ban, PanelRightClose, PanelRightOpen, Upload } from "../components/icons";
-import { ProjectTerminalPanel } from "../components/terminal/ProjectTerminalPanel";
+import { ProjectToolsPanel } from "../components/project-tools/ProjectToolsPanel";
 import { Button } from "../components/ui/button";
 import { useLocale } from "../i18n";
 import {
@@ -611,7 +611,7 @@ export function ChatPage(props: ChatPageProps) {
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
-  const [terminalPanelOpen, setTerminalPanelOpen] = useState(false);
+  const [projectToolsPanelOpen, setProjectToolsPanelOpen] = useState(false);
   const [projectTerminalSessions, setProjectTerminalSessions] = useState<TerminalSession[]>([]);
   const [remoteRuntimeStatus, setRemoteRuntimeStatus] = useState<GatewayRuntimeStatus>(() =>
     buildFallbackGatewayStatus(settings.remote),
@@ -4047,19 +4047,19 @@ export function ChatPage(props: ChatPageProps) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => setTerminalPanelOpen((open) => !open)}
-                    disabled={Boolean(terminalDisabledMessage) && !terminalPanelOpen}
-                    aria-expanded={terminalPanelOpen}
+                    onClick={() => setProjectToolsPanelOpen((open) => !open)}
+                    disabled={Boolean(terminalDisabledMessage) && !projectToolsPanelOpen}
+                    aria-expanded={projectToolsPanelOpen}
                     title={
-                      terminalPanelOpen
-                        ? "Collapse terminal panel"
-                        : (terminalDisabledMessage ?? "Expand terminal panel")
+                      projectToolsPanelOpen
+                        ? "Collapse project tools panel"
+                        : (terminalDisabledMessage ?? "Expand project tools panel")
                     }
                     className={`relative h-8 w-8 rounded-lg text-muted-foreground transition-[background-color,color,transform] duration-150 hover:text-foreground active:scale-95 ${
-                      terminalPanelOpen ? "bg-muted text-foreground" : ""
+                      projectToolsPanelOpen ? "bg-muted text-foreground" : ""
                     }`}
                   >
-                    {terminalPanelOpen ? (
+                    {projectToolsPanelOpen ? (
                       <PanelRightClose className="h-4.5 w-4.5" />
                     ) : (
                       <PanelRightOpen className="h-4.5 w-4.5" />
@@ -4180,25 +4180,41 @@ export function ChatPage(props: ChatPageProps) {
           </>
         )}
       </div>
-      <ProjectTerminalPanel
-        isOpen={terminalPanelOpen}
+      <ProjectToolsPanel
+        isOpen={projectToolsPanelOpen}
         projectPathKey={terminalProjectPathKey}
         cwd={terminalProjectPath}
         sessions={projectTerminalSessions}
-        width={settings.customSettings.terminalPanel.width}
+        width={settings.customSettings.projectToolsPanel.width}
         theme={settings.theme}
         disabledMessage={terminalDisabledMessage}
+        activeTab={settings.customSettings.projectToolsPanel.activeTab}
         client={tauriTerminalClient}
         onWidthChange={(nextWidth) =>
           setSettings((prev) =>
             updateCustomSettings(prev, {
-              terminalPanel: {
+              projectToolsPanel: {
+                ...prev.customSettings.projectToolsPanel,
                 width: nextWidth,
               },
             }),
           )
         }
+        onActiveTabChange={(activeTab) =>
+          setSettings((prev) =>
+            updateCustomSettings(prev, {
+              projectToolsPanel: {
+                ...prev.customSettings.projectToolsPanel,
+                activeTab,
+              },
+            }),
+          )
+        }
         onSessionsChange={setProjectTerminalSessions}
+        onInsertFileMention={(path, kind) => {
+          composerRef.current?.insertFileMention(path, kind);
+          composerRef.current?.focus();
+        }}
       />
     </div>
   );

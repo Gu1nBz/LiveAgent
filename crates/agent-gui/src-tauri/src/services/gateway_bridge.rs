@@ -5,7 +5,10 @@ use serde_json::{json, Value};
 
 use crate::commands::{
     chat_history,
-    fs::fs_mention_list_sync,
+    fs::{
+        fs_create_dir_sync, fs_delete_sync, fs_list_sync, fs_mention_list_sync, fs_rename_sync,
+        fs_write_text_sync,
+    },
     settings::{load_providers, open_db},
     system::{
         system_create_project_folder_sync, system_import_uploaded_readable_files_sync,
@@ -484,6 +487,125 @@ pub async fn handle_fs_create_project_folder(
     .map(|response| proto::FsCreateProjectFolderResponse {
         path: response.path,
     })
+}
+
+pub async fn handle_fs_list(
+    request: proto::FsListRequest,
+) -> Result<proto::FsListResponse, String> {
+    let path = if request.path.trim().is_empty() {
+        None
+    } else {
+        Some(request.path)
+    };
+    let depth = usize::try_from(request.depth)
+        .ok()
+        .filter(|value| *value > 0);
+    let offset = usize::try_from(request.offset).ok();
+    let max_results = usize::try_from(request.max_results)
+        .ok()
+        .filter(|value| *value > 0);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        fs_list_sync(request.workdir, path, depth, offset, max_results)
+    })
+    .await
+    .map_err(|e| format!("gateway fs list join failed: {e}"))?
+    .map(|response| {
+        let has_path = response.path.is_some();
+        proto::FsListResponse {
+            path: response.path.unwrap_or_default(),
+            has_path,
+            depth: u32::try_from(response.depth).unwrap_or(u32::MAX),
+            offset: u32::try_from(response.offset).unwrap_or(u32::MAX),
+            max_results: u32::try_from(response.max_results).unwrap_or(u32::MAX),
+            total: u32::try_from(response.total).unwrap_or(u32::MAX),
+            has_more: response.has_more,
+            entries: response
+                .entries
+                .into_iter()
+                .map(|entry| proto::FsListEntry {
+                    path: entry.path,
+                    kind: entry.kind,
+                })
+                .collect(),
+        }
+    })
+}
+
+pub async fn handle_fs_write_text(
+    request: proto::FsWriteTextRequest,
+) -> Result<proto::FsWriteTextResponse, String> {
+    let expected_mtime_ms = if request.has_expected_mtime_ms {
+        Some(request.expected_mtime_ms)
+    } else {
+        None
+    };
+    let expected_content_hash = if request.has_expected_content_hash {
+        Some(request.expected_content_hash)
+    } else {
+        None
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        fs_write_text_sync(
+            request.workdir,
+            request.path,
+            request.content,
+            request.mode,
+            expected_mtime_ms,
+            expected_content_hash,
+        )
+    })
+    .await
+    .map_err(|e| format!("gateway fs write text join failed: {e}"))?
+    .map(|response| proto::FsWriteTextResponse {
+        path: response.path,
+        mode: response.mode,
+        existed_before: response.existed_before,
+        bytes_written: u64::try_from(response.bytes_written).unwrap_or(u64::MAX),
+        mtime_ms: response.mtime_ms,
+        content_hash: response.content_hash,
+        total_lines: u64::try_from(response.total_lines).unwrap_or(u64::MAX),
+    })
+}
+
+pub async fn handle_fs_create_dir(
+    request: proto::FsCreateDirRequest,
+) -> Result<proto::FsCreateDirResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || fs_create_dir_sync(request.workdir, request.path))
+        .await
+        .map_err(|e| format!("gateway fs create dir join failed: {e}"))?
+        .map(|response| proto::FsCreateDirResponse {
+            path: response.path,
+            kind: response.kind,
+        })
+}
+
+pub async fn handle_fs_rename(
+    request: proto::FsRenameRequest,
+) -> Result<proto::FsRenameResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fs_rename_sync(request.workdir, request.from_path, request.to_path)
+    })
+    .await
+    .map_err(|e| format!("gateway fs rename join failed: {e}"))?
+    .map(|response| proto::FsRenameResponse {
+        from_path: response.from_path,
+        path: response.path,
+        kind: response.kind,
+    })
+}
+
+pub async fn handle_fs_delete(
+    request: proto::FsDeleteRequest,
+) -> Result<proto::FsDeleteResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || fs_delete_sync(request.workdir, request.path))
+        .await
+        .map_err(|e| format!("gateway fs delete join failed: {e}"))?
+        .map(|response| proto::FsDeleteResponse {
+            path: response.path,
+            kind: response.kind,
+        })
 }
 
 pub async fn handle_upload_readable_files(

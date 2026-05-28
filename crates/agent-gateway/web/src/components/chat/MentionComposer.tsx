@@ -65,6 +65,7 @@ export interface MentionComposerHandle {
   hasContent: () => boolean;
   setText: (text: string) => void;
   setDraft: (draft: MentionComposerDraft) => void;
+  insertFileMention: (path: string, kind: "file" | "dir") => void;
   clear: () => void;
   focus: () => void;
 }
@@ -374,15 +375,7 @@ function detectMention(root: HTMLElement, skillsEnabled: boolean): MentionContex
   };
 }
 
-/** Replace the @query text with a styled mention chip. */
-function insertMentionChip(ctx: MentionContext, path: string, kind: "file" | "dir") {
-  const { textNode, triggerOffset, query } = ctx;
-  const text = textNode.textContent || "";
-  const parent = textNode.parentNode!;
-
-  const beforeText = text.slice(0, triggerOffset);
-  const afterRaw = text.slice(triggerOffset + 1 + query.length);
-
+function createFileMentionChip(path: string, kind: "file" | "dir") {
   const chip = document.createElement("span");
   chip.setAttribute(MENTION_TAG_ATTR, path);
   chip.setAttribute(MENTION_KIND_ATTR, kind);
@@ -397,6 +390,18 @@ function insertMentionChip(ctx: MentionContext, path: string, kind: "file" | "di
 
   const fileName = path.split("/").pop() || path;
   chip.appendChild(document.createTextNode(fileName));
+  return chip;
+}
+
+/** Replace the @query text with a styled mention chip. */
+function insertMentionChip(ctx: MentionContext, path: string, kind: "file" | "dir") {
+  const { textNode, triggerOffset, query } = ctx;
+  const text = textNode.textContent || "";
+  const parent = textNode.parentNode!;
+
+  const beforeText = text.slice(0, triggerOffset);
+  const afterRaw = text.slice(triggerOffset + 1 + query.length);
+  const chip = createFileMentionChip(path, kind);
 
   // Ensure a space after the chip so the cursor has somewhere to land
   const afterText = afterRaw.length === 0 || !/^\s/.test(afterRaw) ? "\u00A0" + afterRaw : afterRaw;
@@ -1097,6 +1102,14 @@ export const MentionComposer = memo(forwardRef<MentionComposerHandle, MentionCom
           );
         }
 
+        closeMentionSession();
+        refreshEmptyState();
+      },
+      insertFileMention: (path: string, kind: "file" | "dir") => {
+        const el = editorRef.current;
+        if (!el) return;
+        el.focus();
+        insertNodeAtCursor(el, createFileMentionChip(path, kind));
         closeMentionSession();
         refreshEmptyState();
       },

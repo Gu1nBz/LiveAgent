@@ -366,6 +366,35 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
       );
     case "fs.create_project_folder":
       return client.createProjectFolder(String(body.parent ?? ""), String(body.name ?? ""));
+    case "fs.list":
+      return client.listFiles(
+        String(body.workdir ?? ""),
+        typeof body.path === "string" ? body.path : undefined,
+        typeof body.depth === "number" ? body.depth : undefined,
+        typeof body.offset === "number" ? body.offset : undefined,
+        typeof body.max_results === "number" ? body.max_results : undefined,
+      );
+    case "fs.write_text":
+      return client.writeTextFile({
+        workdir: String(body.workdir ?? ""),
+        path: String(body.path ?? ""),
+        content: typeof body.content === "string" ? body.content : "",
+        mode: typeof body.mode === "string" ? body.mode : undefined,
+        expectedMtimeMs:
+          typeof body.expected_mtime_ms === "number" ? body.expected_mtime_ms : undefined,
+        expectedContentHash:
+          typeof body.expected_content_hash === "string" ? body.expected_content_hash : undefined,
+      });
+    case "fs.create_dir":
+      return client.createDir(String(body.workdir ?? ""), String(body.path ?? ""));
+    case "fs.rename":
+      return client.renamePath(
+        String(body.workdir ?? ""),
+        String(body.from_path ?? ""),
+        String(body.to_path ?? ""),
+      );
+    case "fs.delete":
+      return client.deletePath(String(body.workdir ?? ""), String(body.path ?? ""));
     case "history.list":
       return client.listHistory(
         typeof body.page === "number" ? body.page : 0,

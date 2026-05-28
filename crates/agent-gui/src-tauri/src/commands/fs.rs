@@ -1975,7 +1975,7 @@ pub struct WriteTextResponse {
     pub total_lines: usize,
 }
 
-fn fs_write_text_sync(
+pub(crate) fn fs_write_text_sync(
     workdir: String,
     path: String,
     content: String,
@@ -2066,7 +2066,7 @@ pub struct EditTextResponse {
     pub total_lines: usize,
 }
 
-fn fs_edit_text_sync(
+pub(crate) fn fs_edit_text_sync(
     workdir: String,
     path: String,
     old_string: String,
@@ -2181,7 +2181,7 @@ fn remove_symlink_path(target: &Path) -> Result<(), io::Error> {
     }
 }
 
-fn fs_delete_sync(workdir: String, path: String) -> Result<DeleteResponse, String> {
+pub(crate) fn fs_delete_sync(workdir: String, path: String) -> Result<DeleteResponse, String> {
     let wd = canonicalize_workdir(&workdir).map_err(|e| e.to_string())?;
     let rel = sanitize_rel_path(&path).map_err(|e| e.to_string())?;
     let logical_path = logical_rel_path(&rel);
@@ -2220,6 +2220,127 @@ pub async fn fs_delete(workdir: String, path: String) -> Result<DeleteResponse, 
     run_blocking("fs_delete", move || fs_delete_sync(workdir, path)).await
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDirResponse {
+    pub path: String,
+    pub kind: String,
+}
+
+pub(crate) fn fs_create_dir_sync(
+    workdir: String,
+    path: String,
+) -> Result<CreateDirResponse, String> {
+    let wd = canonicalize_workdir(&workdir).map_err(|e| e.to_string())?;
+    let rel = sanitize_rel_path(&path).map_err(|e| e.to_string())?;
+    let logical_path = logical_rel_path(&rel);
+    let file_name = rel
+        .file_name()
+        .ok_or_else(|| FsError::Other("Invalid target path".to_string()).to_string())?;
+    let parent = rel.parent().map_or(wd.clone(), |p| wd.join(p));
+    let parent = ensure_within_workdir_existing(&wd, &parent).map_err(|e| e.to_string())?;
+    let target = parent.join(file_name);
+
+    match fs::symlink_metadata(&target) {
+        Ok(_) => {
+            return Err(FsError::Other("Target path already exists".to_string()).to_string());
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(FsError::Io(error).to_string()),
+    }
+
+    fs::create_dir(&target).map_err(|e| e.to_string())?;
+    Ok(CreateDirResponse {
+        path: logical_path,
+        kind: "dir".to_string(),
+    })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn fs_create_dir(workdir: String, path: String) -> Result<CreateDirResponse, String> {
+    run_blocking("fs_create_dir", move || fs_create_dir_sync(workdir, path)).await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameResponse {
+    pub from_path: String,
+    pub path: String,
+    pub kind: String,
+}
+
+pub(crate) fn fs_rename_sync(
+    workdir: String,
+    from_path: String,
+    to_path: String,
+) -> Result<RenameResponse, String> {
+    let wd = canonicalize_workdir(&workdir).map_err(|e| e.to_string())?;
+    let from_rel = sanitize_rel_path(&from_path).map_err(|e| e.to_string())?;
+    let to_rel = sanitize_rel_path(&to_path).map_err(|e| e.to_string())?;
+    let from_logical_path = logical_rel_path(&from_rel);
+    let to_logical_path = logical_rel_path(&to_rel);
+
+    if from_rel.parent() != to_rel.parent() {
+        return Err(FsError::Other(
+            "Rename only supports targets in the same directory".to_string(),
+        )
+        .to_string());
+    }
+
+    let from_name = from_rel
+        .file_name()
+        .ok_or_else(|| FsError::Other("Invalid source path".to_string()).to_string())?;
+    let to_name = to_rel
+        .file_name()
+        .ok_or_else(|| FsError::Other("Invalid target path".to_string()).to_string())?;
+    let parent_rel = from_rel.parent();
+    let parent = parent_rel.map_or(wd.clone(), |p| wd.join(p));
+    let parent = ensure_within_workdir_existing(&wd, &parent).map_err(|e| e.to_string())?;
+    let source = parent.join(from_name);
+    let target = parent.join(to_name);
+
+    let meta = fs::symlink_metadata(&source).map_err(|e| e.to_string())?;
+    let kind = if meta.file_type().is_symlink() {
+        "symlink"
+    } else if meta.is_file() {
+        "file"
+    } else if meta.is_dir() {
+        "dir"
+    } else {
+        return Err(FsError::Other(
+            "Only regular files, directories, or symlinks can be renamed".to_string(),
+        )
+        .to_string());
+    };
+
+    match fs::symlink_metadata(&target) {
+        Ok(_) => {
+            return Err(FsError::Other("Target path already exists".to_string()).to_string());
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(FsError::Io(error).to_string()),
+    }
+
+    fs::rename(&source, &target).map_err(|e| e.to_string())?;
+    Ok(RenameResponse {
+        from_path: from_logical_path,
+        path: to_logical_path,
+        kind: kind.to_string(),
+    })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn fs_rename(
+    workdir: String,
+    from_path: String,
+    to_path: String,
+) -> Result<RenameResponse, String> {
+    run_blocking("fs_rename", move || {
+        fs_rename_sync(workdir, from_path, to_path)
+    })
+    .await
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ListEntry {
@@ -2247,6 +2368,7 @@ fn build_ignore_walker(base: &Path, max_depth: Option<usize>) -> ignore::Walk {
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
+        .require_git(false)
         .follow_links(false);
     if let Some(depth) = max_depth {
         builder.max_depth(Some(depth));
@@ -2254,7 +2376,7 @@ fn build_ignore_walker(base: &Path, max_depth: Option<usize>) -> ignore::Walk {
     builder.build()
 }
 
-fn fs_list_sync(
+pub(crate) fn fs_list_sync(
     workdir: String,
     path: Option<String>,
     depth: Option<usize>,
@@ -3271,6 +3393,188 @@ mod tests {
         assert!(content.contains("src/main.rs"), "content={content}");
 
         let _ = fs::remove_dir_all(workdir);
+    }
+
+    #[test]
+    fn create_dir_creates_project_directory_and_rejects_invalid_targets() {
+        let workdir = unique_test_workdir("create-dir");
+        fs::create_dir_all(&workdir).expect("create workdir");
+
+        let response = fs_create_dir_sync(workdir.display().to_string(), "src".to_string())
+            .expect("create dir should succeed");
+        assert_eq!(response.path, "src");
+        assert_eq!(response.kind, "dir");
+        assert!(workdir.join("src").is_dir());
+
+        for path in ["", "/tmp/liveagent-outside", "../outside", "src"] {
+            let error = fs_create_dir_sync(workdir.display().to_string(), path.to_string())
+                .expect_err("invalid or existing target should fail");
+            assert!(!error.trim().is_empty(), "expected error for {path:?}");
+        }
+
+        let _ = fs::remove_dir_all(workdir);
+    }
+
+    #[test]
+    fn rename_handles_files_and_directories_without_overwrite_or_moves() {
+        let workdir = unique_test_workdir("rename");
+        fs::create_dir_all(workdir.join("src")).expect("create src");
+        fs::write(workdir.join("src/old.txt"), "old").expect("write old");
+
+        let file_response = fs_rename_sync(
+            workdir.display().to_string(),
+            "src/old.txt".to_string(),
+            "src/new.txt".to_string(),
+        )
+        .expect("rename file should succeed");
+        assert_eq!(file_response.from_path, "src/old.txt");
+        assert_eq!(file_response.path, "src/new.txt");
+        assert_eq!(file_response.kind, "file");
+        assert!(!workdir.join("src/old.txt").exists());
+        assert!(workdir.join("src/new.txt").is_file());
+
+        fs::create_dir_all(workdir.join("src/dir-old/nested")).expect("create dir");
+        let dir_response = fs_rename_sync(
+            workdir.display().to_string(),
+            "src/dir-old".to_string(),
+            "src/dir-new".to_string(),
+        )
+        .expect("rename directory should succeed");
+        assert_eq!(dir_response.path, "src/dir-new");
+        assert_eq!(dir_response.kind, "dir");
+        assert!(workdir.join("src/dir-new/nested").is_dir());
+
+        fs::write(workdir.join("src/existing.txt"), "existing").expect("write existing");
+        let overwrite_error = fs_rename_sync(
+            workdir.display().to_string(),
+            "src/new.txt".to_string(),
+            "src/existing.txt".to_string(),
+        )
+        .expect_err("rename should reject overwrite");
+        assert!(
+            overwrite_error.contains("already exists"),
+            "unexpected error: {overwrite_error}"
+        );
+
+        fs::create_dir_all(workdir.join("other")).expect("create other");
+        let move_error = fs_rename_sync(
+            workdir.display().to_string(),
+            "src/new.txt".to_string(),
+            "other/new.txt".to_string(),
+        )
+        .expect_err("rename should reject cross-directory move");
+        assert!(
+            move_error.contains("same directory"),
+            "unexpected error: {move_error}"
+        );
+
+        let _ = fs::remove_dir_all(workdir);
+    }
+
+    #[test]
+    fn delete_removes_files_empty_dirs_and_non_empty_dirs() {
+        let workdir = unique_test_workdir("delete");
+        fs::create_dir_all(workdir.join("empty")).expect("create empty");
+        fs::create_dir_all(workdir.join("nested/child")).expect("create nested");
+        fs::write(workdir.join("file.txt"), "file").expect("write file");
+        fs::write(workdir.join("nested/child/file.txt"), "file").expect("write nested file");
+
+        let file_response = fs_delete_sync(workdir.display().to_string(), "file.txt".to_string())
+            .expect("delete file should succeed");
+        assert_eq!(file_response.kind, "file");
+        assert!(!workdir.join("file.txt").exists());
+
+        let empty_response = fs_delete_sync(workdir.display().to_string(), "empty".to_string())
+            .expect("delete empty dir should succeed");
+        assert_eq!(empty_response.kind, "dir");
+        assert!(!workdir.join("empty").exists());
+
+        let nested_response = fs_delete_sync(workdir.display().to_string(), "nested".to_string())
+            .expect("delete non-empty dir should succeed");
+        assert_eq!(nested_response.kind, "dir");
+        assert!(!workdir.join("nested").exists());
+
+        let _ = fs::remove_dir_all(workdir);
+    }
+
+    #[test]
+    fn list_respects_gitignore_and_rejects_outside_paths() {
+        let workdir = unique_test_workdir("list-ignore");
+        fs::create_dir_all(workdir.join("src")).expect("create src");
+        fs::create_dir_all(workdir.join("ignored_dir")).expect("create ignored dir");
+        fs::write(
+            workdir.join(".gitignore"),
+            "ignored_dir/\nignored_file.txt\n",
+        )
+        .expect("write gitignore");
+        fs::write(workdir.join("src/app.ts"), "export {}").expect("write app");
+        fs::write(workdir.join("ignored_dir/hidden.ts"), "hidden").expect("write hidden");
+        fs::write(workdir.join("ignored_file.txt"), "hidden").expect("write ignored file");
+
+        let response = fs_list_sync(
+            workdir.display().to_string(),
+            None,
+            Some(3),
+            None,
+            Some(100),
+        )
+        .expect("list should succeed");
+        let paths = response
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"src"));
+        assert!(paths.contains(&"src/app.ts"));
+        assert!(
+            !paths.iter().any(|path| path.starts_with("ignored_dir")),
+            ".gitignore directory entries should be skipped: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"ignored_file.txt"),
+            ".gitignore file entries should be skipped: {paths:?}"
+        );
+
+        let outside_error = fs_list_sync(
+            workdir.display().to_string(),
+            Some("../outside".to_string()),
+            Some(1),
+            None,
+            Some(10),
+        )
+        .expect_err("outside path should fail");
+        assert!(!outside_error.trim().is_empty());
+
+        let _ = fs::remove_dir_all(workdir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_and_rename_reject_out_of_bounds_symlink_parents() {
+        let workdir = unique_test_workdir("symlink-boundary");
+        let outside = unique_test_workdir("symlink-outside");
+        fs::create_dir_all(&workdir).expect("create workdir");
+        fs::create_dir_all(&outside).expect("create outside");
+        std::os::unix::fs::symlink(&outside, workdir.join("outside_link")).expect("create symlink");
+
+        let create_error = fs_create_dir_sync(
+            workdir.display().to_string(),
+            "outside_link/new-dir".to_string(),
+        )
+        .expect_err("create dir should reject symlink parent outside workdir");
+        assert!(!create_error.trim().is_empty());
+
+        fs::write(outside.join("old.txt"), "outside").expect("write outside");
+        let rename_error = fs_rename_sync(
+            workdir.display().to_string(),
+            "outside_link/old.txt".to_string(),
+            "outside_link/new.txt".to_string(),
+        )
+        .expect_err("rename should reject symlink parent outside workdir");
+        assert!(!rename_error.trim().is_empty());
+
+        let _ = fs::remove_dir_all(workdir);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]

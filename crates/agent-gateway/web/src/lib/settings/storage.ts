@@ -61,23 +61,33 @@ function readLocalUiSettings(): {
     const chatSidebar = (obj.chatSidebar && typeof obj.chatSidebar === "object"
       ? obj.chatSidebar
       : {}) as Record<string, unknown>;
-    const terminalPanel = (obj.terminalPanel && typeof obj.terminalPanel === "object"
+    const legacyTerminalPanel = (obj.terminalPanel && typeof obj.terminalPanel === "object"
       ? obj.terminalPanel
       : {}) as Record<string, unknown>;
-    const terminalPanelWidth =
-      typeof terminalPanel.width === "number" || typeof terminalPanel.width === "string"
-        ? Number(terminalPanel.width)
-        : 420;
+    const projectToolsPanel = (obj.projectToolsPanel && typeof obj.projectToolsPanel === "object"
+      ? obj.projectToolsPanel
+      : {}) as Record<string, unknown>;
+    const projectToolsPanelWidth =
+      typeof projectToolsPanel.width === "number" || typeof projectToolsPanel.width === "string"
+        ? Number(projectToolsPanel.width)
+        : typeof legacyTerminalPanel.width === "number" || typeof legacyTerminalPanel.width === "string"
+          ? Number(legacyTerminalPanel.width)
+          : 420;
+    const projectToolsPanelActiveTab =
+      projectToolsPanel.activeTab === "terminal" || projectToolsPanel.activeTab === "fileTree"
+        ? projectToolsPanel.activeTab
+        : "fileTree";
     return {
       conversationTitleModel: normalizeSelectedModel(obj.conversationTitleModel),
       chatSidebar: {
         projectsCollapsed: chatSidebar.projectsCollapsed === true,
         recentCollapsed: chatSidebar.recentCollapsed === true,
       },
-      terminalPanel: {
-        width: Number.isFinite(terminalPanelWidth)
-          ? Math.min(720, Math.max(320, Math.floor(terminalPanelWidth)))
+      projectToolsPanel: {
+        width: Number.isFinite(projectToolsPanelWidth)
+          ? Math.min(720, Math.max(320, Math.floor(projectToolsPanelWidth)))
           : 420,
+        activeTab: projectToolsPanelActiveTab,
       },
     };
   }

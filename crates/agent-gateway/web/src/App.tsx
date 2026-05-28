@@ -21,7 +21,7 @@ import {
 import { registerLocalUploadedImagePreviews } from "@/lib/chat/uploadedImagePreview";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ProjectTerminalPanel } from "@/components/terminal/ProjectTerminalPanel";
+import { ProjectToolsPanel } from "@/components/project-tools/ProjectToolsPanel";
 import { LocaleContext, t as translate } from "@/i18n";
 import type {
   MentionComposerDraft,
@@ -784,7 +784,7 @@ export default function App() {
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   const [isFileDropActive, setIsFileDropActive] = useState(false);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
-  const [terminalPanelOpen, setTerminalPanelOpen] = useState(false);
+  const [projectToolsPanelOpen, setProjectToolsPanelOpen] = useState(false);
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
   const terminalSessionsVersionRef = useRef(0);
   const terminalStatusSessionIdRef = useRef("");
@@ -5947,19 +5947,19 @@ export default function App() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => setTerminalPanelOpen((open) => !open)}
-                    disabled={Boolean(terminalDisabledMessage) && !terminalPanelOpen}
-                    aria-expanded={terminalPanelOpen}
+                    onClick={() => setProjectToolsPanelOpen((open) => !open)}
+                    disabled={Boolean(terminalDisabledMessage) && !projectToolsPanelOpen}
+                    aria-expanded={projectToolsPanelOpen}
                     title={
-                      terminalPanelOpen
-                        ? "Collapse terminal panel"
-                        : (terminalDisabledMessage ?? "Expand terminal panel")
+                      projectToolsPanelOpen
+                        ? "Collapse project tools panel"
+                        : (terminalDisabledMessage ?? "Expand project tools panel")
                     }
-                    className={`gateway-terminal-panel-toggle relative h-8 w-8 rounded-lg text-muted-foreground transition-[background-color,color,transform] duration-150 hover:text-foreground active:scale-95 ${
-                      terminalPanelOpen ? "bg-muted text-foreground" : ""
+                    className={`gateway-project-tools-panel-toggle relative h-8 w-8 rounded-lg text-muted-foreground transition-[background-color,color,transform] duration-150 hover:text-foreground active:scale-95 ${
+                      projectToolsPanelOpen ? "bg-muted text-foreground" : ""
                     }`}
                   >
-                    {terminalPanelOpen ? (
+                    {projectToolsPanelOpen ? (
                       <PanelRightClose className="h-4.5 w-4.5" />
                     ) : (
                       <PanelRightOpen className="h-4.5 w-4.5" />
@@ -6223,26 +6223,42 @@ export default function App() {
         </main>
 
         {terminalClient ? (
-          <ProjectTerminalPanel
-            isOpen={terminalPanelOpen}
+          <ProjectToolsPanel
+            isOpen={projectToolsPanelOpen}
             projectPathKey={terminalProjectPathKey}
             cwd={terminalProjectPath}
             sessions={projectTerminalSessions}
-            width={settings.customSettings.terminalPanel.width}
+            width={settings.customSettings.projectToolsPanel.width}
             theme={settings.theme}
             disabledMessage={terminalDisabledMessage}
+            activeTab={settings.customSettings.projectToolsPanel.activeTab}
             client={terminalClient}
             onWidthChange={(nextWidth) =>
               setSettings((prev) =>
                 updateCustomSettings(prev, {
-                  terminalPanel: {
+                  projectToolsPanel: {
+                    ...prev.customSettings.projectToolsPanel,
                     width: nextWidth,
                   },
                 }),
               )
             }
+            onActiveTabChange={(activeTab) =>
+              setSettings((prev) =>
+                updateCustomSettings(prev, {
+                  projectToolsPanel: {
+                    ...prev.customSettings.projectToolsPanel,
+                    activeTab,
+                  },
+                }),
+              )
+            }
             onSessionsChange={handleProjectTerminalSessionsChange}
-            onClose={() => setTerminalPanelOpen(false)}
+            onInsertFileMention={(path, kind) => {
+              composerRef.current?.insertFileMention(path, kind);
+              composerRef.current?.focus();
+            }}
+            onClose={() => setProjectToolsPanelOpen(false)}
           />
         ) : null}
 
