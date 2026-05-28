@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import iconSimpleUrl from "../../../src-tauri/icons/icon-simple.png";
+import { MacOsTitleBarSpacer, isMacOsTauri } from "../MacOsTitleBarSpacer";
 import { useLocale } from "../../i18n";
 import type { ChatHistorySummary } from "../../lib/chat/history/chatHistory";
 import {
@@ -922,6 +923,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       )}
     >
       <div className="chat-history-sidebar-inner flex w-[272px] min-w-[272px] min-h-0 flex-1 flex-col">
+        <MacOsTitleBarSpacer className="bg-[hsl(var(--sidebar-bg))]" />
         <div className="shrink-0 border-b border-border/50 px-3 pb-3 pt-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2.5">
@@ -937,16 +939,18 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
               </div>
             </div>
 
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={onCloseSidebar}
-              title={t("sidebar.closeSidebar")}
-              className="h-9 w-9 shrink-0 rounded-2xl text-muted-foreground hover:text-foreground"
-            >
-              <PanelLeftClose className="h-4 w-4" />
-            </Button>
+            {!isMacOsTauri() && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onCloseSidebar}
+                title={t("sidebar.closeSidebar")}
+                className="h-9 w-9 shrink-0 rounded-2xl text-muted-foreground hover:text-foreground"
+              >
+                <PanelLeftClose className="h-4 w-4" />
+              </Button>
+            )}
           </div>
 
           <div className="mt-3 flex flex-col gap-1">

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MacOsTitleBarSpacer, MacOsTitleBarToggle } from "../components/MacOsTitleBarSpacer";
 import { ChatHistorySidebar } from "../components/chat/ChatHistorySidebar";
 import { HistoryShareModal } from "../components/chat/HistoryShareModal";
 import type {
@@ -3347,6 +3348,10 @@ export function ChatPage(props: ChatPageProps) {
     setSidebarOpen(false);
   }, []);
 
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarOpen((prev) => !prev);
+  }, []);
+
   const handleNewConversation = useCallback(() => {
     setHistorySwitchOverlay(null);
     clearCachedComposerDraft();
@@ -3902,6 +3907,7 @@ export function ChatPage(props: ChatPageProps) {
 
   return (
     <div className="flex h-full min-h-0">
+      <MacOsTitleBarToggle sidebarOpen={sidebarOpen} onToggle={handleToggleSidebar} onOpenSettings={() => onOpenSettings()} />
       {/* ---- Sidebar ---- */}
       <ChatHistorySidebar
         items={historyItems}
@@ -4024,6 +4030,7 @@ export function ChatPage(props: ChatPageProps) {
           />
         ) : (
           <>
+            <MacOsTitleBarSpacer />
             <div className="relative z-20">
               <ChatHeader
                 settings={settings}
