@@ -32,6 +32,7 @@ export function McpHubPage(props: McpHubPageProps) {
   const serverCount = settings.mcp.servers.length;
   const enabledCount = settings.mcp.servers.filter((server) => server.enabled).length;
   const ready = serverCount > 0;
+  const statusHint = ready ? null : t("mcpHub.statusEmptyDesc");
 
   function openAdd() {
     setView("installed");
@@ -118,9 +119,11 @@ export function McpHubPage(props: McpHubPageProps) {
                         </span>
                       ) : null}
                     </div>
-                    <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                      {ready ? t("mcpHub.statusReadyDesc") : t("mcpHub.statusEmptyDesc")}
-                    </div>
+                    {statusHint ? (
+                      <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                        {statusHint}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 

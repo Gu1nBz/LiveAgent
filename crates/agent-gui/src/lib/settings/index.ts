@@ -1787,6 +1787,43 @@ export function updateCustomSettings(
   });
 }
 
+function hasProjectToolsFileTreeSessionState(state: ProjectToolsFileTreeSettings): boolean {
+  return (
+    state.openVersion > 0 ||
+    state.openProjectPathKeys.length > 0 ||
+    Object.keys(state.projects).length > 0
+  );
+}
+
+function hasProjectToolsGitReviewSessionState(state: ProjectToolsGitReviewSettings): boolean {
+  return state.openVersion > 0 || state.openProjectPathKeys.length > 0;
+}
+
+export function preserveProjectToolsSessionState(
+  next: AppSettings,
+  current: AppSettings,
+): AppSettings {
+  const currentFileTree = normalizeProjectToolsFileTreeSettings(
+    current.customSettings.projectToolsFileTree,
+  );
+  const currentGitReview = normalizeProjectToolsGitReviewSettings(
+    current.customSettings.projectToolsGitReview,
+  );
+
+  return normalizeSettings({
+    ...next,
+    customSettings: {
+      ...next.customSettings,
+      projectToolsFileTree: hasProjectToolsFileTreeSessionState(currentFileTree)
+        ? currentFileTree
+        : next.customSettings.projectToolsFileTree,
+      projectToolsGitReview: hasProjectToolsGitReviewSessionState(currentGitReview)
+        ? currentGitReview
+        : next.customSettings.projectToolsGitReview,
+    },
+  });
+}
+
 export function getProjectToolsPanelTabOrder(
   customSettings: CustomSettings,
   projectPathKey: string,

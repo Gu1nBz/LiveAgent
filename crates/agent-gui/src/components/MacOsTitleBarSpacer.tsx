@@ -14,12 +14,7 @@ export function isMacOsTauri(): boolean {
 export function MacOsTitleBarSpacer({ className }: { className?: string }) {
   const [show] = useState(isMacOsTauri);
   if (!show) return null;
-  return (
-    <div
-      data-tauri-drag-region
-      className={cn("h-[38px] shrink-0", className)}
-    />
-  );
+  return <div data-tauri-drag-region className={cn("h-[38px] shrink-0", className)} />;
 }
 
 /**
@@ -38,25 +33,21 @@ export function MacOsTitleBarToggle({
   const [show] = useState(isMacOsTauri);
   if (!show) return null;
   return (
-    <div className="fixed left-[82px] top-[4px] z-49 flex h-[32px] items-center gap-0.5">
+    <div className="fixed left-[92px] top-0 z-49 flex h-[32px] items-center gap-0.5 [-webkit-app-region:no-drag]">
       <button
         type="button"
         onClick={onToggle}
-        className="flex cursor-pointer size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground [-webkit-app-region:no-drag]"
       >
-        {sidebarOpen ? (
-          <PanelLeftClose className="h-3.5 w-3.5" />
-        ) : (
-          <PanelLeft className="h-3.5 w-3.5" />
-        )}
+        {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
       </button>
       {onOpenSettings && (
         <button
           type="button"
           onClick={onOpenSettings}
-          className="flex cursor-pointer size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="-ml-1 flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground [-webkit-app-region:no-drag]"
         >
-          <Settings className="h-3.5 w-3.5" />
+          <Settings className="h-4 w-4" />
         </button>
       )}
     </div>
@@ -70,10 +61,5 @@ export function MacOsTitleBarToggle({
 export function MacOsTitleBarLeadingInset({ className }: { className?: string }) {
   const [show] = useState(isMacOsTauri);
   if (!show) return null;
-  return (
-    <div
-      data-tauri-drag-region
-      className={cn("w-[88px] shrink-0", className)}
-    />
-  );
+  return <div data-tauri-drag-region className={cn("w-[88px] shrink-0", className)} />;
 }

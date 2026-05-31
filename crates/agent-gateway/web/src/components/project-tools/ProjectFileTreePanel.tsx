@@ -750,9 +750,16 @@ export function ProjectFileTreePanel(props: {
 
   if (!initialized) {
     return (
-      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center">
-        <FolderOpen className="h-8 w-8 text-muted-foreground" />
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-4 px-6 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted/80">
+          <FolderOpen className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <div className="text-sm font-medium text-foreground">{t("projectTools.newFileTree")}</div>
+          <div className="text-xs text-muted-foreground">{t("projectTools.fileTreeDescription")}</div>
+        </div>
         <Button
+          size="sm"
           onClick={() => {
             onInitializedChange(true);
             void loadChildren(ROOT_PATH, { force: true });
@@ -773,7 +780,7 @@ export function ProjectFileTreePanel(props: {
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
             placeholder={t("projectTools.fileTree.searchPlaceholder")}
-            className="h-8 pl-7 text-xs placeholder:text-[11px]"
+            className="h-8 pl-7 text-xs"
           />
         </div>
         <Button

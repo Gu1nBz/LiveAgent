@@ -9,6 +9,7 @@ import {
   type AppSettings,
   getDefaultSettings,
   normalizeSettings,
+  preserveProjectToolsSessionState,
   resolveWorkspaceProjects,
 } from "./lib/settings";
 import {
@@ -42,12 +43,10 @@ const GATEWAY_SETTINGS_SYNC_EVENT = "gateway:settings-sync";
 
 function AppChrome(props: { children: ReactNode }) {
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[hsl(220_13%_91%)] dark:bg-[hsl(224_22%_5%)]">
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
       <WindowsTitleBar />
-      <div className="relative min-h-0 flex-1 p-1.5">
-        <div className="relative h-full w-full overflow-hidden rounded-xl bg-background shadow-[0_0_0_0.5px_hsl(var(--border)/0.6)]">
-          {props.children}
-        </div>
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-background">
+        {props.children}
       </div>
     </div>
   );
@@ -197,7 +196,10 @@ export default function App() {
     await saveChainRef.current.catch(() => undefined);
     const { settings: loaded, defaultWorkdir } = await loadPersistedSettingsWithDefaults();
     defaultWorkdirRef.current = defaultWorkdir;
-    setSettingsState(applyRuntimeSystemDefaults(loaded, defaultWorkdir));
+    const loadedWithDefaults = applyRuntimeSystemDefaults(loaded, defaultWorkdir);
+    setSettingsState((current) =>
+      preserveProjectToolsSessionState(loadedWithDefaults, current),
+    );
     setSettingsSaveState({ status: "saved" });
   }, []);
 

@@ -98,6 +98,7 @@ const PROJECT_HEADER_BUTTON_CLASS =
   "transition-colors hover:!bg-foreground/[0.06] hover:text-foreground active:!bg-foreground/[0.1] focus-visible:!bg-foreground/[0.08] focus-visible:ring-2 focus-visible:ring-ring";
 const PROJECT_ICON_BUTTON_CLASS =
   "h-7 w-7 rounded-lg text-muted-foreground transition-colors hover:!bg-foreground/[0.08] hover:text-foreground active:!bg-foreground/[0.1] focus-visible:!bg-foreground/[0.08] data-[state=open]:!bg-foreground/[0.08] data-[state=open]:text-foreground";
+const SIDEBAR_SECTION_TRANSITION_MS = 200;
 const SIDEBAR_SECTION_TRANSITION_CLASS =
   "overflow-hidden transition-[flex-grow,flex-basis,opacity,border-color] duration-200 ease-out motion-reduce:transition-none";
 const SIDEBAR_COLLAPSIBLE_PANEL_CLASS =
@@ -106,6 +107,8 @@ const SIDEBAR_COLLAPSIBLE_CONTENT_CLASS =
   "min-h-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none";
 const SIDEBAR_SECTION_CHEVRON_CLASS =
   "h-3.5 w-3.5 shrink-0 transition-transform duration-200 ease-out motion-reduce:transition-none";
+const SIDEBAR_PROJECTS_RESIZE_MIN_HEIGHT = 92;
+const SIDEBAR_RECENT_RESIZE_MIN_HEIGHT = 156;
 const EMPTY_PROJECT_PATH_KEYS = new Set<string>();
 const EMPTY_PROJECT_ACTIVITY_UPDATED_ATS = new Map<string, number>();
 const HISTORY_LOADING_SKELETON_ROWS = [
@@ -115,6 +118,10 @@ const HISTORY_LOADING_SKELETON_ROWS = [
   { title: "w-40", meta: "w-28" },
   { title: "w-28", meta: "w-20" },
 ] as const;
+
+function clampSidebarSectionHeight(height: number, minHeight: number, maxHeight: number) {
+  return Math.round(Math.min(Math.max(height, minHeight), Math.max(minHeight, maxHeight)));
+}
 
 function useStableEvent<Args extends unknown[], Return>(
   handler: (...args: Args) => Return,
@@ -145,8 +152,8 @@ const HistoryRow = memo(function HistoryRow(props: {
   onDeleteConversation: (id: string) => void;
   onSetPendingDelete: (id: string | null) => void;
 }) {
-  const {
-    item,
+	  const {
+	    item,
     isActive,
     isBusy,
     isRunning,
@@ -162,11 +169,12 @@ const HistoryRow = memo(function HistoryRow(props: {
     onCancelRename,
     onSetPinned,
     onShareConversation,
-    onDeleteConversation,
-    onSetPendingDelete,
-  } = props;
+	    onDeleteConversation,
+	    onSetPendingDelete,
+	  } = props;
+	  const { t } = useLocale();
 
-  const inputRef = useRef<HTMLInputElement | null>(null);
+	  const inputRef = useRef<HTMLInputElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   const handleSelect = useCallback(() => {
@@ -204,13 +212,15 @@ const HistoryRow = memo(function HistoryRow(props: {
     inputRef.current?.select();
   }, [isRenaming]);
 
-  if (isPendingDelete) {
-    return (
-      <div className="chat-history-row rounded-2xl border border-border/70 bg-background px-3 py-2.5 shadow-xs shadow-black/5">
-        <p className="truncate text-sm leading-5 text-foreground/80">
-          删除「<span className="font-medium text-foreground">{item.title}</span>」？
-        </p>
-        <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">此操作无法撤销</p>
+	  if (isPendingDelete) {
+	    return (
+	      <div className="chat-history-row rounded-2xl border border-border/70 bg-background px-3 py-2.5 shadow-xs shadow-black/5">
+	        <p className="truncate text-sm leading-5 text-foreground/80">
+	          {t("chat.conversationDeleteConfirm").replace("{title}", item.title)}
+	        </p>
+	        <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+	          {t("chat.conversationDeleteWarning")}
+	        </p>
         <div className="mt-2 grid grid-cols-2 gap-1.5">
           <Button
             type="button"
@@ -219,7 +229,7 @@ const HistoryRow = memo(function HistoryRow(props: {
             onClick={handleCancelDelete}
             className="h-7 rounded-xl border-border/60 text-xs font-normal text-muted-foreground hover:text-foreground"
           >
-            取消
+	            {t("chat.cancel")}
           </Button>
           <Button
             type="button"
@@ -228,7 +238,7 @@ const HistoryRow = memo(function HistoryRow(props: {
             disabled={isBusy || isDeleteDisabled}
             className="h-7 rounded-xl bg-destructive text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
           >
-            删除
+	            {t("chat.delete")}
           </Button>
         </div>
       </div>
@@ -288,8 +298,8 @@ const HistoryRow = memo(function HistoryRow(props: {
               <span
                 role="img"
                 className="flex h-8 w-3.5 shrink-0 items-center justify-center text-primary/75"
-                aria-label="已置顶"
-                title="已置顶"
+	                aria-label={t("chat.statusPinned")}
+	                title={t("chat.statusPinned")}
               >
                 <Pin className="h-3.5 w-3.5" />
               </span>
@@ -299,8 +309,8 @@ const HistoryRow = memo(function HistoryRow(props: {
               <span
                 role="img"
                 className="flex h-8 w-3.5 shrink-0 items-center justify-center text-sky-500/80"
-                aria-label="已分享"
-                title="已分享"
+	                aria-label={t("chat.statusShared")}
+	                title={t("chat.statusShared")}
               >
                 <Link2 className="h-3.5 w-3.5" />
               </span>
@@ -310,8 +320,8 @@ const HistoryRow = memo(function HistoryRow(props: {
               <span
                 role="img"
                 className="relative flex h-8 w-3.5 shrink-0 items-center justify-center"
-                aria-label="正在回复"
-                title="正在回复"
+	                aria-label={t("chat.statusRunningReply")}
+	                title={t("chat.statusRunningReply")}
               >
                 <span className="absolute h-2 w-2 rounded-full bg-emerald-400/45 animate-ping" />
                 <span className="relative h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.14)]" />
@@ -325,8 +335,8 @@ const HistoryRow = memo(function HistoryRow(props: {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    title="更多操作"
-                    aria-label="更多操作"
+	                    title={t("chat.conversationMore")}
+	                    aria-label={t("chat.conversationMore")}
                     onPointerDown={(e: React.PointerEvent<HTMLButtonElement>) =>
                       e.stopPropagation()
                     }
@@ -357,18 +367,18 @@ const HistoryRow = memo(function HistoryRow(props: {
                     ) : (
                       <Pin className="h-3.5 w-3.5" />
                     )}
-                    {item.isPinned ? "取消置顶" : "置顶对话"}
+	                    {item.isPinned ? t("chat.conversationUnpin") : t("chat.conversationPin")}
                   </DropdownMenuItem>
                 ) : null}
                 {canShareConversation && !item.isPending ? (
                   <DropdownMenuItem onSelect={handleShare} className="gap-2">
                     <Share2 className="h-3.5 w-3.5" />
-                    分享
+	                    {t("chat.conversationShare")}
                   </DropdownMenuItem>
                 ) : null}
                 <DropdownMenuItem onSelect={handleStartRenaming} className="gap-2">
                   <Edit3 className="h-3.5 w-3.5" />
-                  修改标题
+	                  {t("chat.conversationRename")}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={isDeleteDisabled}
@@ -376,7 +386,7 @@ const HistoryRow = memo(function HistoryRow(props: {
                   className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                  删除对话
+	                  {t("chat.conversationDelete")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -423,6 +433,7 @@ const ProjectRow = memo(function ProjectRow(props: {
     onRemoveProject,
     onSetPendingRemove,
   } = props;
+  const { t } = useLocale();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const skipNextBlurCommitRef = useRef(false);
   const isDefaultProject = project.id === DEFAULT_WORKSPACE_PROJECT_ID;
@@ -456,12 +467,10 @@ const ProjectRow = memo(function ProjectRow(props: {
     return (
       <div className="rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2.5 text-sm text-destructive shadow-xs shadow-black/5">
         <p className="truncate font-medium leading-5 text-destructive">
-          移除「{project.name}」？
+          {t("chat.workspaceRemoveConfirm").replace("{name}", project.name)}
         </p>
         <p className="mt-0.5 text-[11px] leading-4 text-destructive/75">
-          {isRunning
-            ? "后台任务运行中，暂时不能移除。"
-            : "会删除此项目下的历史对话，不会删除文件夹。"}
+          {isRunning ? t("chat.workspaceRemoveRunning") : t("chat.workspaceRemoveDescription")}
         </p>
         <div className="mt-2 grid grid-cols-2 gap-1.5">
           <Button
@@ -471,7 +480,7 @@ const ProjectRow = memo(function ProjectRow(props: {
             onClick={handleCancelRemove}
             className="h-7 rounded-xl border-border/60 bg-background text-xs font-normal text-muted-foreground hover:text-foreground"
           >
-            取消
+            {t("chat.cancel")}
           </Button>
           <Button
             type="button"
@@ -480,7 +489,7 @@ const ProjectRow = memo(function ProjectRow(props: {
             disabled={isRunning}
             className="h-7 rounded-xl bg-destructive text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
           >
-            移除
+            {t("chat.remove")}
           </Button>
         </div>
       </div>
@@ -582,8 +591,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                 <span
                   role="img"
                   className="relative flex h-2 w-2 shrink-0 items-center justify-center"
-                  aria-label="正在回复"
-                  title="正在回复"
+                  aria-label={t("chat.statusRunningReply")}
+                  title={t("chat.statusRunningReply")}
                 >
                   <span className="absolute h-2 w-2 rounded-full bg-emerald-400/45 animate-ping" />
                   <span className="relative h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.14)]" />
@@ -593,8 +602,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                 <span
                   role="img"
                   className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-primary/75"
-                  aria-label="已置顶"
-                  title="已置顶"
+                  aria-label={t("chat.statusPinned")}
+                  title={t("chat.statusPinned")}
                 >
                   <Pin className="h-3 w-3" />
                 </span>
@@ -632,8 +641,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                   PROJECT_ICON_BUTTON_CLASS,
                   "text-destructive hover:!bg-destructive/10 hover:text-destructive",
                 )}
-                title="移除项目"
-                aria-label="移除项目"
+                title={t("chat.workspaceRemove")}
+                aria-label={t("chat.workspaceRemove")}
                 onClick={handleRequestRemove}
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -646,8 +655,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                 variant="ghost"
                 size="icon"
                 className={PROJECT_ICON_BUTTON_CLASS}
-                title="新对话"
-                aria-label="新对话"
+                title={t("chat.workspaceNewConversation")}
+                aria-label={t("chat.workspaceNewConversation")}
                 onClick={() => onNewConversationForProject(project)}
               >
                 <SquarePen className="h-3.5 w-3.5" />
@@ -660,8 +669,8 @@ const ProjectRow = memo(function ProjectRow(props: {
                       variant="ghost"
                       size="icon"
                       className={PROJECT_ICON_BUTTON_CLASS}
-                      title="更多"
-                      aria-label="更多"
+                      title={t("chat.workspaceMore")}
+                      aria-label={t("chat.workspaceMore")}
                     />
                   }
                 >
@@ -674,7 +683,7 @@ const ProjectRow = memo(function ProjectRow(props: {
                     ) : (
                       <Pin className="h-3.5 w-3.5" />
                     )}
-                    {isPinned ? "取消置顶" : "置顶项目"}
+                    {isPinned ? t("chat.workspaceUnpin") : t("chat.workspacePin")}
                   </DropdownMenuItem>
                   {!isDefaultProject ? (
                     <>
@@ -683,14 +692,14 @@ const ProjectRow = memo(function ProjectRow(props: {
                         className="gap-2"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
-                        修改标题
+                        {t("chat.workspaceRename")}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onSelect={handleRequestRemove}
                         className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                        移除项目
+                        {t("chat.workspaceRemove")}
                       </DropdownMenuItem>
                     </>
                   ) : null}
@@ -705,19 +714,21 @@ const ProjectRow = memo(function ProjectRow(props: {
 });
 
 function HistoryListLoadingSkeleton() {
+  const { t } = useLocale();
+
   return (
     <div
       className="space-y-1.5 pt-1"
       role="status"
       aria-live="polite"
-      aria-label="正在读取历史记录"
+      aria-label={t("sidebar.readingHistory")}
     >
       <div className="flex items-center gap-2 px-2 pb-1 text-[11px] font-medium text-muted-foreground/75">
         <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/35 opacity-75" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-primary/70" />
         </span>
-        <span>正在读取历史记录...</span>
+        <span>{t("sidebar.readingHistory")}</span>
       </div>
       {HISTORY_LOADING_SKELETON_ROWS.map((row) => (
         <div key={`${row.title}-${row.meta}`} className="rounded-lg px-2 py-2.5">
@@ -817,6 +828,16 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
 
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [pendingProjectRemoveId, setPendingProjectRemoveId] = useState<string | null>(null);
+  const [projectSectionHeight, setProjectSectionHeight] = useState<number | null>(null);
+  const [sidebarSectionsContainerHeight, setSidebarSectionsContainerHeight] = useState(0);
+  const [isProjectSectionResizing, setIsProjectSectionResizing] = useState(false);
+  const [isRecentCollapseLayoutSettled, setIsRecentCollapseLayoutSettled] =
+    useState(recentCollapsed);
+  const sidebarSectionsRef = useRef<HTMLDivElement | null>(null);
+  const projectsSectionRef = useRef<HTMLDivElement | null>(null);
+  const projectSectionResizeFrameRef = useRef<number | null>(null);
+  const pendingProjectSectionHeightRef = useRef<number | null>(null);
+  const projectSectionResizeCleanupRef = useRef<(() => void) | null>(null);
   const handleSelectConversation = useStableEvent(onSelectConversation);
   const handleStartRenaming = useStableEvent(onStartRenaming);
   const handleRenameDraftChange = useStableEvent(onRenameDraftChange);
@@ -860,6 +881,35 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       runningProjectPathKeys,
     });
   }, [projectActivityUpdatedAts, projects, runningProjectPathKeys]);
+  const canResizeProjectSections = showProjects && !projectsCollapsed && !recentCollapsed;
+  const maxProjectSectionHeight =
+    sidebarSectionsContainerHeight > 0
+      ? Math.max(
+          SIDEBAR_PROJECTS_RESIZE_MIN_HEIGHT,
+          sidebarSectionsContainerHeight - SIDEBAR_RECENT_RESIZE_MIN_HEIGHT,
+        )
+      : SIDEBAR_PROJECTS_RESIZE_MIN_HEIGHT;
+  const effectiveProjectSectionHeight =
+    projectSectionHeight === null
+      ? null
+      : clampSidebarSectionHeight(
+          projectSectionHeight,
+          SIDEBAR_PROJECTS_RESIZE_MIN_HEIGHT,
+          maxProjectSectionHeight,
+        );
+  const activeProjectSectionHeight = isProjectSectionResizing
+    ? pendingProjectSectionHeightRef.current ?? effectiveProjectSectionHeight
+    : effectiveProjectSectionHeight;
+  const hasCustomProjectSectionHeight =
+    canResizeProjectSections && activeProjectSectionHeight !== null;
+  const shouldExpandProjectSectionForCollapsedRecent =
+    showProjects && !projectsCollapsed && recentCollapsed && isRecentCollapseLayoutSettled;
+  const shouldUseProjectSectionAvailableHeight = hasCustomProjectSectionHeight;
+  const shouldStretchProjectSection =
+    shouldUseProjectSectionAvailableHeight || shouldExpandProjectSectionForCollapsedRecent;
+  const projectsSectionStyle = hasCustomProjectSectionHeight
+    ? { flexBasis: `${activeProjectSectionHeight}px` }
+    : undefined;
   const historyScrollRef = useRef<HTMLDivElement | null>(null);
   const getHistoryItemKey = useCallback((index: number) => items[index]?.id ?? index, [items]);
   const historyVirtualizer = useVirtualizer({
@@ -896,6 +946,19 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   ]);
 
   useEffect(() => {
+    if (!recentCollapsed) {
+      setIsRecentCollapseLayoutSettled(false);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsRecentCollapseLayoutSettled(true);
+    }, SIDEBAR_SECTION_TRANSITION_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [recentCollapsed]);
+
+  useEffect(() => {
     if (!pendingProjectRemoveId) {
       return;
     }
@@ -903,6 +966,167 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       setPendingProjectRemoveId(null);
     }
   }, [pendingProjectRemoveId, projects]);
+
+  useEffect(() => {
+    if (!isOpen || !showProjects) {
+      setSidebarSectionsContainerHeight(0);
+      return;
+    }
+
+    const container = sidebarSectionsRef.current;
+    if (!container) {
+      return;
+    }
+
+    let frameId = 0;
+    const updateHeight = () => {
+      frameId = 0;
+      setSidebarSectionsContainerHeight(container.clientHeight);
+    };
+    const scheduleUpdate = () => {
+      if (frameId !== 0) {
+        return;
+      }
+      frameId = window.requestAnimationFrame(updateHeight);
+    };
+
+    scheduleUpdate();
+    window.addEventListener("resize", scheduleUpdate);
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleUpdate);
+    resizeObserver?.observe(container);
+
+    return () => {
+      window.removeEventListener("resize", scheduleUpdate);
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
+      resizeObserver?.disconnect();
+    };
+  }, [isOpen, projectsCollapsed, recentCollapsed, showProjects]);
+
+  useEffect(() => {
+    return () => {
+      projectSectionResizeCleanupRef.current?.();
+      if (projectSectionResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(projectSectionResizeFrameRef.current);
+      }
+    };
+  }, []);
+
+  const handleProjectSectionResizeStart = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0 || !canResizeProjectSections) {
+        return;
+      }
+
+      const projectsSection = projectsSectionRef.current;
+      const sidebarSections = sidebarSectionsRef.current;
+      if (!projectsSection || !sidebarSections) {
+        return;
+      }
+
+      event.preventDefault();
+      projectSectionResizeCleanupRef.current?.();
+
+      const pointerId = event.pointerId;
+      const resizeTarget = event.currentTarget;
+      const startY = event.clientY;
+      const containerHeight = sidebarSections.clientHeight;
+      const startHeight = clampSidebarSectionHeight(
+        projectsSection.getBoundingClientRect().height,
+        SIDEBAR_PROJECTS_RESIZE_MIN_HEIGHT,
+        Math.max(
+          SIDEBAR_PROJECTS_RESIZE_MIN_HEIGHT,
+          containerHeight - SIDEBAR_RECENT_RESIZE_MIN_HEIGHT,
+        ),
+      );
+      const previousCursor = document.body.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+
+      pendingProjectSectionHeightRef.current = startHeight;
+      setIsProjectSectionResizing(true);
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+      projectsSection.style.flexBasis = `${startHeight}px`;
+      resizeTarget.setPointerCapture(pointerId);
+
+      const scheduleProjectSectionHeight = (nextHeight: number) => {
+        pendingProjectSectionHeightRef.current = nextHeight;
+        if (projectSectionResizeFrameRef.current !== null) {
+          return;
+        }
+        projectSectionResizeFrameRef.current = window.requestAnimationFrame(() => {
+          projectSectionResizeFrameRef.current = null;
+          const draftHeight = pendingProjectSectionHeightRef.current ?? startHeight;
+          projectsSection.style.flexBasis = `${draftHeight}px`;
+        });
+      };
+
+      const cleanupResize = () => {
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleUp);
+        window.removeEventListener("blur", handleBlur);
+        if (resizeTarget.hasPointerCapture(pointerId)) {
+          resizeTarget.releasePointerCapture(pointerId);
+        }
+        document.body.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+        projectSectionResizeCleanupRef.current = null;
+      };
+
+      const finishResize = () => {
+        cleanupResize();
+        if (projectSectionResizeFrameRef.current !== null) {
+          window.cancelAnimationFrame(projectSectionResizeFrameRef.current);
+          projectSectionResizeFrameRef.current = null;
+        }
+        const finalHeight = pendingProjectSectionHeightRef.current ?? startHeight;
+        projectsSection.style.flexBasis = `${finalHeight}px`;
+        setProjectSectionHeight(finalHeight);
+        setIsProjectSectionResizing(false);
+        pendingProjectSectionHeightRef.current = null;
+      };
+
+      const handleMove = (moveEvent: globalThis.PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) {
+          return;
+        }
+        moveEvent.preventDefault();
+        const nextContainerHeight = sidebarSectionsRef.current?.clientHeight ?? containerHeight;
+        const nextMaxHeight = Math.max(
+          SIDEBAR_PROJECTS_RESIZE_MIN_HEIGHT,
+          nextContainerHeight - SIDEBAR_RECENT_RESIZE_MIN_HEIGHT,
+        );
+        scheduleProjectSectionHeight(
+          clampSidebarSectionHeight(
+            startHeight + moveEvent.clientY - startY,
+            SIDEBAR_PROJECTS_RESIZE_MIN_HEIGHT,
+            nextMaxHeight,
+          ),
+        );
+      };
+
+      const handleUp = (upEvent: globalThis.PointerEvent) => {
+        if (upEvent.pointerId !== pointerId) {
+          return;
+        }
+        finishResize();
+      };
+
+      const handleBlur = () => {
+        finishResize();
+      };
+
+      projectSectionResizeCleanupRef.current = cleanupResize;
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleUp);
+      window.addEventListener("blur", handleBlur);
+    },
+    [canResizeProjectSections],
+  );
 
   const renderHistoryRow = useCallback(
     (item: ChatHistorySummary) => (
@@ -1045,213 +1269,258 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
           </div>
         </div>
 
-        {showProjects ? (
+      <div ref={sidebarSectionsRef} className="flex min-h-0 flex-1 flex-col">
+          {showProjects ? (
+            <div
+              ref={projectsSectionRef}
+              style={projectsSectionStyle}
+              className={cn(
+                "flex min-h-0 flex-col overflow-hidden border-b border-border/35 px-2 pb-1.5 pt-2",
+                shouldExpandProjectSectionForCollapsedRecent ? "basis-0 flex-1" : "shrink-0",
+                isProjectSectionResizing || shouldExpandProjectSectionForCollapsedRecent
+                  ? "transition-none motion-reduce:transition-none"
+                  : SIDEBAR_SECTION_TRANSITION_CLASS,
+              )}
+            >
+              <div className="flex shrink-0 items-center justify-between px-1 pb-1">
+                <button
+                  type="button"
+                  aria-expanded={!projectsCollapsed}
+                  className={cn(
+                    "flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground outline-hidden",
+                    PROJECT_HEADER_BUTTON_CLASS,
+                  )}
+                  onClick={() => onProjectsCollapsedChange?.(!projectsCollapsed)}
+                >
+                  <ChevronRight
+                    className={cn(SIDEBAR_SECTION_CHEVRON_CLASS, !projectsCollapsed && "rotate-90")}
+                  />
+                  {t("chat.workspaceSection")}
+                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={PROJECT_ICON_BUTTON_CLASS}
+                        title={t("chat.workspaceCreate")}
+                        aria-label={t("chat.workspaceCreate")}
+                      />
+                    }
+                  >
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="right" align="start" sideOffset={6}>
+                    {onCreateProject ? (
+                      <DropdownMenuItem onSelect={() => onCreateProject()} className="gap-2">
+                        <Plus className="h-3.5 w-3.5" />
+                        {t("chat.workspaceCreate")}
+                      </DropdownMenuItem>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div
+                aria-hidden={projectsCollapsed}
+                inert={projectsCollapsed}
+                className={cn(
+                  SIDEBAR_COLLAPSIBLE_PANEL_CLASS,
+                  projectsCollapsed ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100",
+                  shouldStretchProjectSection && "flex-1",
+                )}
+              >
+                <div
+                  className={cn(
+                    "space-y-1 overflow-y-scroll overflow-x-hidden pr-1",
+                    shouldStretchProjectSection ? "h-full" : "max-h-[min(300px,36vh)]",
+                    SIDEBAR_COLLAPSIBLE_CONTENT_CLASS,
+                    projectsCollapsed
+                      ? "pointer-events-none -translate-y-1 opacity-0"
+                      : "translate-y-0 opacity-100",
+                  )}
+                >
+                  {renderedProjects.map((project) => {
+                    const pathKey = workspaceProjectPathKey(project.path);
+                    return (
+                      <ProjectRow
+                        key={project.id}
+                        project={project}
+                        isActive={activeProjectId === project.id}
+                        isMissing={missingProjectPathKeys.has(pathKey)}
+                        isRunning={runningProjectPathKeys.has(pathKey)}
+                        isRenaming={projectRenamingId === project.id}
+                        isPendingRemove={pendingProjectRemoveId === project.id}
+                        renameDraft={projectRenameDraft}
+                        onSelectProject={handleSelectProject}
+                        onNewConversationForProject={handleNewConversationForProject}
+                        onStartRenamingProject={handleStartRenamingProject}
+                        onProjectRenameDraftChange={handleProjectRenameDraftChange}
+                        onCommitProjectRename={handleCommitProjectRename}
+                        onCancelProjectRename={handleCancelProjectRename}
+                        onSetProjectPinned={handleSetProjectPinned}
+                        onRemoveProject={handleRemoveProject}
+                        onSetPendingRemove={setPendingProjectRemoveId}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {canResizeProjectSections ? (
+            <button
+              type="button"
+              aria-label={t("chat.resizeSidebarSections")}
+              title={t("chat.resizeSidebarSections")}
+              className={cn(
+                "group hidden h-3 shrink-0 cursor-row-resize touch-none items-center justify-center border-0 bg-transparent p-0 md:flex",
+                "focus-visible:outline-none",
+              )}
+              onPointerDown={handleProjectSectionResizeStart}
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "h-0.5 w-10 rounded-full bg-muted-foreground/25 opacity-70 shadow-sm transition-[width,background-color,opacity]",
+                  "group-hover:w-16 group-hover:bg-primary/60 group-hover:opacity-100 group-focus-visible:w-16 group-focus-visible:bg-primary group-focus-visible:opacity-100",
+                  isProjectSectionResizing && "w-20 bg-primary opacity-100",
+                )}
+              />
+            </button>
+          ) : null}
+
           <div
             className={cn(
-              "flex min-h-0 flex-col border-b border-border/35 px-2 py-2",
-              SIDEBAR_SECTION_TRANSITION_CLASS,
-              projectsCollapsed ? "shrink-0" : "basis-0 flex-[1]",
+              "flex min-h-0 flex-col",
+              shouldExpandProjectSectionForCollapsedRecent
+                ? "overflow-hidden transition-none motion-reduce:transition-none"
+                : SIDEBAR_SECTION_TRANSITION_CLASS,
+              shouldExpandProjectSectionForCollapsedRecent ? "shrink-0" : "basis-0 flex-1",
             )}
           >
-            <div className="flex shrink-0 items-center justify-between px-1 pb-1">
+            <div
+              className={cn(
+                "flex shrink-0 items-center justify-between px-3 pb-2",
+                showProjects ? "pt-1.5" : "pt-3",
+              )}
+            >
               <button
                 type="button"
-                aria-expanded={!projectsCollapsed}
-                className={cn(
-                  "flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground outline-hidden",
-                  PROJECT_HEADER_BUTTON_CLASS,
-                )}
-                onClick={() => onProjectsCollapsedChange?.(!projectsCollapsed)}
+                aria-expanded={!recentCollapsed}
+                className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => onRecentCollapsedChange?.(!recentCollapsed)}
               >
                 <ChevronRight
-                  className={cn(SIDEBAR_SECTION_CHEVRON_CLASS, !projectsCollapsed && "rotate-90")}
+                  className={cn(SIDEBAR_SECTION_CHEVRON_CLASS, !recentCollapsed && "rotate-90")}
                 />
-                项目
+                <MessageSquareText className="h-3.5 w-3.5" />
+                <span className="min-w-0 truncate">{t("chat.recentConversation")}</span>
               </button>
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className={PROJECT_ICON_BUTTON_CLASS}
-                      title="新建项目"
-                      aria-label="新建项目"
-                    />
-                  }
-                >
-                  <MoreHorizontal className="h-3.5 w-3.5" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent side="right" align="start" sideOffset={6}>
-                  {onCreateProject ? (
-                    <DropdownMenuItem onSelect={() => onCreateProject()} className="gap-2">
-                      <Plus className="h-3.5 w-3.5" />
-                      新建项目
-                    </DropdownMenuItem>
-                  ) : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <div className="flex items-center gap-1.5">
+                <div className="rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {Math.max(totalItems, items.length)}
+                </div>
+                {canShareConversations ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleOpenSharedConversations}
+                    className="h-7 w-7 rounded-full border border-border/50 bg-background/70 text-muted-foreground shadow-xs shadow-black/5 transition-colors hover:border-sky-500/25 hover:bg-sky-500/10 hover:text-sky-600 dark:hover:text-sky-400"
+                    title={t("chat.manageSharedConversations").replace(
+                      "{count}",
+                      String(sharedConversationCount),
+                    )}
+                    aria-label={t("chat.manageSharedConversations").replace(
+                      "{count}",
+                      String(sharedConversationCount),
+                    )}
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
+                  </Button>
+                ) : null}
+              </div>
             </div>
+
             <div
-              aria-hidden={projectsCollapsed}
-              inert={projectsCollapsed}
+              aria-hidden={recentCollapsed}
+              inert={recentCollapsed}
               className={cn(
                 SIDEBAR_COLLAPSIBLE_PANEL_CLASS,
-                projectsCollapsed
+                recentCollapsed
                   ? "grid-rows-[0fr] opacity-0"
                   : "grid-rows-[1fr] flex-1 opacity-100",
               )}
             >
               <div
                 className={cn(
-                  "space-y-1 overflow-y-auto overflow-x-hidden pr-1",
+                  "flex flex-col",
                   SIDEBAR_COLLAPSIBLE_CONTENT_CLASS,
-                  projectsCollapsed
+                  recentCollapsed
                     ? "pointer-events-none -translate-y-1 opacity-0"
                     : "translate-y-0 opacity-100",
                 )}
               >
-                {renderedProjects.map((project) => {
-                  const pathKey = workspaceProjectPathKey(project.path);
-                  return (
-                    <ProjectRow
-                      key={project.id}
-                      project={project}
-                      isActive={activeProjectId === project.id}
-                      isMissing={missingProjectPathKeys.has(pathKey)}
-                      isRunning={runningProjectPathKeys.has(pathKey)}
-                      isRenaming={projectRenamingId === project.id}
-                      isPendingRemove={pendingProjectRemoveId === project.id}
-                      renameDraft={projectRenameDraft}
-                      onSelectProject={handleSelectProject}
-                      onNewConversationForProject={handleNewConversationForProject}
-                      onStartRenamingProject={handleStartRenamingProject}
-                      onProjectRenameDraftChange={handleProjectRenameDraftChange}
-                      onCommitProjectRename={handleCommitProjectRename}
-                      onCancelProjectRename={handleCancelProjectRename}
-                      onSetProjectPinned={handleSetProjectPinned}
-                      onRemoveProject={handleRemoveProject}
-                      onSetPendingRemove={setPendingProjectRemoveId}
+                {errorMessage ? (
+                  <div className="shrink-0 px-3 pb-2">
+                    <SidebarStateCard
+                      title={t("chat.historyReadFailed")}
+                      description={errorMessage}
+                      tone="error"
                     />
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        <div
-          className={cn(
-            "flex min-h-0 flex-col",
-            SIDEBAR_SECTION_TRANSITION_CLASS,
-            recentCollapsed ? "shrink-0" : "basis-0 flex-[2]",
-          )}
-        >
-          <div className="flex shrink-0 items-center justify-between px-3 pb-2 pt-3">
-            <button
-              type="button"
-              aria-expanded={!recentCollapsed}
-              className="flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => onRecentCollapsedChange?.(!recentCollapsed)}
-            >
-              <ChevronRight
-                className={cn(SIDEBAR_SECTION_CHEVRON_CLASS, !recentCollapsed && "rotate-90")}
-              />
-              <MessageSquareText className="h-3.5 w-3.5" />
-              {t("chat.recentConversation")}
-            </button>
-            <div className="flex items-center gap-1.5">
-              <div className="rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                {Math.max(totalItems, items.length)}
-              </div>
-              {canShareConversations ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleOpenSharedConversations}
-                  className="h-7 w-7 rounded-full border border-border/50 bg-background/70 text-muted-foreground shadow-xs shadow-black/5 transition-colors hover:border-sky-500/25 hover:bg-sky-500/10 hover:text-sky-600 dark:hover:text-sky-400"
-                  title={`管理已分享会话（${sharedConversationCount}）`}
-                  aria-label={`管理已分享会话（${sharedConversationCount}）`}
-                >
-                  <Share2 className="h-3.5 w-3.5" />
-                </Button>
-              ) : null}
-            </div>
-          </div>
-
-          <div
-            aria-hidden={recentCollapsed}
-            inert={recentCollapsed}
-            className={cn(
-              SIDEBAR_COLLAPSIBLE_PANEL_CLASS,
-              recentCollapsed ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] flex-1 opacity-100",
-            )}
-          >
-            <div
-              className={cn(
-                "flex flex-col",
-                SIDEBAR_COLLAPSIBLE_CONTENT_CLASS,
-                recentCollapsed
-                  ? "pointer-events-none -translate-y-1 opacity-0"
-                  : "translate-y-0 opacity-100",
-              )}
-            >
-              {errorMessage ? (
-                <div className="shrink-0 px-3 pb-2">
-                  <SidebarStateCard
-                    title="历史记录读取失败"
-                    description={errorMessage}
-                    tone="error"
-                  />
-                </div>
-              ) : null}
-              <div
-                ref={historyScrollRef}
-                aria-busy={isLoading || isLoadingMore}
-                className="chat-history-list min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3"
-              >
-                {isLoading ? (
-                  <HistoryListLoadingSkeleton />
-                ) : items.length === 0 ? (
-                  <div className="flex flex-col items-center px-4 pt-8 pb-6 text-center">
-                    <MessageSquareText
-                      className="h-[22px] w-[22px] text-foreground/35"
-                      strokeWidth={1.5}
-                    />
-                    <p className="mt-3 text-[12.5px] font-medium tracking-tight text-foreground/70">
-                      {t("chat.emptyChatHistory")}
-                    </p>
-                    <p className="mt-1 text-[11.5px] leading-[1.55] text-muted-foreground/70">
-                      {t("chat.clickNewConversation")}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="relative" style={{ height: historyVirtualizer.getTotalSize() }}>
-                    {virtualHistoryRows.map((virtualRow) => {
-                      const item = items[virtualRow.index];
-                      if (!item) return null;
-
-                      return (
-                        <div
-                          key={virtualRow.key}
-                          data-index={virtualRow.index}
-                          ref={historyVirtualizer.measureElement}
-                          className="absolute left-0 right-1 top-0 pb-1.5"
-                          style={{ transform: `translateY(${virtualRow.start}px)` }}
-                        >
-                          {renderHistoryRow(item)}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {!isLoading && items.length > 0 && (hasMore || isLoadingMore) ? (
-                  <div className="px-2 pb-2 pt-1 text-center text-[11px] leading-5 text-muted-foreground/70">
-                    {isLoadingMore ? "正在加载更多历史记录..." : "继续滚动加载更多"}
                   </div>
                 ) : null}
+                <div
+                  ref={historyScrollRef}
+                  aria-busy={isLoading || isLoadingMore}
+                  className="chat-history-list min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3"
+                >
+                  {isLoading ? (
+                    <HistoryListLoadingSkeleton />
+                  ) : items.length === 0 ? (
+                    <div className="flex flex-col items-center px-4 pt-8 pb-6 text-center">
+                      <MessageSquareText
+                        className="h-[22px] w-[22px] text-foreground/35"
+                        strokeWidth={1.5}
+                      />
+                      <p className="mt-3 text-[12.5px] font-medium tracking-tight text-foreground/70">
+                        {t("chat.emptyChatHistory")}
+                      </p>
+                      <p className="mt-1 text-[11.5px] leading-[1.55] text-muted-foreground/70">
+                        {t("chat.clickNewConversation")}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="relative" style={{ height: historyVirtualizer.getTotalSize() }}>
+                      {virtualHistoryRows.map((virtualRow) => {
+                        const item = items[virtualRow.index];
+                        if (!item) return null;
+
+                        return (
+                          <div
+                            key={virtualRow.key}
+                            data-index={virtualRow.index}
+                            ref={historyVirtualizer.measureElement}
+                            className="absolute left-0 right-1 top-0 pb-1.5"
+                            style={{ transform: `translateY(${virtualRow.start}px)` }}
+                          >
+                            {renderHistoryRow(item)}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {!isLoading && items.length > 0 && (hasMore || isLoadingMore) ? (
+                    <div className="px-2 pb-2 pt-1 text-center text-[11px] leading-5 text-muted-foreground/70">
+                      {isLoadingMore
+                        ? t("sidebar.loadingMoreHistory")
+                        : t("sidebar.continueLoadingHistory")}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>

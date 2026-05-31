@@ -699,6 +699,96 @@ test("updates project file tree synced state per project", () => {
   );
 });
 
+test("settings reload preserves session-only project tools state", () => {
+  const current = settings.normalizeSettings({
+    customSettings: {
+      projectToolsPanel: {
+        width: 544,
+        activeTab: "gitReview",
+      },
+      projectToolsFileTree: {
+        openProjectPathKeys: ["/workspace/app"],
+        openVersion: 4,
+        projects: {
+          "/workspace/app": {
+            query: "src",
+            selectedPath: "src/main.ts",
+            expandedPaths: ["", "src"],
+            revision: 2,
+            stateVersion: 6,
+          },
+        },
+      },
+      projectToolsGitReview: {
+        openProjectPathKeys: ["/workspace/app"],
+        openVersion: 5,
+      },
+    },
+  });
+  const reloaded = settings.normalizeSettings({
+    locale: "en-US",
+    customSettings: {
+      projectToolsPanel: {
+        width: 720,
+        activeTab: "terminal",
+        tabOrders: {
+          "/workspace/app": ["terminal-1"],
+        },
+      },
+      projectToolsFileTree: {},
+      projectToolsGitReview: {},
+    },
+  });
+
+  const merged = settings.preserveProjectToolsSessionState(reloaded, current);
+
+  assert.equal(merged.locale, "en-US");
+  assert.equal(merged.customSettings.projectToolsPanel.width, 720);
+  assert.equal(merged.customSettings.projectToolsPanel.activeTab, "terminal");
+  assert.deepEqual(merged.customSettings.projectToolsPanel.tabOrders, {
+    "/workspace/app": ["terminal-1"],
+  });
+  assert.deepEqual(merged.customSettings.projectToolsFileTree.openProjectPathKeys, [
+    "/workspace/app",
+  ]);
+  assert.deepEqual(merged.customSettings.projectToolsFileTree.projects["/workspace/app"], {
+    query: "src",
+    selectedPath: "src/main.ts",
+    expandedPaths: ["", "src"],
+    revision: 2,
+    stateVersion: 6,
+  });
+  assert.deepEqual(merged.customSettings.projectToolsGitReview.openProjectPathKeys, [
+    "/workspace/app",
+  ]);
+  assert.equal(merged.customSettings.projectToolsGitReview.openVersion, 5);
+
+  const loadedWithProjectTools = settings.normalizeSettings({
+    customSettings: {
+      projectToolsFileTree: {
+        openProjectPathKeys: ["/loaded/project"],
+        openVersion: 1,
+      },
+      projectToolsGitReview: {
+        openProjectPathKeys: ["/loaded/project"],
+        openVersion: 1,
+      },
+    },
+  });
+  const emptyCurrent = settings.normalizeSettings({});
+  const loadedOnly = settings.preserveProjectToolsSessionState(
+    loadedWithProjectTools,
+    emptyCurrent,
+  );
+
+  assert.deepEqual(loadedOnly.customSettings.projectToolsFileTree.openProjectPathKeys, [
+    "/loaded/project",
+  ]);
+  assert.deepEqual(loadedOnly.customSettings.projectToolsGitReview.openProjectPathKeys, [
+    "/loaded/project",
+  ]);
+});
+
 test("removes project tools state when a workspace project is deleted", () => {
   const base = settings.normalizeSettings({
     customSettings: {

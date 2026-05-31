@@ -1105,7 +1105,7 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
             </div>
           ) : null}
 
-          <div className="space-y-6">
+          <div className="space-y-6 select-text">
             <TranscriptHistory
               conversationId={conversationId}
               workspaceRoot={workspaceRoot}

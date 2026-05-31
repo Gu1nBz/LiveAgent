@@ -680,7 +680,7 @@ function PastedTextChip({
   return (
     <span
       title={file.relativePath}
-      className="mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 text-emerald-700 align-baseline whitespace-nowrap select-none dark:text-emerald-300"
+      className="mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 text-emerald-700 align-baseline whitespace-nowrap dark:text-emerald-300"
     >
       <Icon className="h-3 w-3 shrink-0" />
       {chipText}
@@ -723,7 +723,7 @@ function GitFileMentionChip({ file }: { file: GitFileDisplayReference }) {
       title={title}
       role={normalized.githubUrl ? "button" : undefined}
       tabIndex={normalized.githubUrl ? 0 : undefined}
-      className={`mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-sky-500/15 px-1.5 text-sky-800 align-baseline whitespace-nowrap select-none dark:text-sky-200 ${
+      className={`mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-sky-500/15 px-1.5 text-sky-800 align-baseline whitespace-nowrap dark:text-sky-200 ${
         normalized.githubUrl ? "cursor-pointer hover:bg-sky-500/20" : "cursor-default"
       }`}
       onClick={openFile}
@@ -744,7 +744,7 @@ function SkillMentionChip({ name }: { name: string }) {
   return (
     <span
       title={`Skill: ${name}`}
-      className="mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-violet-500/20 px-1.5 text-violet-700 align-baseline whitespace-nowrap select-none dark:text-violet-300"
+      className="mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-violet-500/20 px-1.5 text-violet-700 align-baseline whitespace-nowrap dark:text-violet-300"
     >
       <span className="text-[10px] font-semibold opacity-70">$</span>
       {name}
@@ -839,7 +839,7 @@ function CommitMentionChip({
         aria-label={resolvedCommit.subject ? `${label}: ${resolvedCommit.subject}` : label}
         role={resolvedCommit.githubUrl ? "button" : undefined}
         tabIndex={resolvedCommit.githubUrl ? 0 : undefined}
-        className={`mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 text-cyan-800 align-baseline whitespace-nowrap select-none dark:text-cyan-200 ${
+        className={`mention-chip mx-0.5 inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 text-cyan-800 align-baseline whitespace-nowrap dark:text-cyan-200 ${
           resolvedCommit.githubUrl ? "cursor-pointer hover:bg-cyan-500/20" : "cursor-default"
         }`}
         onClick={openCommit}

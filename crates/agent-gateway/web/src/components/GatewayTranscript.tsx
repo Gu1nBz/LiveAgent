@@ -1337,7 +1337,7 @@ export function GatewayTranscript({
 
   return (
     <div className="gateway-transcript-shell">
-      <div ref={transcriptListRef} className="gateway-chat-column gateway-transcript-list">
+      <div ref={transcriptListRef} className="gateway-chat-column gateway-transcript-list select-text">
         <GatewayTranscriptHistory
           conversationId={conversationId}
           items={historyItems}

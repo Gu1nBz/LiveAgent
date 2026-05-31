@@ -58,6 +58,7 @@ const GIT_REVIEW_TAB_ID = "__git_review__";
 
 type ProjectToolsPanelProps = {
   isOpen: boolean;
+  collapseImmediately?: boolean;
   projectPathKey: string;
   cwd: string;
   sessions?: TerminalSession[];
@@ -101,11 +102,14 @@ function getFallbackMaxPanelWidth() {
 
 function getDynamicMaxPanelWidth(panel: HTMLElement | null) {
   if (!panel) return getFallbackMaxPanelWidth();
+  const parent = panel.parentElement;
   const sibling = panel.previousElementSibling;
-  const siblingWidth =
-    sibling instanceof HTMLElement ? sibling.getBoundingClientRect().width : 0;
-  const panelWidth = panel.getBoundingClientRect().width;
-  const hostWidth = siblingWidth + panelWidth;
+  const parentRect = parent?.getBoundingClientRect();
+  const siblingRect = sibling instanceof HTMLElement ? sibling.getBoundingClientRect() : null;
+  const hostWidth =
+    parentRect && siblingRect
+      ? parentRect.right - siblingRect.left
+      : (parentRect?.width ?? panel.getBoundingClientRect().width);
   if (!Number.isFinite(hostWidth) || hostWidth <= 0) {
     return getFallbackMaxPanelWidth();
   }
@@ -562,6 +566,7 @@ function clampScrollLeft(value: number, max: number) {
 export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const {
     isOpen,
+    collapseImmediately = false,
     projectPathKey,
     cwd,
     sessions: externalSessions,
@@ -627,6 +632,8 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   } | null>(null);
   const panelWidth = clampPanelWidth(draftWidth, maxPanelWidth);
   const panelStyle = { "--project-tools-panel-width": `${panelWidth}px` } as CSSProperties;
+  const effectiveWidthCollapsed = !isOpen && collapseImmediately ? true : widthCollapsed;
+  const effectiveShouldRenderContent = !isOpen && collapseImmediately ? false : shouldRenderContent;
   const isControlled = externalSessions !== undefined;
   const fileTreeInitialized = Boolean(projectPathKey && fileTreeOpen);
   const gitReviewInitialized = Boolean(projectPathKey && gitReviewOpen);
@@ -916,12 +923,17 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
       setShouldRenderContent(true);
       return;
     }
+    if (collapseImmediately) {
+      setShouldRenderContent(false);
+      setWidthCollapsed(true);
+      return;
+    }
     const timer = window.setTimeout(() => {
       setShouldRenderContent(false);
       setWidthCollapsed(true);
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [isOpen]);
+  }, [collapseImmediately, isOpen]);
 
   useEffect(() => {
     if (!terminalReady) {
@@ -1472,7 +1484,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
         isOpen
           ? "pointer-events-auto translate-y-0 border-t border-border opacity-100 md:w-[var(--project-tools-panel-width)] md:translate-x-0 md:border-l md:border-t-0"
           : "pointer-events-none translate-y-full border-t border-transparent opacity-0 md:translate-x-3 md:translate-y-0 md:border-l-0 md:border-t-0",
-        widthCollapsed ? "md:w-0" : "md:w-[var(--project-tools-panel-width)]",
+        effectiveWidthCollapsed ? "md:w-0" : "md:w-[var(--project-tools-panel-width)]",
       )}
       style={panelStyle}
     >
@@ -1484,7 +1496,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
             : "translate-y-3 opacity-0 md:translate-x-2 md:translate-y-0",
         )}
       >
-        {shouldRenderContent ? (
+        {effectiveShouldRenderContent ? (
           <>
             <button
               type="button"
@@ -1792,42 +1804,65 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                 {disabledMessage}
               </div>
             ) : showFirstOpenChooser ? (
-              <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-4 sm:grid-cols-3">
-                <button
-                  type="button"
-                  onClick={handleCreate}
-                  disabled={!terminalReady || creating}
-                  title={terminalDisabledMessage}
-                  className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-background px-4 py-5 text-center text-sm text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                >
-                  <Terminal className="h-8 w-8 text-muted-foreground" />
-                  <span className="font-medium">{t("projectTools.newTerminal")}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={startFileTree}
-                  className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-background px-4 py-5 text-center text-sm text-foreground transition-colors hover:bg-muted"
-                >
-                  <FolderTree className="h-8 w-8 text-muted-foreground" />
-                  <span className="font-medium">{t("projectTools.newFileTree")}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={startGitReview}
-                  className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-background px-4 py-5 text-center text-sm text-foreground transition-colors hover:bg-muted"
-                >
-                  <GitBranch className="h-8 w-8 text-muted-foreground" />
-                  <span className="font-medium">{t("projectTools.newGitReview")}</span>
-                </button>
+              <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-5 py-6">
+                <div className="flex flex-col items-center gap-1">
+                  <h3 className="text-sm font-medium text-foreground">
+                    {t("projectTools.getStarted")}
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    {t("projectTools.getStartedHint")}
+                  </p>
+                </div>
+                <div className="flex w-full max-w-xs flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCreate}
+                    disabled={!terminalReady || creating}
+                    title={terminalDisabledMessage}
+                    className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3.5 py-3 text-left text-sm text-foreground transition-all hover:border-border hover:bg-muted/60 hover:shadow-sm disabled:pointer-events-none disabled:opacity-50"
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted/80 text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-foreground">
+                      <Terminal className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium leading-tight">{t("projectTools.newTerminal")}</div>
+                      <div className="mt-0.5 text-xs leading-tight text-muted-foreground">{t("projectTools.terminalDescription")}</div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startFileTree}
+                    className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3.5 py-3 text-left text-sm text-foreground transition-all hover:border-border hover:bg-muted/60 hover:shadow-sm"
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted/80 text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-foreground">
+                      <FolderTree className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium leading-tight">{t("projectTools.newFileTree")}</div>
+                      <div className="mt-0.5 text-xs leading-tight text-muted-foreground">{t("projectTools.fileTreeDescription")}</div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startGitReview}
+                    className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3.5 py-3 text-left text-sm text-foreground transition-all hover:border-border hover:bg-muted/60 hover:shadow-sm"
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted/80 text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-foreground">
+                      <GitBranch className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium leading-tight">{t("projectTools.newGitReview")}</div>
+                      <div className="mt-0.5 text-xs leading-tight text-muted-foreground">{t("projectTools.gitReviewDescription")}</div>
+                    </div>
+                  </button>
+                </div>
                 {loading ? (
-                  <div className="col-span-full text-center text-xs text-muted-foreground">
+                  <div className="text-center text-xs text-muted-foreground">
                     {t("projectTools.loading")}
                   </div>
                 ) : null}
                 {error ? (
-                  <div className="col-span-full text-center text-xs text-destructive">
-                    {error}
-                  </div>
+                  <div className="text-center text-xs text-destructive">{error}</div>
                 ) : null}
               </div>
             ) : (
@@ -1889,14 +1924,21 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       </div>
                     </div>
                   ) : (
-                    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-                      <Terminal className="h-8 w-8 text-muted-foreground" />
-                      {terminalDisabledMessage ? (
-                        <div className="max-w-xs text-xs text-muted-foreground">
-                          {terminalDisabledMessage}
-                        </div>
-                      ) : null}
-                      <Button onClick={handleCreate} disabled={!terminalReady || creating}>
+                    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted/80">
+                        <Terminal className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="text-sm font-medium text-foreground">{t("projectTools.newTerminal")}</div>
+                        {terminalDisabledMessage ? (
+                          <div className="max-w-xs text-xs text-muted-foreground">
+                            {terminalDisabledMessage}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground">{t("projectTools.terminalDescription")}</div>
+                        )}
+                      </div>
+                      <Button onClick={handleCreate} disabled={!terminalReady || creating} size="sm">
                         {t("projectTools.newTerminal")}
                       </Button>
                       {loading ? (

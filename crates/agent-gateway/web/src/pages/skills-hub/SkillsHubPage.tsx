@@ -173,13 +173,13 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setSkills([]);
-      setLoadError(msg || "Failed to load skills");
+      setLoadError(msg || t("settings.skillsHubLoadFailed"));
     } finally {
       if (!silent) {
         setLoading(false);
       }
     }
-  }, [lockedByChatMode]);
+  }, [lockedByChatMode, t]);
 
   useEffect(() => {
     if (initialSkills && initialSkills.length > 0) {
@@ -278,7 +278,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
           const msg = err instanceof Error ? err.message : String(err);
           setStoreItems([]);
           setStoreCursor(null);
-          setStoreError(msg || "Failed to load Skills Store");
+          setStoreError(msg || t("settings.skillsHubStoreLoadFailed"));
         }
       } finally {
         if (!cancelled) {
@@ -290,7 +290,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [lockedByChatMode, storeQuery, storeSort, view]);
+  }, [lockedByChatMode, storeQuery, storeSort, t, view]);
 
   useEffect(() => {
     if (view !== "store" || lockedByChatMode) return;
@@ -360,7 +360,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
               [job.jobId]: {
                 ...job,
                 phase: "error",
-                error: msg || "Failed to read install status",
+                error: msg || t("settings.skillsHubInstallStatusFailed"),
                 finishedAt: Date.now(),
               },
             }));
@@ -369,7 +369,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
     }, 600);
 
     return () => window.clearInterval(timer);
-  }, [enableInstalledSkillsFromJob, installJobs, refresh]);
+  }, [enableInstalledSkillsFromJob, installJobs, refresh, t]);
 
   async function loadMoreStore() {
     if (!storeCursor || storeLoading || storeLoadingMore || storeQuery.trim()) return;
@@ -390,7 +390,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setStoreError(msg || "Failed to load more Skills");
+      setStoreError(msg || t("settings.skillsHubStoreLoadMoreFailed"));
     } finally {
       setStoreLoadingMore(false);
     }
@@ -419,7 +419,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
       setInstallingBySlug((prev) => ({ ...prev, [skill.slug]: job.jobId }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setStoreError(msg || "Failed to start Skill install");
+      setStoreError(msg || t("settings.skillsHubInstallFailed"));
     }
   }
 
@@ -461,7 +461,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
       await refresh({ silent: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setLoadError(msg || "Failed to delete Skill");
+      setLoadError(msg || t("settings.skillsHubDeleteFailed"));
     } finally {
       setDeletingSkillName(null);
     }
@@ -480,6 +480,11 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
   }
 
   const skillsEnabled = settings.skills.enabled;
+  const skillsStatusHint = lockedByChatMode
+    ? t("settings.skillsDisabledInChatMode")
+    : skillsEnabled
+      ? null
+      : t("settings.skillsHubDisabledHint");
 
   return (
     <div className="hub-page hub-page-enter relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
@@ -488,12 +493,8 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
       <div className="relative z-10 flex h-full min-h-0 flex-col overflow-hidden">
         <HubHeader
           icon={<Sparkles className="h-5 w-5" />}
-          title="Skills Hub"
-          subtitle={
-            rootDir
-              ? rootDir
-              : t("settings.skillsDesc") || "Browse and curate skills for your conversations"
-          }
+          title={t("settings.skillsHubTitle")}
+          subtitle={rootDir ? rootDir : t("settings.skillsHubSubtitle")}
           sidebarOpen={sidebarOpen}
           onOpenSidebar={onOpenSidebar}
         />
@@ -527,7 +528,9 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <div className="text-[13.5px] font-semibold tracking-tight text-foreground">
-                        {skillsEnabled ? "Skills 已启用" : "Skills 未启用"}
+                        {skillsEnabled
+                          ? t("settings.skillsHubEnabled")
+                          : t("settings.skillsHubDisabled")}
                       </div>
                       {selectableSkills.length > 0 && (
                         <span
@@ -541,33 +544,39 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                           <span className="font-semibold">{selectedCount}</span>
                           <span className="opacity-50">/</span>
                           <span className="opacity-80">{selectableSkills.length}</span>
-                          <span className="ml-0.5 opacity-70">已选</span>
+                          <span className="ml-0.5 opacity-70">
+                            {t("settings.skillsHubSelectedShort")}
+                          </span>
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                      {lockedByChatMode
-                        ? t("settings.skillsDisabledInChatMode")
-                        : skillsEnabled
-                          ? "在对话中按需注入选中的技能能力"
-                          : "开启后，可在对话中按需注入技能"}
-                    </div>
+                    {skillsStatusHint ? (
+                      <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                        {skillsStatusHint}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2">
                   <button
                     type="button"
+                    role="switch"
+                    aria-checked={skillsEnabled}
                     disabled={lockedByChatMode}
                     onClick={() => setSkillsEnabled(!skillsEnabled)}
                     className={cn(
                       "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full ring-1 transition-all",
                       "disabled:cursor-not-allowed disabled:opacity-50",
                       skillsEnabled
-                        ? "bg-foreground/80 ring-foreground/30 shadow-[0_2px_8px_-3px_rgba(15,23,42,0.4)]"
+                        ? "bg-emerald-500 ring-emerald-400/45 shadow-[0_2px_10px_-3px_rgba(16,185,129,0.65)] dark:bg-emerald-400 dark:ring-emerald-300/45"
                         : "bg-muted-foreground/25 ring-border/40",
                     )}
-                    title={skillsEnabled ? "禁用 Skills" : "启用 Skills"}
+                    title={
+                      skillsEnabled
+                        ? t("settings.skillsHubToggleDisable")
+                        : t("settings.skillsHubToggleEnable")
+                    }
                   >
                     <span
                       className={cn(
@@ -614,11 +623,16 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                 {[
                   {
                     value: "installed" as const,
-                    label: "已安装",
+                    label: t("settings.skillsHubInstalledTab"),
                     icon: Sparkles,
                     count: selectableSkills.length,
                   },
-                  { value: "store" as const, label: "Skills Store", icon: Cloud, count: null },
+                  {
+                    value: "store" as const,
+                    label: t("settings.skillsHubStoreTab"),
+                    icon: Cloud,
+                    count: null,
+                  },
                 ].map((item) => {
                   const Icon = item.icon;
                   const active = view === item.value;
@@ -741,7 +755,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                             {t("settings.skillsScanning")}
                           </div>
                           <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">
-                            正在读取固定 Skills 目录并同步会话可用能力
+                            {t("settings.skillsHubScanning")}
                           </div>
                         </div>
                       </div>
@@ -816,7 +830,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                                         "hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive",
                                         "disabled:cursor-not-allowed disabled:opacity-60",
                                       )}
-                                      title="删除 Skill"
+                                      title={t("settings.skillsHubDeleteSkill")}
                                     >
                                       {deleting ? (
                                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -994,7 +1008,7 @@ function SkillsStoreView(props: {
       .catch((err) => {
         if (!cancelled) {
           const msg = err instanceof Error ? err.message : String(err);
-          setPreviewError(msg || "Failed to load Skill details");
+          setPreviewError(msg || t("settings.skillsHubDetailLoadFailed"));
         }
       })
       .finally(() => {
@@ -1006,7 +1020,7 @@ function SkillsStoreView(props: {
     return () => {
       cancelled = true;
     };
-  }, [previewSkill]);
+  }, [previewSkill, t]);
 
   function getInstallState(skill: ClawHubSkillCard): StoreSkillInstallState {
     const jobId = installingBySlug[skill.slug];
@@ -1181,7 +1195,7 @@ function SkillsStoreView(props: {
                             ) : null}
                           </div>
                           <div className="mt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-                            v{skill.latestVersion ?? "latest"}
+                            v{skill.latestVersion ?? t("settings.skillsStoreVersionLatest")}
                           </div>
                         </div>
                       </div>
@@ -1193,15 +1207,24 @@ function SkillsStoreView(props: {
                       ) : null}
 
                       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-t border-border/30 pt-2 text-[10.5px] text-muted-foreground/75">
-                        <span className="inline-flex items-center gap-1" title="Downloads">
+                        <span
+                          className="inline-flex items-center gap-1"
+                          title={t("settings.skillsStorePreviewDownloads")}
+                        >
                           <span className="h-1 w-1 rounded-full bg-foreground/40" />
                           {formatCompactNumber(skill.downloads)}
                         </span>
-                        <span className="inline-flex items-center gap-1" title="Stars">
+                        <span
+                          className="inline-flex items-center gap-1"
+                          title={t("settings.skillsStorePreviewStars")}
+                        >
                           <span className="h-1 w-1 rounded-full bg-foreground/40" />
                           {formatCompactNumber(skill.stars)}
                         </span>
-                        <span className="inline-flex items-center gap-1" title="Installs">
+                        <span
+                          className="inline-flex items-center gap-1"
+                          title={t("settings.skillsStorePreviewInstalls")}
+                        >
                           <span className="h-1 w-1 rounded-full bg-foreground/40" />
                           {formatCompactNumber(skill.installsCurrent)}
                         </span>
@@ -1320,7 +1343,7 @@ function SkillsStorePreviewDrawer(props: {
   const { t } = useLocale();
   const data = detail ?? skill;
   const link = data.webUrl ?? buildClawHubSkillUrl(data);
-  const version = data.latestVersion ?? "latest";
+  const version = data.latestVersion ?? t("settings.skillsStoreVersionLatest");
   const owner = detail?.ownerDisplayName ?? data.ownerHandle;
   const supportedOs = detail?.supportedOs ?? [];
   const supportedSystems = detail?.supportedSystems ?? [];
@@ -1470,7 +1493,7 @@ function SkillsStorePreviewDrawer(props: {
                     {t("settings.skillsStorePreviewMetadata")}
                   </div>
                   <div className="divide-y divide-border/30">
-                    <StorePreviewField label="Slug" value={data.slug} />
+                    <StorePreviewField label={t("settings.skillsStorePreviewSlug")} value={data.slug} />
                     <StorePreviewField label={t("settings.skillsStorePreviewOwner")} value={owner} />
                     <StorePreviewField label={t("settings.skillsStorePreviewVersion")} value={version} />
                     <StorePreviewField

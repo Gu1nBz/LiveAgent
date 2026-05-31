@@ -4007,7 +4007,7 @@ export function ChatPage(props: ChatPageProps) {
   });
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex h-full min-h-0 w-full overflow-hidden">
       <MacOsTitleBarToggle
         sidebarOpen={sidebarOpen}
         onToggle={handleToggleSidebar}
@@ -4074,10 +4074,12 @@ export function ChatPage(props: ChatPageProps) {
         onCloseSidebar={handleCloseSidebar}
         onOpenSkillsHub={() => {
           cacheActiveComposerDraft();
+          setProjectToolsPanelOpen(false);
           setActiveView("skills-hub");
         }}
         onOpenMcpHub={() => {
           cacheActiveComposerDraft();
+          setProjectToolsPanelOpen(false);
           setActiveView("mcp-hub");
         }}
       />
@@ -4115,7 +4117,7 @@ export function ChatPage(props: ChatPageProps) {
       ) : null}
 
       {/* ---- Main content ---- */}
-      <div className="relative flex min-h-0 flex-1 flex-col bg-background">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
         {activeView === "skills-hub" ? (
           <SkillsHubPage
             settings={settings}
@@ -4296,7 +4298,8 @@ export function ChatPage(props: ChatPageProps) {
         )}
       </div>
       <ProjectToolsPanel
-        isOpen={projectToolsPanelOpen}
+        isOpen={activeView === "chat" && projectToolsPanelOpen}
+        collapseImmediately={activeView !== "chat"}
         projectPathKey={terminalProjectPathKey}
         cwd={terminalProjectPath}
         sessions={projectTerminalSessions}

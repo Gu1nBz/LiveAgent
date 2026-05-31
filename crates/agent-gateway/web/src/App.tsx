@@ -4409,6 +4409,7 @@ export default function App() {
   }
 
   function handleSidebarOpenSkillsHub() {
+    setProjectToolsPanelOpen(false);
     if (isMobileSidebarLayout()) {
       setSidebarOpen(false);
     }
@@ -4417,6 +4418,7 @@ export default function App() {
   }
 
   function handleSidebarOpenMcpHub() {
+    setProjectToolsPanelOpen(false);
     if (isMobileSidebarLayout()) {
       setSidebarOpen(false);
     }
@@ -6342,7 +6344,8 @@ export default function App() {
 
         {terminalClient ? (
           <ProjectToolsPanel
-            isOpen={projectToolsPanelOpen}
+            isOpen={activeView === "chat" && projectToolsPanelOpen}
+            collapseImmediately={activeView !== "chat"}
             projectPathKey={terminalProjectPathKey}
             cwd={terminalProjectPath}
             sessions={projectTerminalSessions}

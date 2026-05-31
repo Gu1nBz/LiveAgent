@@ -182,12 +182,22 @@
   body,
   #root {
     height: 100%;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   body {
     @apply bg-background text-foreground;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"],
+  [contenteditable="plaintext-only"] {
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   /* Custom scrollbar */
@@ -301,6 +311,57 @@
   .git-review-floating-scrollbar-horizontal {
     height: 4px;
     min-width: 28px;
+  }
+
+  /* Git review tab & pane transition animations */
+  .git-review-tab-enter {
+    animation: gitReviewTabIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes gitReviewTabIn {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .git-review-pane-enter-forward {
+    animation: gitReviewPaneForward 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes gitReviewPaneForward {
+    from {
+      opacity: 0;
+      transform: translateX(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  .git-review-pane-enter-back {
+    animation: gitReviewPaneBack 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes gitReviewPaneBack {
+    from {
+      opacity: 0;
+      transform: translateX(-24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .git-review-tab-enter,
+    .git-review-pane-enter-forward,
+    .git-review-pane-enter-back {
+      animation: none;
+    }
   }
 }
 

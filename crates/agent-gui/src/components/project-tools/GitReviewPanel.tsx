@@ -10,6 +10,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -67,6 +68,11 @@ const GIT_REVIEW_SCROLLBAR_HOVER_CHECK_MS = 140;
 const GIT_REVIEW_SCROLLBAR_THUMB_SIZE_PX = 4;
 const GIT_REVIEW_SCROLLBAR_EDGE_OFFSET_PX = 2;
 const GIT_REVIEW_SCROLLBAR_MIN_THUMB_PX = 28;
+const GIT_REVIEW_SPLIT_LAYOUT_MIN_WIDTH = 500;
+const GIT_REVIEW_SPLIT_GRID_CLASS =
+  "grid-cols-[clamp(9.5rem,38%,18rem)_minmax(10rem,1fr)] grid-rows-1";
+const GIT_REVIEW_STACKED_PANE_BUTTON_CLASS =
+  "inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 const gitReviewScrollbarTimers = new WeakMap<HTMLElement, number>();
 type GitReviewScrollbarAxis = "vertical" | "horizontal";
 type GitReviewScrollbarOverlay = {
@@ -357,6 +363,7 @@ type ParsedDiffStat = {
 
 type DiffViewKind = "branch" | "workingTree";
 type GitReviewMode = "changes" | "history";
+type GitReviewStackedPane = "list" | "detail";
 type GitHistoryRow =
   | {
       type: "commit";
@@ -1143,20 +1150,34 @@ function DiffStatView(props: { stat: string }) {
   );
 }
 
-function DiffContent(props: { diff?: GitDiffResponse | null; title: string; error?: string }) {
-  const { diff, title, error } = props;
+function DiffContent(props: {
+  diff?: GitDiffResponse | null;
+  title: string;
+  error?: string;
+  loading?: boolean;
+  showStat?: boolean;
+}) {
+  const { diff, title, error, loading = false, showStat = true } = props;
   const { t } = useLocale();
   const isDark = useIsDark();
   const patchChunks = useMemo(
     () => buildPatchChunks(diff?.patch ?? "", title),
     [diff?.patch, title],
   );
+  const showLoadingState = loading && !error && !diff;
+  const showDiffStat = showStat && Boolean(diff?.stat);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {error ? <div className="shrink-0 px-3 py-3 text-xs text-destructive">{error}</div> : null}
-      {!error && diff?.stat ? <DiffStatView stat={diff.stat} /> : null}
-      {!error && patchChunks.length > 0 ? (
+      {!error && showDiffStat ? <DiffStatView stat={diff?.stat ?? ""} /> : null}
+      {showLoadingState ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-3 py-8 text-center text-xs text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>{t("projectTools.loading")}</span>
+        </div>
+      ) : null}
+      {!error && !showLoadingState && patchChunks.length > 0 ? (
         <div
           className={cn(GIT_REVIEW_TRANSIENT_SCROLLBAR_CLASS, "min-h-0 flex-1 overflow-auto")}
           onScroll={handleGitReviewTransientScroll}
@@ -1166,7 +1187,7 @@ function DiffContent(props: { diff?: GitDiffResponse | null; title: string; erro
           ))}
         </div>
       ) : null}
-      {!error && diff?.patch.trim() && patchChunks.length === 0 ? (
+      {!error && !showLoadingState && diff?.patch.trim() && patchChunks.length === 0 ? (
         <pre
           className={cn(
             GIT_REVIEW_TRANSIENT_SCROLLBAR_CLASS,
@@ -1177,7 +1198,7 @@ function DiffContent(props: { diff?: GitDiffResponse | null; title: string; erro
           {diff.patch}
         </pre>
       ) : null}
-      {!error && !diff?.patch.trim() && patchChunks.length === 0 ? (
+      {!error && !showLoadingState && diff && !diff.patch.trim() && patchChunks.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-3 py-8 text-center text-xs text-muted-foreground">
           {t("projectTools.gitReview.noDiff")}
         </div>
@@ -1197,10 +1218,18 @@ function DiffReviewCard(props: {
   branchError?: string;
   diffLoading?: boolean;
   onActiveViewChange: (view: DiffViewKind) => void;
+  showStat?: boolean;
   worktreeDiff?: GitDiffResponse | null;
 }) {
-  const { activeView, branchDiff, branchError, diffLoading, onActiveViewChange, worktreeDiff } =
-    props;
+  const {
+    activeView,
+    branchDiff,
+    branchError,
+    diffLoading,
+    onActiveViewChange,
+    showStat,
+    worktreeDiff,
+  } = props;
   const { t } = useLocale();
   const activeDiff = activeView === "branch" ? branchDiff : worktreeDiff;
   const branchTitle = t("projectTools.gitReview.branchDiff");
@@ -1247,7 +1276,13 @@ function DiffReviewCard(props: {
           </Button>
         </div>
       </div>
-      <DiffContent title={activeTitle} diff={activeDiff} error={activeError} />
+      <DiffContent
+        title={activeTitle}
+        diff={activeDiff}
+        error={activeError}
+        loading={diffLoading}
+        showStat={showStat}
+      />
     </section>
   );
 }
@@ -1934,6 +1969,11 @@ export function GitReviewPanel(props: {
   const [branchFromCommit, setBranchFromCommit] = useState<GitBranchFromCommitState | null>(null);
   const [branchFromCommitName, setBranchFromCommitName] = useState("");
   const [branchFromCommitError, setBranchFromCommitError] = useState("");
+  const [useSplitReviewLayout, setUseSplitReviewLayout] = useState(false);
+  const [changesStackedPane, setChangesStackedPane] = useState<GitReviewStackedPane>("list");
+  const [historyStackedPane, setHistoryStackedPane] = useState<GitReviewStackedPane>("list");
+  const [changesStackedDir, setChangesStackedDir] = useState<"forward" | "back">("forward");
+  const [historyStackedDir, setHistoryStackedDir] = useState<"forward" | "back">("forward");
   const [collapsedChangeSections, setCollapsedChangeSections] = useState<
     Record<ChangeListSection, boolean>
   >({
@@ -1948,9 +1988,14 @@ export function GitReviewPanel(props: {
   const diffRequestIdRef = useRef(0);
   const diffInFlightRequestIdRef = useRef(0);
   const commitDiffRequestIdRef = useRef(0);
+  const diffPathRef = useRef("");
   const commitDetailsCacheRef = useRef<Map<string, GitCommitDetails>>(new Map());
   const panelRef = useRef<HTMLDivElement | null>(null);
   const historyListRef = useRef<HTMLDivElement | null>(null);
+  const changesListPaneRef = useRef<HTMLElement | null>(null);
+  const changesDetailPaneRef = useRef<HTMLElement | null>(null);
+  const historyListPaneRef = useRef<HTMLElement | null>(null);
+  const historyDetailPaneRef = useRef<HTMLElement | null>(null);
   const busyRef = useRef("");
   const statusSignatureRef = useRef("");
   const historySignatureRef = useRef("");
@@ -1960,6 +2005,29 @@ export function GitReviewPanel(props: {
   const historyInFlightRef = useRef(false);
   const suppressNextGitChangedRef = useRef(false);
   const operationNoticeIdRef = useRef(0);
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+
+    const updateLayout = () => {
+      const nextUseSplitLayout =
+        panel.getBoundingClientRect().width >= GIT_REVIEW_SPLIT_LAYOUT_MIN_WIDTH;
+      setUseSplitReviewLayout((current) =>
+        current === nextUseSplitLayout ? current : nextUseSplitLayout,
+      );
+    };
+
+    updateLayout();
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateLayout);
+    resizeObserver?.observe(panel);
+    window.addEventListener("resize", updateLayout);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateLayout);
+    };
+  }, []);
 
   const beginGitOperation = useCallback((name: string) => {
     if (busyRef.current) {
@@ -1998,9 +2066,42 @@ export function GitReviewPanel(props: {
     expandedCommitShasRef.current = expandedCommitShas;
   }, [expandedCommitShas]);
 
+  useEffect(() => {
+    if (useSplitReviewLayout) return;
+    const el =
+      changesStackedPane === "list"
+        ? changesListPaneRef.current
+        : changesDetailPaneRef.current;
+    if (!el) return;
+    const cls =
+      changesStackedDir === "back"
+        ? "git-review-pane-enter-back"
+        : "git-review-pane-enter-forward";
+    el.classList.remove("git-review-pane-enter-forward", "git-review-pane-enter-back");
+    void el.offsetHeight;
+    el.classList.add(cls);
+  }, [changesStackedPane, useSplitReviewLayout, changesStackedDir]);
+
+  useEffect(() => {
+    if (useSplitReviewLayout) return;
+    const el =
+      historyStackedPane === "list"
+        ? historyListPaneRef.current
+        : historyDetailPaneRef.current;
+    if (!el) return;
+    const cls =
+      historyStackedDir === "back"
+        ? "git-review-pane-enter-back"
+        : "git-review-pane-enter-forward";
+    el.classList.remove("git-review-pane-enter-forward", "git-review-pane-enter-back");
+    void el.offsetHeight;
+    el.classList.add(cls);
+  }, [historyStackedPane, useSplitReviewLayout, historyStackedDir]);
+
   const clearDiffs = useCallback(() => {
     diffRequestIdRef.current += 1;
     diffInFlightRequestIdRef.current = 0;
+    diffPathRef.current = "";
     branchDiffSignatureRef.current = "";
     worktreeDiffSignatureRef.current = "";
     setBranchDiff(null);
@@ -2026,6 +2127,13 @@ export function GitReviewPanel(props: {
         clearDiffs();
         return;
       }
+      if (diffPathRef.current !== cleanPath) {
+        branchDiffSignatureRef.current = "";
+        worktreeDiffSignatureRef.current = "";
+        setBranchDiff(null);
+        setWorktreeDiff(null);
+      }
+      diffPathRef.current = cleanPath;
       if (!options.silent) {
         setDiffLoading(true);
       }
@@ -2711,9 +2819,13 @@ export function GitReviewPanel(props: {
     (entry: GitStatusEntry) => {
       selectedPathRef.current = entry.path;
       setSelectedPath(entry.path);
+      if (!useSplitReviewLayout) {
+        setChangesStackedDir("forward");
+        setChangesStackedPane("detail");
+      }
       void loadDiffForPath(entry.path);
     },
-    [loadDiffForPath],
+    [loadDiffForPath, useSplitReviewLayout],
   );
 
   const selectCommit = useCallback((commit: GitCommitSummary) => {
@@ -2746,6 +2858,10 @@ export function GitReviewPanel(props: {
       expandedCommitShasRef.current = nextExpandedCommitShas;
       setSelectedCommitSha(commit.sha);
       setSelectedCommitFilePath(file.path);
+      if (!useSplitReviewLayout) {
+        setHistoryStackedDir("forward");
+        setHistoryStackedPane("detail");
+      }
       setHistoryDiffTitle(t("projectTools.gitReview.commitDiff"));
       setHistoryDiffSubtitle(
         `${basename(file.path)} - ${commit.shortSha || commit.sha.slice(0, 7)}`,
@@ -2753,7 +2869,7 @@ export function GitReviewPanel(props: {
       setExpandedCommitShas(nextExpandedCommitShas);
       void loadCommitDiff(commit.sha, file.path);
     },
-    [loadCommitDiff, t],
+    [loadCommitDiff, t, useSplitReviewLayout],
   );
 
   const focusHistoryCommit = useCallback((commit: GitCommitSummary) => {
@@ -2761,6 +2877,10 @@ export function GitReviewPanel(props: {
     selectedCommitFilePathRef.current = "";
     setSelectedCommitSha(commit.sha);
     setSelectedCommitFilePath("");
+    if (!useSplitReviewLayout) {
+      setHistoryStackedDir("forward");
+      setHistoryStackedPane("detail");
+    }
     clearCommitDiff();
     setHistoryDiffTitle("");
     setHistoryDiffSubtitle("");
@@ -2775,7 +2895,7 @@ export function GitReviewPanel(props: {
       expandedCommitShasRef.current = next;
       return next;
     });
-  }, [clearCommitDiff]);
+  }, [clearCommitDiff, useSplitReviewLayout]);
 
   const openHistoryContextMenu = useCallback(
     (
@@ -3434,39 +3554,104 @@ export function GitReviewPanel(props: {
             </div>
           </div>
         ) : null}
-        <div className="mt-3 inline-flex rounded-md border border-border bg-muted/25 p-0.5 text-xs">
-          <button
-            type="button"
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground",
-              reviewMode === "changes" && "bg-background text-foreground shadow-sm",
-            )}
-            onClick={() => {
-              setReviewMode("changes");
-              setChangeContextMenu(null);
-              setChangesMenu(null);
-              setHistoryContextMenu(null);
-            }}
-          >
-            <GitBranch className="h-3.5 w-3.5" />
-            {t("projectTools.gitReview.localChangesView")}
-          </button>
-          <button
-            type="button"
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground",
-              reviewMode === "history" && "bg-background text-foreground shadow-sm",
-            )}
-            onClick={() => {
-              setReviewMode("history");
-              setChangeContextMenu(null);
-              setChangesMenu(null);
-              setHistoryContextMenu(null);
-            }}
-          >
-            <History className="h-3.5 w-3.5" />
-            {t("projectTools.gitReview.commitHistoryView")}
-          </button>
+        <div className="mt-3 flex items-center gap-2">
+          <div className="inline-flex shrink-0 rounded-md border border-border bg-muted/25 p-0.5 text-xs">
+            <button
+              type="button"
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground",
+                reviewMode === "changes" && "bg-background text-foreground shadow-sm",
+              )}
+              onClick={() => {
+                setReviewMode("changes");
+                setChangeContextMenu(null);
+                setChangesMenu(null);
+                setHistoryContextMenu(null);
+              }}
+            >
+              <GitBranch className="h-3.5 w-3.5" />
+              {t("projectTools.gitReview.localChangesView")}
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground",
+                reviewMode === "history" && "bg-background text-foreground shadow-sm",
+              )}
+              onClick={() => {
+                setReviewMode("history");
+                setChangeContextMenu(null);
+                setChangesMenu(null);
+                setHistoryContextMenu(null);
+              }}
+            >
+              <History className="h-3.5 w-3.5" />
+              {t("projectTools.gitReview.commitHistoryView")}
+            </button>
+          </div>
+          {!useSplitReviewLayout ? (
+            <div className="ml-auto inline-flex shrink-0 rounded-md border border-border bg-muted/25 p-0.5">
+              <button
+                type="button"
+                aria-label={t("projectTools.gitReview.listPane")}
+                aria-pressed={
+                  reviewMode === "changes"
+                    ? changesStackedPane === "list"
+                    : historyStackedPane === "list"
+                }
+                title={t("projectTools.gitReview.listPane")}
+                className={cn(
+                  GIT_REVIEW_STACKED_PANE_BUTTON_CLASS,
+                  (reviewMode === "changes"
+                    ? changesStackedPane === "list"
+                    : historyStackedPane === "list") && "bg-background text-foreground shadow-sm",
+                )}
+                onClick={() => {
+                  if (reviewMode === "changes") {
+                    setChangesStackedDir("back");
+                    setChangesStackedPane("list");
+                  } else {
+                    setHistoryStackedDir("back");
+                    setHistoryStackedPane("list");
+                  }
+                }}
+              >
+                {reviewMode === "changes" ? (
+                  <GitBranch className="h-3.5 w-3.5" />
+                ) : (
+                  <History className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                aria-label={t("projectTools.gitReview.detailPane")}
+                aria-pressed={
+                  reviewMode === "changes"
+                    ? changesStackedPane === "detail"
+                    : historyStackedPane === "detail"
+                }
+                title={t("projectTools.gitReview.detailPane")}
+                className={cn(
+                  GIT_REVIEW_STACKED_PANE_BUTTON_CLASS,
+                  (reviewMode === "changes"
+                    ? changesStackedPane === "detail"
+                    : historyStackedPane === "detail") &&
+                    "bg-background text-foreground shadow-sm",
+                )}
+                onClick={() => {
+                  if (reviewMode === "changes") {
+                    setChangesStackedDir("forward");
+                    setChangesStackedPane("detail");
+                  } else {
+                    setHistoryStackedDir("forward");
+                    setHistoryStackedPane("detail");
+                  }
+                }}
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : null}
         </div>
         {!canWrite && disabledMessage ? (
           <div className="mt-2 rounded-md bg-muted px-2 py-1.5 text-xs text-muted-foreground">
@@ -3477,8 +3662,23 @@ export function GitReviewPanel(props: {
       </div>
 
       {reviewMode === "changes" ? (
-        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(8rem,14rem)_minmax(0,1fr)] gap-3 overflow-hidden p-3 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-1">
-          <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background">
+        <div
+          key="changes"
+          className={cn(
+            "git-review-tab-enter min-h-0 flex-1 gap-3 overflow-hidden p-3",
+            useSplitReviewLayout
+              ? `grid ${GIT_REVIEW_SPLIT_GRID_CLASS}`
+              : "flex flex-col",
+          )}
+        >
+          <aside
+            ref={changesListPaneRef}
+            className={cn(
+              "min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background",
+              useSplitReviewLayout || changesStackedPane === "list" ? "flex" : "hidden",
+              !useSplitReviewLayout && "flex-1",
+            )}
+          >
             <div
               className={cn(
                 GIT_REVIEW_TRANSIENT_SCROLLBAR_CLASS,
@@ -3524,7 +3724,14 @@ export function GitReviewPanel(props: {
               )}
             </div>
           </aside>
-          <main className="flex h-full min-h-0 flex-col overflow-hidden">
+          <main
+            ref={changesDetailPaneRef}
+            className={cn(
+              "h-full min-h-0 flex-col overflow-hidden",
+              useSplitReviewLayout || changesStackedPane === "detail" ? "flex" : "hidden",
+              !useSplitReviewLayout && "flex-1",
+            )}
+          >
             <div className="mb-3 flex shrink-0 items-center gap-2">
               <GitCommitHorizontal className="h-4 w-4 text-muted-foreground" />
               <Input
@@ -3532,7 +3739,7 @@ export function GitReviewPanel(props: {
                 onChange={(event) => setCommitMessage(event.target.value)}
                 placeholder={t("projectTools.gitReview.commitMessagePlaceholder")}
                 disabled={writeDisabled || operationBusy}
-                className="h-8 text-xs placeholder:text-[11px]"
+                className="h-8 text-xs placeholder:text-[11px] focus-visible:ring-1 focus-visible:ring-border/40"
               />
               <Button
                 size="sm"
@@ -3570,6 +3777,7 @@ export function GitReviewPanel(props: {
                   branchError={branchError}
                   diffLoading={diffLoading}
                   onActiveViewChange={setActiveDiffView}
+                  showStat={useSplitReviewLayout}
                   worktreeDiff={worktreeDiff}
                 />
               </div>
@@ -3581,8 +3789,23 @@ export function GitReviewPanel(props: {
           </main>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(10rem,18rem)_minmax(0,1fr)] gap-3 overflow-hidden p-3 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-1">
-          <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background">
+        <div
+          key="history"
+          className={cn(
+            "git-review-tab-enter min-h-0 flex-1 gap-3 overflow-hidden p-3",
+            useSplitReviewLayout
+              ? `grid ${GIT_REVIEW_SPLIT_GRID_CLASS}`
+              : "flex flex-col",
+          )}
+        >
+          <aside
+            ref={historyListPaneRef}
+            className={cn(
+              "min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background",
+              useSplitReviewLayout || historyStackedPane === "list" ? "flex" : "hidden",
+              !useSplitReviewLayout && "flex-1",
+            )}
+          >
             <div className="relative z-10 flex shrink-0 items-center gap-2 border-b border-border bg-background px-3 py-1.5">
               <div className="flex min-w-0 items-center gap-2 truncate text-xs font-semibold">
                 <History className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -3737,7 +3960,14 @@ export function GitReviewPanel(props: {
               )}
             </div>
           </aside>
-          <main className="flex h-full min-h-0 flex-col overflow-hidden">
+          <main
+            ref={historyDetailPaneRef}
+            className={cn(
+              "h-full min-h-0 flex-col overflow-hidden",
+              useSplitReviewLayout || historyStackedPane === "detail" ? "flex" : "hidden",
+              !useSplitReviewLayout && "flex-1",
+            )}
+          >
             {selectedCommit ? (
               <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
                 <div className="flex shrink-0 items-start gap-2 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs">
@@ -3783,17 +4013,13 @@ export function GitReviewPanel(props: {
                         <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
                       ) : null}
                     </div>
-                    {commitDiffLoading && !commitDiff && !historyError ? (
-                      <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      </div>
-                    ) : (
-                      <DiffContent
-                        title={historyDiffTitle || t("projectTools.gitReview.commitDiff")}
-                        diff={commitDiff}
-                        error={historyError}
-                      />
-                    )}
+                    <DiffContent
+                      title={historyDiffTitle || t("projectTools.gitReview.commitDiff")}
+                      diff={commitDiff}
+                      error={historyError}
+                      loading={commitDiffLoading}
+                      showStat={useSplitReviewLayout}
+                    />
                   </section>
                 ) : (
                   <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-border/70 bg-muted/10 px-4 text-center text-xs text-muted-foreground">
