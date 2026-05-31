@@ -2,6 +2,7 @@ import type { Context, UserMessage } from "@earendil-works/pi-ai";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MacOsTitleBarSpacer, MacOsTitleBarToggle } from "../components/MacOsTitleBarSpacer";
 import { ChatHistorySidebar } from "../components/chat/ChatHistorySidebar";
@@ -1007,6 +1008,52 @@ export function ChatPage(props: ChatPageProps) {
       activateWorkspaceProject(project, { startConversation: true });
     },
     [activateWorkspaceProject, checkWorkspaceProjectDirectory],
+  );
+
+  const handleBrowseWorkspaceProjectInFileTree = useCallback(
+    async (project: WorkspaceProject) => {
+      if (!(await checkWorkspaceProjectDirectory(project))) {
+        return;
+      }
+      const pathKey = workspaceProjectPathKey(project.path);
+      if (!pathKey) {
+        return;
+      }
+
+      setActiveView("chat");
+      setProjectToolsPanelOpen(true);
+      activateWorkspaceProject(project);
+      setSettings((prev) =>
+        updateProjectToolsFileTreeOpen(
+          updateCustomSettings(prev, {
+            projectToolsPanel: {
+              ...prev.customSettings.projectToolsPanel,
+              activeTab: "fileTree",
+            },
+          }),
+          pathKey,
+          true,
+        ),
+      );
+    },
+    [activateWorkspaceProject, checkWorkspaceProjectDirectory, setSettings],
+  );
+
+  const handleBrowseWorkspaceProjectInSystemFileManager = useCallback(
+    async (project: WorkspaceProject) => {
+      if (!(await checkWorkspaceProjectDirectory(project))) {
+        return;
+      }
+
+      try {
+        await revealItemInDir(project.path.trim());
+      } catch (error) {
+        const message = asErrorMessage(error, t("chat.workspaceOpenSystemFileManagerFailed"));
+        setHistoryError(message);
+        setErrorMessage(message);
+      }
+    },
+    [checkWorkspaceProjectDirectory, setErrorMessage, setHistoryError, t],
   );
 
   const handleOpenCreateWorkspaceProject = useCallback(async () => {
@@ -4094,6 +4141,8 @@ export function ChatPage(props: ChatPageProps) {
         onCreateProject={handleOpenCreateWorkspaceProject}
         onSelectProject={handleSelectWorkspaceProject}
         onNewConversationForProject={handleNewConversationForProject}
+        onBrowseProjectInFileTree={handleBrowseWorkspaceProjectInFileTree}
+        onBrowseProjectInSystemFileManager={handleBrowseWorkspaceProjectInSystemFileManager}
         onStartRenamingProject={handleStartRenamingWorkspaceProject}
         onProjectRenameDraftChange={setProjectRenameDraft}
         onCommitProjectRename={handleCommitWorkspaceProjectRename}

@@ -2236,6 +2236,38 @@ export default function App() {
     [activateWorkspaceProject, checkWorkspaceProjectDirectory],
   );
 
+  const handleBrowseWorkspaceProjectInFileTree = useCallback(
+    async (project: WorkspaceProject) => {
+      if (!(await checkWorkspaceProjectDirectory(project))) {
+        return;
+      }
+      const pathKey = workspaceProjectPathKey(project.path);
+      if (!pathKey) {
+        return;
+      }
+
+      if (isMobileSidebarLayout()) {
+        setSidebarOpen(false);
+      }
+      setActiveView("chat");
+      setProjectToolsPanelOpen(true);
+      activateWorkspaceProject(project);
+      setSettings((prev) =>
+        updateProjectToolsFileTreeOpen(
+          updateCustomSettings(prev, {
+            projectToolsPanel: {
+              ...prev.customSettings.projectToolsPanel,
+              activeTab: "fileTree",
+            },
+          }),
+          pathKey,
+          true,
+        ),
+      );
+    },
+    [activateWorkspaceProject, checkWorkspaceProjectDirectory, setSettings],
+  );
+
   const handleOpenCreateWorkspaceProject = useCallback(() => {
     setProjectPickerOpen(true);
   }, []);
@@ -5891,6 +5923,7 @@ export default function App() {
           onCreateProject={handleOpenCreateWorkspaceProject}
           onSelectProject={handleSelectWorkspaceProject}
           onNewConversationForProject={handleNewConversationForProject}
+          onBrowseProjectInFileTree={handleBrowseWorkspaceProjectInFileTree}
           onStartRenamingProject={handleStartRenamingWorkspaceProject}
           onProjectRenameDraftChange={setProjectRenameDraft}
           onCommitProjectRename={handleCommitWorkspaceProjectRename}

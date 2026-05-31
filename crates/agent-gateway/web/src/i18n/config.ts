@@ -35,6 +35,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.workspaceUnpin": "取消置顶",
     "chat.workspaceRename": "修改标题",
     "chat.workspaceRemove": "移除工作空间",
+    "chat.workspaceBrowseInFileTree": "在文件树浏览",
     "chat.workspaceRemoveConfirm": "移除「{name}」？",
     "chat.workspaceRemoveRunning": "后台任务运行中，暂时不能移除。",
     "chat.workspaceRemoveDescription": "会删除此工作空间下的历史对话，不会删除文件夹。",
@@ -1121,6 +1122,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.workspaceUnpin": "Unpin",
     "chat.workspaceRename": "Rename",
     "chat.workspaceRemove": "Remove workspace",
+    "chat.workspaceBrowseInFileTree": "Browse in File Tree",
     "chat.workspaceRemoveConfirm": "Remove \"{name}\"?",
     "chat.workspaceRemoveRunning": "A background task is running, so this workspace cannot be removed yet.",
     "chat.workspaceRemoveDescription":

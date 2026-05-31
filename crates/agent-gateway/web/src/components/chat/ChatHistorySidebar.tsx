@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Edit3,
   Folder,
+  FolderTree,
   Link2,
   MessageSquareText,
   MoreHorizontal,
@@ -75,6 +76,7 @@ type ChatHistorySidebarProps = {
   onCreateProject?: () => void;
   onSelectProject?: (project: WorkspaceProject) => void;
   onNewConversationForProject?: (project: WorkspaceProject) => void;
+  onBrowseProjectInFileTree?: (project: WorkspaceProject) => void;
   onStartRenamingProject?: (project: WorkspaceProject) => void;
   onProjectRenameDraftChange?: (value: string) => void;
   onCommitProjectRename?: () => void;
@@ -642,6 +644,7 @@ const ProjectRow = memo(function ProjectRow(props: {
   renameDraft: string;
   onSelectProject: (project: WorkspaceProject) => void;
   onNewConversationForProject: (project: WorkspaceProject) => void;
+  onBrowseProjectInFileTree?: (project: WorkspaceProject) => void;
   onStartRenamingProject: (project: WorkspaceProject) => void;
   onProjectRenameDraftChange: (value: string) => void;
   onCommitProjectRename: () => void;
@@ -660,6 +663,7 @@ const ProjectRow = memo(function ProjectRow(props: {
     renameDraft,
     onSelectProject,
     onNewConversationForProject,
+    onBrowseProjectInFileTree,
     onStartRenamingProject,
     onProjectRenameDraftChange,
     onCommitProjectRename,
@@ -697,6 +701,10 @@ const ProjectRow = memo(function ProjectRow(props: {
   const handleTogglePinned = useCallback(() => {
     onSetProjectPinned(project, !isPinned);
   }, [isPinned, onSetProjectPinned, project]);
+
+  const handleBrowseInFileTree = useCallback(() => {
+    onBrowseProjectInFileTree?.(project);
+  }, [onBrowseProjectInFileTree, project]);
 
   if (isPendingRemove) {
     return (
@@ -936,6 +944,12 @@ const ProjectRow = memo(function ProjectRow(props: {
                       </DropdownMenuItem>
                     </>
                   ) : null}
+                  {onBrowseProjectInFileTree ? (
+                    <DropdownMenuItem onSelect={handleBrowseInFileTree} className="gap-2">
+                      <FolderTree className="h-3.5 w-3.5" />
+                      {t("chat.workspaceBrowseInFileTree")}
+                    </DropdownMenuItem>
+                  ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
             </>
@@ -1034,6 +1048,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     onCreateProject,
     onSelectProject,
     onNewConversationForProject,
+    onBrowseProjectInFileTree,
     onStartRenamingProject,
     onProjectRenameDraftChange,
     onCommitProjectRename,
@@ -1087,6 +1102,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   });
   const handleNewConversationForProject = useStableEvent((project: WorkspaceProject) => {
     onNewConversationForProject?.(project);
+  });
+  const handleBrowseProjectInFileTree = useStableEvent((project: WorkspaceProject) => {
+    onBrowseProjectInFileTree?.(project);
   });
   const handleStartRenamingProject = useStableEvent((project: WorkspaceProject) => {
     onStartRenamingProject?.(project);
@@ -1631,6 +1649,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                         renameDraft={projectRenameDraft}
                         onSelectProject={handleSelectProject}
                         onNewConversationForProject={handleNewConversationForProject}
+                        onBrowseProjectInFileTree={
+                          onBrowseProjectInFileTree ? handleBrowseProjectInFileTree : undefined
+                        }
                         onStartRenamingProject={handleStartRenamingProject}
                         onProjectRenameDraftChange={handleProjectRenameDraftChange}
                         onCommitProjectRename={handleCommitProjectRename}
