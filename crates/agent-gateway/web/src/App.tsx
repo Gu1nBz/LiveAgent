@@ -6295,7 +6295,7 @@ export default function App() {
           {workspaceEditorOpen ? (
             <Suspense
               fallback={
-                <div className="absolute inset-0 z-40 flex items-center justify-center border-r border-border bg-background text-sm text-muted-foreground shadow-2xl">
+                <div className="workspace-code-editor-overlay absolute inset-0 z-40 flex items-center justify-center border-r border-border bg-background text-sm text-muted-foreground shadow-2xl">
                   {translate("workspaceEditor.loading", settings.locale)}
                 </div>
               }

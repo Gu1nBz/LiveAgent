@@ -763,7 +763,7 @@ export function WorkspaceCodeEditorOverlay(props: WorkspaceCodeEditorOverlayProp
     <div
       ref={overlayRef}
       className={cn(
-        "absolute inset-0 z-40 flex min-h-0 min-w-0 transform-gpu flex-col overflow-hidden border-r border-border bg-background transition-[opacity,transform,box-shadow] duration-200 ease-out motion-reduce:transition-none",
+        "workspace-code-editor-overlay absolute inset-0 z-40 flex min-h-0 min-w-0 transform-gpu flex-col overflow-hidden border-r border-border bg-background transition-[opacity,transform,box-shadow] duration-200 ease-out motion-reduce:transition-none",
         isVisible
           ? "pointer-events-auto translate-x-0 opacity-100 shadow-2xl"
           : "pointer-events-none -translate-x-2 opacity-0 shadow-lg",

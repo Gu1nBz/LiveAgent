@@ -1839,6 +1839,10 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
     backdrop-filter: blur(18px);
   }
 
+  html[data-liveagent-webui="gateway"] .workspace-code-editor-overlay {
+    z-index: 60;
+  }
+
   html[data-liveagent-webui="gateway"] .project-tools-panel-inner {
     min-width: 0;
   }
