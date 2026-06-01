@@ -17,8 +17,8 @@ const GIT_UNTRACKED_FILE_MAX_BYTES: u64 = 128 * 1024;
 const GIT_COMMAND_TIMEOUT_SECS: u64 = 60;
 const GIT_TRANSIENT_RETRY_ATTEMPTS: usize = 3;
 const GIT_TRANSIENT_RETRY_DELAY_MS: u64 = 160;
-const GIT_LOG_DEFAULT_LIMIT: usize = 80;
-const GIT_LOG_MAX_LIMIT: usize = 200;
+const GIT_LOG_DEFAULT_LIMIT: usize = 50;
+const GIT_LOG_MAX_LIMIT: usize = 1000;
 const GIT_MISSING_REMOTE_MESSAGE: &str = "当前仓库还没有设置远端仓库。";
 const GIT_MISSING_ORIGIN_REMOTE_MESSAGE: &str = "当前分支没有 upstream，且找不到 origin remote。";
 
@@ -175,6 +175,7 @@ struct GitGatewayArgs {
     commit: Option<String>,
     start_point: Option<String>,
     limit: Option<usize>,
+    skip: Option<usize>,
     user_name: Option<String>,
     user_email: Option<String>,
 }
@@ -1294,7 +1295,7 @@ fn parse_git_refs(raw: &str) -> Vec<String> {
 fn parse_git_log(raw: &str) -> Vec<GitCommitSummary> {
     raw.split('\x1e')
         .filter_map(|record| {
-            let record = record.trim_start_matches('\n');
+            let record = record.trim_start_matches('\n').trim_end_matches('\0');
             if record
                 .trim_matches(|ch: char| ch == '\0' || ch.is_whitespace())
                 .is_empty()
@@ -1338,6 +1339,25 @@ fn parse_git_log(raw: &str) -> Vec<GitCommitSummary> {
             })
         })
         .collect()
+}
+
+fn commit_files_between(
+    repo_root: &str,
+    base_ref: &str,
+    head_ref: &str,
+) -> Result<Vec<GitCommitFile>, String> {
+    let output = git_success(
+        repo_root,
+        &[
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            base_ref,
+            head_ref,
+        ],
+    )?;
+    Ok(parse_name_status_records(&output.stdout))
 }
 
 fn local_only_commit_shas(repo_root: &str, cloud_ref: &str) -> HashSet<String> {
@@ -1401,6 +1421,7 @@ fn validate_commit_sha(repo_root: &str, value: &str) -> Result<String, String> {
 pub(crate) fn git_log_sync(
     workdir: String,
     limit: Option<usize>,
+    skip: Option<usize>,
 ) -> Result<GitLogResponse, String> {
     let state = git_status_sync(workdir)?;
     if state.status != "ready" {
@@ -1417,8 +1438,8 @@ pub(crate) fn git_log_sync(
     }
     let limit = limit
         .unwrap_or(GIT_LOG_DEFAULT_LIMIT)
-        .clamp(1, GIT_LOG_MAX_LIMIT)
-        .to_string();
+        .clamp(1, GIT_LOG_MAX_LIMIT);
+    let skip = skip.unwrap_or(0);
     let mut args = vec![
         "log".to_string(),
         "--date=iso-strict".to_string(),
@@ -1429,10 +1450,15 @@ pub(crate) fn git_log_sync(
         "-z".to_string(),
         "--find-renames".to_string(),
         "--max-count".to_string(),
-        limit,
+        limit.to_string(),
+    ];
+    if skip > 0 {
+        args.push(format!("--skip={skip}"));
+    }
+    args.extend([
         "--pretty=format:%x1e%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%ae%x1f%aI%x1f%s".to_string(),
         "HEAD".to_string(),
-    ];
+    ]);
     let review_ref = if !state.upstream.trim().is_empty() {
         state.upstream.clone()
     } else {
@@ -1444,6 +1470,19 @@ pub(crate) fn git_log_sync(
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let output = git_success(&state.repo_root, &arg_refs)?;
     let mut commits = parse_git_log(&output.stdout);
+    // git log/show omit name-status entries for merge commits; VSCode expands
+    // those commits by diffing them against the first parent.
+    for commit in &mut commits {
+        if commit.parents.len() > 1 && commit.files.is_empty() {
+            if let Some(first_parent) = commit.parents.first() {
+                let files = commit_files_between(&state.repo_root, first_parent, &commit.sha);
+                if let Ok(files) = files {
+                    commit.file_count = files.len();
+                    commit.files = files;
+                }
+            }
+        }
+    }
     let cloud_ref = resolve_cloud_tracking_ref(&state);
     let local_only_shas = local_only_commit_shas(&state.repo_root, &cloud_ref);
     if cloud_ref.trim().is_empty() {
@@ -1478,6 +1517,13 @@ pub(crate) fn git_commit_details_sync(
     if fields.len() < 7 {
         return Err("无法解析 Git commit 详情。".to_string());
     }
+    let parent_output = git_success(&state.repo_root, &["show", "-s", "--format=%P", &commit])?;
+    let first_parent = parent_output
+        .stdout
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string();
     let files_output = git_success(
         &state.repo_root,
         &[
@@ -1489,7 +1535,13 @@ pub(crate) fn git_commit_details_sync(
             &commit,
         ],
     )?;
-    let files = parse_name_status_records(&files_output.stdout);
+    let mut files = parse_name_status_records(&files_output.stdout);
+    if files.is_empty() && !first_parent.is_empty() {
+        let parent_files = commit_files_between(&state.repo_root, &first_parent, &commit);
+        if let Ok(parent_files) = parent_files {
+            files = parent_files;
+        }
+    }
     let stat_output = git_success(
         &state.repo_root,
         &["show", "--format=", "--stat", "--find-renames", &commit],
@@ -2041,7 +2093,7 @@ pub(crate) fn git_gateway_action_sync(
             args.branch.unwrap_or_default(),
             args.start_point,
         )?),
-        "log" => serde_json::to_value(git_log_sync(workdir, args.limit)?),
+        "log" => serde_json::to_value(git_log_sync(workdir, args.limit, args.skip)?),
         "commit_details" => serde_json::to_value(git_commit_details_sync(
             workdir,
             args.commit.unwrap_or_default(),
@@ -2162,8 +2214,12 @@ pub async fn git_diff(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn git_log(workdir: String, limit: Option<usize>) -> Result<GitLogResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || git_log_sync(workdir, limit))
+pub async fn git_log(
+    workdir: String,
+    limit: Option<usize>,
+    skip: Option<usize>,
+) -> Result<GitLogResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || git_log_sync(workdir, limit, skip))
         .await
         .map_err(|error| format!("git_log join 失败：{error}"))?
 }
@@ -2383,6 +2439,10 @@ mod tests {
         .expect("parse init args");
         assert_eq!(init_args.user_name.as_deref(), Some("LiveAgent Test"));
         assert_eq!(init_args.user_email.as_deref(), Some("test@example.com"));
+        let log_args =
+            parse_gateway_args(json!({"limit":50,"skip":100}).to_string()).expect("parse log args");
+        assert_eq!(log_args.limit, Some(50));
+        assert_eq!(log_args.skip, Some(100));
     }
 
     #[test]
@@ -2639,7 +2699,7 @@ mod tests {
             git_commit_sync(workdir.clone(), "add feature file".to_string()).expect("commit");
         assert!(committed.ok, "commit failed: {}", committed.message);
 
-        let history = git_log_sync(workdir.clone(), Some(10)).expect("git log");
+        let history = git_log_sync(workdir.clone(), Some(10), None).expect("git log");
         let feature_commit = history
             .commits
             .iter()
@@ -2836,6 +2896,120 @@ mod tests {
             details.commit.stat.contains("details.txt"),
             "commit stat: {}",
             details.commit.stat
+        );
+    }
+
+    #[test]
+    fn git_history_and_details_expand_merge_commit_files() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+        let initial = git_status_sync(workdir.clone()).expect("initial status");
+
+        run_temp_git(repo.path(), &["checkout", "-b", "feature-merge-files"]);
+        fs::write(repo.path().join("feature.txt"), "feature\n").expect("write feature file");
+        run_temp_git(repo.path(), &["add", "feature.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "feature branch file"]);
+
+        run_temp_git(repo.path(), &["checkout", initial.head.as_str()]);
+        fs::write(repo.path().join("main.txt"), "main\n").expect("write main file");
+        run_temp_git(repo.path(), &["add", "main.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "main branch file"]);
+
+        run_temp_git(
+            repo.path(),
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "merge feature files",
+                "feature-merge-files",
+            ],
+        );
+        let merge_sha = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read merge head")
+            .stdout;
+
+        let history = git_log_sync(workdir.clone(), Some(10), None).expect("git log");
+        let merge_commit = history
+            .commits
+            .iter()
+            .find(|commit| commit.subject == "merge feature files")
+            .expect("merge commit should be in log");
+        assert_eq!(merge_commit.parents.len(), 2);
+        assert_eq!(merge_commit.file_count, merge_commit.files.len());
+        assert!(
+            merge_commit
+                .files
+                .iter()
+                .any(|file| file.path == "feature.txt" && file.status == "A"),
+            "merge commit files: {:?}",
+            merge_commit.files
+        );
+        assert!(
+            !merge_commit
+                .files
+                .iter()
+                .any(|file| file.path == "main.txt"),
+            "merge commit should use first-parent files: {:?}",
+            merge_commit.files
+        );
+
+        let details = git_commit_details_sync(workdir, merge_sha).expect("merge details");
+        assert_eq!(details.commit.file_count, details.commit.files.len());
+        assert!(
+            details
+                .commit
+                .files
+                .iter()
+                .any(|file| file.path == "feature.txt" && file.status == "A"),
+            "merge details files: {:?}",
+            details.commit.files
+        );
+    }
+
+    #[test]
+    fn git_log_supports_skip_pagination() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+
+        for index in 1..=4 {
+            let file_name = format!("page-{index}.txt");
+            fs::write(repo.path().join(&file_name), format!("page {index}\n"))
+                .expect("write page file");
+            run_temp_git(repo.path(), &["add", &file_name]);
+            run_temp_git(repo.path(), &["commit", "-m", &format!("page {index}")]);
+        }
+
+        let first_page = git_log_sync(workdir.clone(), Some(2), Some(0)).expect("first page");
+        let second_page = git_log_sync(workdir, Some(2), Some(2)).expect("second page");
+        let first_subjects = first_page
+            .commits
+            .iter()
+            .map(|commit| commit.subject.as_str())
+            .collect::<Vec<_>>();
+        let second_subjects = second_page
+            .commits
+            .iter()
+            .map(|commit| commit.subject.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(first_subjects, vec!["page 4", "page 3"]);
+        assert_eq!(second_subjects, vec!["page 2", "page 1"]);
+        let first_shas = first_page
+            .commits
+            .iter()
+            .map(|commit| commit.sha.as_str())
+            .collect::<HashSet<_>>();
+        assert!(
+            second_page
+                .commits
+                .iter()
+                .all(|commit| !first_shas.contains(commit.sha.as_str())),
+            "pages should not overlap"
         );
     }
 
@@ -3061,7 +3235,7 @@ mod tests {
         run_temp_git(repo.path(), &["add", "local.txt"]);
         run_temp_git(repo.path(), &["commit", "-m", "local only"]);
 
-        let history = git_log_sync(workdir, Some(10)).expect("git log");
+        let history = git_log_sync(workdir, Some(10), None).expect("git log");
         let local_commit = history
             .commits
             .iter()
@@ -3110,7 +3284,7 @@ mod tests {
         run_temp_git(repo.path(), &["add", "feature.txt"]);
         run_temp_git(repo.path(), &["commit", "-m", "feature local only"]);
 
-        let history = git_log_sync(workdir, Some(10)).expect("git log");
+        let history = git_log_sync(workdir, Some(10), None).expect("git log");
         let local_commit = history
             .commits
             .iter()

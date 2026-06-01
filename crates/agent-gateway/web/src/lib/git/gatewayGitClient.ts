@@ -42,8 +42,11 @@ export function createGatewayGitClient(api: GatewayWebSocketClientLike): GitClie
     async diff(workdir, mode, path) {
       return normalizeGitDiffResponse(await api.gitRequest("diff", workdir, { mode, path }));
     },
-    async log(workdir, limit) {
-      return normalizeGitLogResponse(await api.gitRequest("log", workdir, { limit }), workdir);
+    async log(workdir, options = {}) {
+      return normalizeGitLogResponse(
+        await api.gitRequest("log", workdir, { limit: options.limit, skip: options.skip }),
+        workdir,
+      );
     },
     async commitDetails(workdir, commit) {
       return normalizeGitCommitDetailsResponse(

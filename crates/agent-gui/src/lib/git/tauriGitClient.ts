@@ -42,8 +42,11 @@ export const tauriGitClient: GitClient = {
   async diff(workdir, mode, path) {
     return normalizeGitDiffResponse(await invoke("git_diff", { workdir, mode, path }));
   },
-  async log(workdir, limit) {
-    return normalizeGitLogResponse(await invoke("git_log", { workdir, limit }), workdir);
+  async log(workdir, options = {}) {
+    return normalizeGitLogResponse(
+      await invoke("git_log", { workdir, limit: options.limit, skip: options.skip }),
+      workdir,
+    );
   },
   async commitDetails(workdir, commit) {
     return normalizeGitCommitDetailsResponse(

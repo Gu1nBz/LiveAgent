@@ -373,6 +373,9 @@ type GitHistoryRow =
       commit: GitCommitSummary;
       commitIndex: number;
       file: GitCommitFile;
+    }
+  | {
+      type: "loadMore";
     };
 
 type ChangeListSection = "staged" | "changes";
@@ -428,12 +431,14 @@ const CHANGES_MENU_HEIGHT = 170;
 const HISTORY_CONTEXT_MENU_WIDTH = 232;
 const HISTORY_CONTEXT_MENU_HEIGHT = 270;
 const HISTORY_FILE_CONTEXT_MENU_HEIGHT = 90;
-const GIT_HISTORY_LIMIT = 200;
+const GIT_HISTORY_PAGE_SIZE = 50;
+const GIT_HISTORY_LOAD_MORE_SCROLL_THRESHOLD_PX = 96;
 const CHANGE_CONTEXT_MENU_ITEM_CLASS =
   "flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-45";
 const GIT_REVIEW_POLL_INTERVAL_MS = 1500;
 
 type GitRefreshOptions = {
+  append?: boolean;
   force?: boolean;
   notifyChanged?: boolean;
   silent?: boolean;
@@ -2019,6 +2024,9 @@ export function GitReviewPanel(props: {
   const [reviewMode, setReviewMode] = useState<GitReviewMode>("changes");
   const [historyCommits, setHistoryCommits] = useState<GitCommitSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoadMoreError, setHistoryLoadMoreError] = useState("");
   const [historyError, setHistoryError] = useState("");
   const [selectedCommitSha, setSelectedCommitSha] = useState("");
   const [selectedCommitFilePath, setSelectedCommitFilePath] = useState("");
@@ -2047,6 +2055,8 @@ export function GitReviewPanel(props: {
   const selectedPathRef = useRef("");
   const selectedCommitShaRef = useRef("");
   const selectedCommitFilePathRef = useRef("");
+  const historyCommitsRef = useRef<GitCommitSummary[]>([]);
+  const historyHasMoreRef = useRef(false);
   const expandedCommitShasRef = useRef<Set<string>>(new Set());
   const reviewModeRef = useRef<GitReviewMode>("changes");
   const diffRequestIdRef = useRef(0);
@@ -2110,6 +2120,11 @@ export function GitReviewPanel(props: {
     setBusy("");
   }, []);
 
+  const setHistoryHasMoreValue = useCallback((value: boolean) => {
+    historyHasMoreRef.current = value;
+    setHistoryHasMore(value);
+  }, []);
+
   useEffect(() => {
     selectedPathRef.current = selectedPath;
   }, [selectedPath]);
@@ -2125,6 +2140,14 @@ export function GitReviewPanel(props: {
   useEffect(() => {
     selectedCommitFilePathRef.current = selectedCommitFilePath;
   }, [selectedCommitFilePath]);
+
+  useEffect(() => {
+    historyCommitsRef.current = historyCommits;
+  }, [historyCommits]);
+
+  useEffect(() => {
+    historyHasMoreRef.current = historyHasMore;
+  }, [historyHasMore]);
 
   useEffect(() => {
     expandedCommitShasRef.current = expandedCommitShas;
@@ -2368,14 +2391,20 @@ export function GitReviewPanel(props: {
   );
 
   const loadHistory = useCallback(async (options: GitRefreshOptions = {}) => {
+    const append = options.append === true && historyCommitsRef.current.length > 0;
+    if (append && !historyHasMoreRef.current) {
+      return;
+    }
     if (historyInFlightRef.current) {
       return;
     }
     historyInFlightRef.current = true;
     const silent = options.silent === true;
     const force = options.force !== false;
+    const skip = append ? historyCommitsRef.current.length : 0;
     if (!gitClient || !cwd.trim()) {
       historySignatureRef.current = "";
+      historyCommitsRef.current = [];
       setHistoryCommits([]);
       selectedCommitShaRef.current = "";
       selectedCommitFilePathRef.current = "";
@@ -2383,24 +2412,64 @@ export function GitReviewPanel(props: {
       setSelectedCommitSha("");
       setSelectedCommitFilePath("");
       setExpandedCommitShas(new Set());
+      setHistoryHasMoreValue(false);
+      setHistoryLoadMoreError("");
+      setHistoryLoading(false);
+      setHistoryLoadingMore(false);
       clearCommitDiff();
       setHistoryError("");
       historyInFlightRef.current = false;
       return;
     }
-    if (!silent) {
+    if (append) {
+      setHistoryLoadingMore(true);
+      setHistoryLoadMoreError("");
+    } else if (!silent) {
       setHistoryLoading(true);
       setHistoryError("");
+      setHistoryLoadMoreError("");
     }
     try {
-      const response = await gitClient.log(cwd, GIT_HISTORY_LIMIT);
-      const nextSignature = gitHistorySignature(response.state, response.commits);
-      const historyChanged = historySignatureRef.current !== nextSignature;
+      const response = await gitClient.log(cwd, {
+        limit: GIT_HISTORY_PAGE_SIZE,
+        skip,
+      });
       const previousStatusSignature = statusSignatureRef.current;
       const nextStatusSignature = gitRepositoryStateSignature(response.state);
       const statusChanged = previousStatusSignature !== nextStatusSignature;
-      historySignatureRef.current = nextSignature;
       statusSignatureRef.current = nextStatusSignature;
+      const pageHasMore = response.commits.length >= GIT_HISTORY_PAGE_SIZE;
+      if (append) {
+        setState(response.state);
+        if (response.state.status !== "ready") {
+          historySignatureRef.current = "";
+          historyCommitsRef.current = [];
+          setHistoryCommits([]);
+          selectedCommitShaRef.current = "";
+          selectedCommitFilePathRef.current = "";
+          expandedCommitShasRef.current = new Set();
+          setSelectedCommitSha("");
+          setSelectedCommitFilePath("");
+          setExpandedCommitShas(new Set());
+          setHistoryHasMoreValue(false);
+          clearCommitDiff();
+          return;
+        }
+        const existingCommits = historyCommitsRef.current;
+        const existingShas = new Set(existingCommits.map((commit) => commit.sha));
+        const nextCommits = [
+          ...existingCommits,
+          ...response.commits.filter((commit) => !existingShas.has(commit.sha)),
+        ];
+        historyCommitsRef.current = nextCommits;
+        setHistoryCommits(nextCommits);
+        setHistoryHasMoreValue(pageHasMore);
+        setHistoryLoadMoreError("");
+        return;
+      }
+      const nextSignature = gitHistorySignature(response.state, response.commits);
+      const historyChanged = historySignatureRef.current !== nextSignature;
+      historySignatureRef.current = nextSignature;
       if (historyChanged) {
         commitDetailsCacheRef.current.clear();
       }
@@ -2408,10 +2477,20 @@ export function GitReviewPanel(props: {
         suppressNextGitChangedRef.current = true;
         dispatchGitChanged(cwd);
       }
+      setHistoryHasMoreValue(
+        !force &&
+          !historyChanged &&
+          historyCommitsRef.current.length > response.commits.length &&
+          !historyHasMoreRef.current
+          ? false
+          : pageHasMore,
+      );
+      setHistoryLoadMoreError("");
       if (!force && !historyChanged) {
         return;
       }
       setState(response.state);
+      historyCommitsRef.current = response.commits;
       setHistoryCommits(response.commits);
       if (response.state.status !== "ready" || response.commits.length === 0) {
         selectedCommitShaRef.current = "";
@@ -2420,6 +2499,7 @@ export function GitReviewPanel(props: {
         setSelectedCommitSha("");
         setSelectedCommitFilePath("");
         setExpandedCommitShas(new Set());
+        setHistoryHasMoreValue(false);
         clearCommitDiff();
         return;
       }
@@ -2449,7 +2529,12 @@ export function GitReviewPanel(props: {
         clearCommitDiff();
       }
     } catch (err) {
-      if (!silent || force) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (append) {
+        setHistoryLoadMoreError(message);
+        setHistoryHasMoreValue(true);
+      } else if (!silent || force) {
+        historyCommitsRef.current = [];
         setHistoryCommits([]);
         selectedCommitShaRef.current = "";
         selectedCommitFilePathRef.current = "";
@@ -2457,16 +2542,47 @@ export function GitReviewPanel(props: {
         setSelectedCommitSha("");
         setSelectedCommitFilePath("");
         setExpandedCommitShas(new Set());
+        setHistoryHasMoreValue(false);
+        setHistoryLoadMoreError("");
         clearCommitDiff();
-        setHistoryError(err instanceof Error ? err.message : String(err));
+        setHistoryError(message);
       }
     } finally {
       historyInFlightRef.current = false;
-      if (!silent) {
+      if (append) {
+        setHistoryLoadingMore(false);
+      } else if (!silent) {
         setHistoryLoading(false);
       }
     }
-  }, [clearCommitDiff, cwd, gitClient, loadCommitDiff]);
+  }, [clearCommitDiff, cwd, gitClient, loadCommitDiff, setHistoryHasMoreValue]);
+
+  const maybeLoadMoreHistory = useCallback(
+    (element: HTMLElement | null) => {
+      if (
+        !element ||
+        !(useSplitReviewLayout || historyStackedPane === "list") ||
+        !historyHasMoreRef.current ||
+        historyInFlightRef.current ||
+        historyLoadMoreError
+      ) {
+        return;
+      }
+      const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (distanceToBottom <= GIT_HISTORY_LOAD_MORE_SCROLL_THRESHOLD_PX) {
+        void loadHistory({ append: true, silent: true });
+      }
+    },
+    [historyLoadMoreError, historyStackedPane, loadHistory, useSplitReviewLayout],
+  );
+
+  const handleHistoryListScroll = useCallback(
+    (event: ReactUIEvent<HTMLElement>) => {
+      handleGitReviewTransientScroll(event);
+      maybeLoadMoreHistory(event.currentTarget);
+    },
+    [maybeLoadMoreHistory],
+  );
 
   useEffect(() => {
     void refresh();
@@ -2802,8 +2918,11 @@ export function GitReviewPanel(props: {
         });
       }
     });
+    if (historyHasMore || historyLoadingMore || historyLoadMoreError) {
+      rows.push({ type: "loadMore" });
+    }
     return rows;
-  }, [expandedCommitShas, historyCommits]);
+  }, [expandedCommitShas, historyCommits, historyHasMore, historyLoadMoreError, historyLoadingMore]);
   const historyVirtualizer = useVirtualizer({
     count: historyRows.length,
     getScrollElement: () => historyListRef.current,
@@ -2813,9 +2932,17 @@ export function GitReviewPanel(props: {
       const row = historyRows[index];
       if (!row) return index;
       if (row.type === "commit") return `commit:${row.commit.sha}`;
+      if (row.type === "loadMore") return "load-more";
       return `file:${row.commit.sha}:${row.file.status}:${row.file.oldPath ?? ""}:${row.file.path}`;
     },
   });
+
+  useEffect(() => {
+    if (reviewMode !== "history") {
+      return;
+    }
+    maybeLoadMoreHistory(historyListRef.current);
+  }, [historyRows.length, maybeLoadMoreHistory, reviewMode]);
 
   useEffect(() => {
     if (!changeContextMenu) return;
@@ -3838,7 +3965,7 @@ export function GitReviewPanel(props: {
             <div
               ref={historyListRef}
               className={cn(GIT_REVIEW_TRANSIENT_SCROLLBAR_CLASS, "min-h-0 flex-1 overflow-auto")}
-              onScroll={handleGitReviewTransientScroll}
+              onScroll={handleHistoryListScroll}
             >
               {historyLoading && historyCommits.length === 0 ? (
                 <div className="flex items-center justify-center gap-2 px-3 py-6 text-xs text-muted-foreground">
@@ -3854,6 +3981,36 @@ export function GitReviewPanel(props: {
                   {historyVirtualizer.getVirtualItems().map((virtualRow) => {
                     const row = historyRows[virtualRow.index];
                     if (!row) return null;
+                    if (row.type === "loadMore") {
+                      return (
+                        <div
+                          key={virtualRow.key}
+                          ref={historyVirtualizer.measureElement}
+                          data-index={virtualRow.index}
+                          className="absolute left-0 top-0 w-full"
+                          style={{ transform: `translateY(${virtualRow.start}px)` }}
+                        >
+                          <button
+                            type="button"
+                            className="flex min-h-[28px] w-full items-center justify-center gap-2 px-3 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-70"
+                            disabled={historyLoadingMore}
+                            title={historyLoadMoreError || undefined}
+                            onClick={() => void loadHistory({ append: true, silent: true })}
+                          >
+                            {historyLoadingMore ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : null}
+                            <span>
+                              {historyLoadingMore
+                                ? t("projectTools.gitReview.loadingMoreCommits")
+                                : historyLoadMoreError
+                                  ? t("projectTools.gitReview.loadMoreCommitsFailed")
+                                  : t("projectTools.gitReview.loadMoreCommits")}
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    }
                     if (row.type === "file") {
                       const TypeIcon = getFileTypeIcon(row.file.path, "file");
                       const fileSelected =

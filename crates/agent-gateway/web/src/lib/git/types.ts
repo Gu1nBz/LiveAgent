@@ -120,6 +120,11 @@ export type GitInitOptions = {
   userEmail?: string;
 };
 
+export type GitLogOptions = {
+  limit?: number;
+  skip?: number;
+};
+
 export type GitClient = {
   status(workdir: string): Promise<GitRepositoryState>;
   branches(workdir: string): Promise<GitBranchesResponse>;
@@ -127,7 +132,7 @@ export type GitClient = {
   switchBranch(workdir: string, branch: string, kind?: string): Promise<GitOperationResponse>;
   createBranch(workdir: string, branch: string, startPoint?: string): Promise<GitOperationResponse>;
   diff(workdir: string, mode: "branch" | "working_tree", path?: string): Promise<GitDiffResponse>;
-  log(workdir: string, limit?: number): Promise<GitLogResponse>;
+  log(workdir: string, options?: GitLogOptions): Promise<GitLogResponse>;
   commitDetails(workdir: string, commit: string): Promise<GitCommitDetailsResponse>;
   compareCommitWithRemote(workdir: string, commit: string): Promise<GitDiffResponse>;
   commitDiff(workdir: string, commit: string, path?: string): Promise<GitDiffResponse>;
