@@ -78,7 +78,6 @@ const GIT_REVIEW_STACKED_PANE_BUTTON_CLASS =
   "inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 const DIFF_SELECTION_AUTOSCROLL_EDGE_PX = 40;
 const DIFF_SELECTION_AUTOSCROLL_MAX_STEP_PX = 22;
-const DIFF_HORIZONTAL_SCROLLBAR_MIN_THUMB_PX = 32;
 const gitReviewScrollbarTimers = new WeakMap<HTMLElement, number>();
 type GitReviewScrollbarAxis = "vertical" | "horizontal";
 type GitReviewScrollbarOverlay = {
@@ -99,6 +98,10 @@ function gitReviewScrollbarThumbSize(viewportSize: number, scrollSize: number, t
 function gitReviewScrollbarThumbOffset(scrollOffset: number, maxScroll: number, maxThumbOffset: number) {
   if (maxScroll <= 0 || maxThumbOffset <= 0) return 0;
   return (scrollOffset / maxScroll) * maxThumbOffset;
+}
+
+function isScrollableOverflowValue(value: string) {
+  return /(auto|scroll|overlay)/.test(value);
 }
 
 function destroyGitReviewScrollbarOverlay(element: HTMLElement) {
@@ -123,8 +126,13 @@ function updateGitReviewScrollbarOverlay(element: HTMLElement) {
   }
   const overlay = ensureGitReviewScrollbarOverlay(element);
   const rect = element.getBoundingClientRect();
-  const canScrollVertically = element.scrollHeight > element.clientHeight + 1;
-  const canScrollHorizontally = element.scrollWidth > element.clientWidth + 1;
+  const style = window.getComputedStyle(element);
+  const canScrollVertically =
+    isScrollableOverflowValue(style.overflowY) &&
+    element.scrollHeight > element.clientHeight + 1;
+  const canScrollHorizontally =
+    isScrollableOverflowValue(style.overflowX) &&
+    element.scrollWidth > element.clientWidth + 1;
   const visible =
     element.dataset.scrollActive === "true" || element.dataset.scrollbarHover === "true";
   const cornerOffset = GIT_REVIEW_SCROLLBAR_THUMB_SIZE_PX + GIT_REVIEW_SCROLLBAR_EDGE_OFFSET_PX;
@@ -389,9 +397,11 @@ function scrollDiffSelectionViewportForPointer(
 function isScrollableDiffSelectionElement(element: HTMLElement) {
   const style = window.getComputedStyle(element);
   const canScrollY =
-    /(auto|scroll)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 1;
+    isScrollableOverflowValue(style.overflowY) &&
+    element.scrollHeight > element.clientHeight + 1;
   const canScrollX =
-    /(auto|scroll)/.test(style.overflowX) && element.scrollWidth > element.clientWidth + 1;
+    isScrollableOverflowValue(style.overflowX) &&
+    element.scrollWidth > element.clientWidth + 1;
   return canScrollY || canScrollX;
 }
 
@@ -428,55 +438,6 @@ function resolveDiffSelectionScrollViewports(
   }
   addViewport(fallback);
   return viewports;
-}
-
-function getDiffHorizontalScrollOverflow(element: HTMLElement) {
-  return Math.max(0, element.scrollWidth - element.clientWidth);
-}
-
-function isDiffHorizontalScrollableElement(element: HTMLElement) {
-  return getDiffHorizontalScrollOverflow(element) > 0;
-}
-
-function resolveDiffHorizontalScrollTargets(
-  root: HTMLElement | null,
-  fallback: HTMLElement | null,
-) {
-  const targets: HTMLElement[] = [];
-  const addTarget = (element: HTMLElement | null) => {
-    if (!element || targets.includes(element) || !isDiffHorizontalScrollableElement(element)) {
-      return;
-    }
-    targets.push(element);
-  };
-
-  if (fallback) {
-    addTarget(fallback);
-  }
-  if (!root) return targets;
-
-  root.querySelectorAll<HTMLElement>(".diff-table-scroll-container").forEach(addTarget);
-  return targets;
-}
-
-function chooseDiffHorizontalScrollTarget(
-  targets: HTMLElement[],
-  preferred: HTMLElement | null,
-) {
-  if (preferred && targets.includes(preferred) && isDiffHorizontalScrollableElement(preferred)) {
-    return preferred;
-  }
-
-  let bestTarget: HTMLElement | null = null;
-  let bestOverflow = 0;
-  for (const target of targets) {
-    const overflow = getDiffHorizontalScrollOverflow(target);
-    if (overflow > bestOverflow) {
-      bestOverflow = overflow;
-      bestTarget = target;
-    }
-  }
-  return bestTarget;
 }
 
 type PatchChunk = {
@@ -556,14 +517,6 @@ type DiffSelectionContextMenuState = {
   x: number;
   y: number;
   selectedText: string;
-};
-
-type DiffHorizontalScrollbarState = {
-  visible: boolean;
-  thumbWidth: number;
-  thumbLeft: number;
-  maxScrollLeft: number;
-  scrollLeft: number;
 };
 
 type ChangesMenuState = {
@@ -1338,19 +1291,8 @@ function DiffContent(props: {
     y: number;
   } | null>(null);
   const selectionAutoscrollFrameRef = useRef<number | null>(null);
-  const diffHorizontalScrollbarTrackRef = useRef<HTMLDivElement | null>(null);
-  const diffHorizontalScrollTargetsRef = useRef<HTMLElement[]>([]);
-  const diffHorizontalActiveTargetRef = useRef<HTMLElement | null>(null);
   const [selectionContextMenu, setSelectionContextMenu] =
     useState<DiffSelectionContextMenuState | null>(null);
-  const [diffHorizontalScrollbar, setDiffHorizontalScrollbar] =
-    useState<DiffHorizontalScrollbarState>({
-      visible: false,
-      thumbWidth: 0,
-      thumbLeft: 0,
-      maxScrollLeft: 0,
-      scrollLeft: 0,
-    });
   const patchChunks = useMemo(
     () => buildPatchChunks(diff?.patch ?? "", title),
     [diff?.patch, title],
@@ -1360,224 +1302,6 @@ function DiffContent(props: {
   const closeSelectionContextMenu = useCallback(() => {
     setSelectionContextMenu(null);
   }, []);
-
-  const updateDiffHorizontalScrollbar = useCallback(() => {
-    const root = rootRef.current;
-    const trackWidth =
-      diffHorizontalScrollbarTrackRef.current?.clientWidth ??
-      scrollViewportRef.current?.clientWidth ??
-      root?.clientWidth ??
-      0;
-    const target = chooseDiffHorizontalScrollTarget(
-      diffHorizontalScrollTargetsRef.current,
-      diffHorizontalActiveTargetRef.current,
-    );
-
-    if (!target || trackWidth <= 0) {
-      diffHorizontalActiveTargetRef.current = null;
-      setDiffHorizontalScrollbar((current) =>
-        current.visible
-          ? { visible: false, thumbWidth: 0, thumbLeft: 0, maxScrollLeft: 0, scrollLeft: 0 }
-          : current,
-      );
-      return;
-    }
-
-    diffHorizontalActiveTargetRef.current = target;
-    const maxScrollLeft = getDiffHorizontalScrollOverflow(target);
-    if (maxScrollLeft <= 0 || target.scrollWidth <= 0) {
-      setDiffHorizontalScrollbar((current) =>
-        current.visible
-          ? { visible: false, thumbWidth: 0, thumbLeft: 0, maxScrollLeft: 0, scrollLeft: 0 }
-          : current,
-      );
-      return;
-    }
-
-    const thumbWidth = Math.max(
-      DIFF_HORIZONTAL_SCROLLBAR_MIN_THUMB_PX,
-      Math.min(trackWidth, (target.clientWidth / target.scrollWidth) * trackWidth),
-    );
-    const travelWidth = Math.max(1, trackWidth - thumbWidth);
-    const thumbLeft = (target.scrollLeft / maxScrollLeft) * travelWidth;
-    setDiffHorizontalScrollbar((current) => {
-      if (
-        current.visible &&
-        Math.abs(current.thumbWidth - thumbWidth) < 0.5 &&
-        Math.abs(current.thumbLeft - thumbLeft) < 0.5 &&
-        Math.abs(current.maxScrollLeft - maxScrollLeft) < 0.5 &&
-        Math.abs(current.scrollLeft - target.scrollLeft) < 0.5
-      ) {
-        return current;
-      }
-      return {
-        visible: true,
-        thumbWidth,
-        thumbLeft,
-        maxScrollLeft,
-        scrollLeft: target.scrollLeft,
-      };
-    });
-  }, []);
-
-  const setDiffHorizontalScrollRatio = useCallback(
-    (ratio: number) => {
-      const nextRatio = Math.min(1, Math.max(0, ratio));
-      for (const target of diffHorizontalScrollTargetsRef.current) {
-        const maxScrollLeft = getDiffHorizontalScrollOverflow(target);
-        if (maxScrollLeft <= 0) continue;
-        target.scrollLeft = Math.min(maxScrollLeft, Math.max(0, nextRatio * maxScrollLeft));
-      }
-      updateDiffHorizontalScrollbar();
-    },
-    [updateDiffHorizontalScrollbar],
-  );
-
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-
-    let animationFrame: number | null = null;
-    let targets: HTMLElement[] = [];
-    const scheduleUpdate = () => {
-      if (animationFrame !== null) return;
-      animationFrame = window.requestAnimationFrame(() => {
-        animationFrame = null;
-        updateDiffHorizontalScrollbar();
-      });
-    };
-    const handleTargetScroll = (event: Event) => {
-      if (event.currentTarget instanceof HTMLElement) {
-        diffHorizontalActiveTargetRef.current = event.currentTarget;
-      }
-      scheduleUpdate();
-    };
-    const resizeObserver =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(() => {
-            scheduleUpdate();
-          });
-
-    const detachTargets = () => {
-      for (const target of targets) {
-        target.removeEventListener("scroll", handleTargetScroll);
-        resizeObserver?.unobserve(target);
-      }
-    };
-    const attachTargets = (nextTargets: HTMLElement[]) => {
-      for (const target of nextTargets) {
-        target.addEventListener("scroll", handleTargetScroll, { passive: true });
-        resizeObserver?.observe(target);
-      }
-    };
-    const refreshTargets = () => {
-      detachTargets();
-      targets = resolveDiffHorizontalScrollTargets(root, scrollViewportRef.current);
-      diffHorizontalScrollTargetsRef.current = targets;
-      diffHorizontalActiveTargetRef.current = chooseDiffHorizontalScrollTarget(
-        targets,
-        diffHorizontalActiveTargetRef.current,
-      );
-      attachTargets(targets);
-      scheduleUpdate();
-    };
-
-    resizeObserver?.observe(root);
-    if (scrollViewportRef.current) {
-      resizeObserver?.observe(scrollViewportRef.current);
-    }
-    const mutationObserver =
-      typeof MutationObserver === "undefined"
-        ? null
-        : new MutationObserver(() => {
-            refreshTargets();
-          });
-    mutationObserver?.observe(root, { childList: true, subtree: true });
-    window.addEventListener("resize", refreshTargets);
-    refreshTargets();
-
-    return () => {
-      if (animationFrame !== null) {
-        window.cancelAnimationFrame(animationFrame);
-      }
-      window.removeEventListener("resize", refreshTargets);
-      mutationObserver?.disconnect();
-      detachTargets();
-      resizeObserver?.disconnect();
-      diffHorizontalScrollTargetsRef.current = [];
-      diffHorizontalActiveTargetRef.current = null;
-    };
-  }, [diff?.patch, error, loading, patchChunks.length, updateDiffHorizontalScrollbar]);
-
-  const handleDiffHorizontalScrollbarPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || !diffHorizontalScrollbar.visible) return;
-      const track = diffHorizontalScrollbarTrackRef.current;
-      if (!track) return;
-      const target = chooseDiffHorizontalScrollTarget(
-        diffHorizontalScrollTargetsRef.current,
-        diffHorizontalActiveTargetRef.current,
-      );
-      if (!target) return;
-
-      const maxScrollLeft = getDiffHorizontalScrollOverflow(target);
-      if (maxScrollLeft <= 0) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      diffHorizontalActiveTargetRef.current = target;
-
-      const rect = track.getBoundingClientRect();
-      const thumbWidth = Math.max(
-        DIFF_HORIZONTAL_SCROLLBAR_MIN_THUMB_PX,
-        Math.min(rect.width, (target.clientWidth / target.scrollWidth) * rect.width),
-      );
-      const travelWidth = Math.max(1, rect.width - thumbWidth);
-      const clickedThumb =
-        event.target instanceof HTMLElement &&
-        event.target.closest(".git-review-diff-horizontal-scrollbar-thumb") !== null;
-      const pointerStartX = event.clientX;
-      const scrollStart = clickedThumb
-        ? target.scrollLeft
-        : Math.min(
-            maxScrollLeft,
-            Math.max(
-              0,
-              ((event.clientX - rect.left - thumbWidth / 2) / travelWidth) * maxScrollLeft,
-            ),
-          );
-      setDiffHorizontalScrollRatio(scrollStart / maxScrollLeft);
-
-      let cleanup = () => {};
-      const handleMove = (moveEvent: PointerEvent) => {
-        if ((moveEvent.buttons & 1) === 0) {
-          cleanup();
-          return;
-        }
-        const nextScrollLeft = Math.min(
-          maxScrollLeft,
-          Math.max(
-            0,
-            scrollStart + ((moveEvent.clientX - pointerStartX) / travelWidth) * maxScrollLeft,
-          ),
-        );
-        setDiffHorizontalScrollRatio(nextScrollLeft / maxScrollLeft);
-      };
-      cleanup = () => {
-        window.removeEventListener("pointermove", handleMove, true);
-        window.removeEventListener("pointerup", cleanup, true);
-        window.removeEventListener("pointercancel", cleanup, true);
-        window.removeEventListener("blur", cleanup);
-      };
-
-      window.addEventListener("pointermove", handleMove, true);
-      window.addEventListener("pointerup", cleanup, true);
-      window.addEventListener("pointercancel", cleanup, true);
-      window.addEventListener("blur", cleanup);
-    },
-    [diffHorizontalScrollbar.visible, setDiffHorizontalScrollRatio],
-  );
 
   const runSelectionAutoscroll = useCallback(() => {
     selectionAutoscrollFrameRef.current = null;
@@ -1774,7 +1498,7 @@ function DiffContent(props: {
           }}
           className={cn(
             GIT_REVIEW_TRANSIENT_SCROLLBAR_CLASS,
-            "git-review-diff-selectable-content min-h-0 flex-1 select-text overflow-auto",
+            "git-review-diff-selectable-content min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto",
           )}
           onScroll={handleGitReviewTransientScroll}
         >
@@ -1805,29 +1529,6 @@ function DiffContent(props: {
       {diff?.truncated ? (
         <div className="shrink-0 border-t border-border/70 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-300">
           {t("projectTools.gitReview.diffOutputTruncated")}
-        </div>
-      ) : null}
-      {diffHorizontalScrollbar.visible ? (
-        <div className="shrink-0 border-t border-border/70 bg-background/80 px-2 py-0.5">
-          <div
-            ref={diffHorizontalScrollbarTrackRef}
-            role="scrollbar"
-            aria-label={locale === "en-US" ? "Horizontal diff scrollbar" : "diff 横向滚动条"}
-            aria-orientation="horizontal"
-            aria-valuemin={0}
-            aria-valuemax={Math.round(diffHorizontalScrollbar.maxScrollLeft)}
-            aria-valuenow={Math.round(diffHorizontalScrollbar.scrollLeft)}
-            className="relative h-1.5 overflow-hidden rounded-full bg-muted/35"
-            onPointerDown={handleDiffHorizontalScrollbarPointerDown}
-          >
-            <div
-              className="git-review-diff-horizontal-scrollbar-thumb absolute left-0 top-0 h-full rounded-full bg-muted-foreground/35 shadow-sm transition-colors hover:bg-muted-foreground/55"
-              style={{
-                width: `${diffHorizontalScrollbar.thumbWidth}px`,
-                transform: `translateX(${diffHorizontalScrollbar.thumbLeft}px)`,
-              }}
-            />
-          </div>
         </div>
       ) : null}
       {selectionContextMenu && selectionContextMenuPosition
