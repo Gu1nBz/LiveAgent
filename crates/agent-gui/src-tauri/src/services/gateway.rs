@@ -21,12 +21,12 @@ use uuid::Uuid;
 use crate::commands::chat_history::{self, ChatHistorySummary};
 use crate::commands::settings::{
     load_gateway_settings_sync_snapshot, load_remote_settings, normalize_remote_settings_payload,
-    open_db, redact_gateway_settings_sync_payload, RemoteSettingsPayload,
-    PROVIDER_API_KEY_UPDATES_FIELD, SSH_SECRET_UPDATES_FIELD,
+    open_db, redact_gateway_settings_sync_payload, reset_runtime_ssh_known_host,
+    RemoteSettingsPayload, PROVIDER_API_KEY_UPDATES_FIELD, SSH_SECRET_UPDATES_FIELD,
 };
 use crate::runtime::terminal::{
     terminal_shell_options, TerminalEventPayload, TerminalSessionRecord, TerminalSessionRegistry,
-    TerminalShellOption, TerminalSnapshotResponse,
+    TerminalShellOption, TerminalSnapshotResponse, TerminalSshCreateResponse,
 };
 use crate::services::cron::CronManager;
 use crate::services::gateway_bridge;
@@ -1224,6 +1224,37 @@ impl GatewayController {
                     Err(error) => self.send_error_response(request_id, 400, error).await,
                 }
             }
+            Some(proto::gateway_envelope::Payload::SettingsResetSshKnownHost(request)) => {
+                let host = request.host.trim().to_string();
+                let port = match u16::try_from(request.port) {
+                    Ok(port) if port > 0 => port,
+                    _ => {
+                        return self
+                            .send_error_response(
+                                request_id,
+                                400,
+                                "SSH port must be between 1 and 65535".to_string(),
+                            )
+                            .await;
+                    }
+                };
+                match reset_runtime_ssh_known_host(&host, port) {
+                    Ok(deleted) => {
+                        let deleted = u32::try_from(deleted).unwrap_or(u32::MAX);
+                        self.send_agent_envelope(proto::AgentEnvelope {
+                            request_id,
+                            timestamp: now_unix_seconds(),
+                            payload: Some(
+                                proto::agent_envelope::Payload::SettingsResetSshKnownHostResp(
+                                    proto::SettingsResetSshKnownHostResponse { deleted },
+                                ),
+                            ),
+                        })
+                        .await
+                    }
+                    Err(error) => self.send_error_response(request_id, 400, error).await,
+                }
+            }
             Some(proto::gateway_envelope::Payload::FsRoots(_request)) => {
                 match gateway_bridge::handle_fs_roots().await {
                     Ok(response) => {
@@ -1488,7 +1519,7 @@ impl GatewayController {
                 }
             }
             Some(proto::gateway_envelope::Payload::TerminalRequest(request)) => {
-                match self.handle_terminal_request(request) {
+                match self.handle_terminal_request(request).await {
                     Ok(response) => {
                         self.send_agent_envelope(proto::AgentEnvelope {
                             request_id,
@@ -1506,11 +1537,12 @@ impl GatewayController {
         }
     }
 
-    fn handle_terminal_request(
+    async fn handle_terminal_request(
         &self,
         request: proto::TerminalRequest,
     ) -> Result<proto::TerminalResponse, String> {
         let action = request.action.trim().to_ascii_lowercase();
+        self.ensure_terminal_request_allowed(&action, &request)?;
         match action.as_str() {
             "shell_options" => {
                 let options = terminal_shell_options();
@@ -1528,16 +1560,26 @@ impl GatewayController {
                     default_shell: options.default_shell,
                     output_start_offset: 0,
                     output_end_offset: 0,
+                    ssh_prompt: None,
+                    latency_ms: 0,
                 })
             }
             "list" => {
                 let project_path_key = request.project_path_key.trim().to_string();
                 let project_filter = (!project_path_key.is_empty()).then_some(project_path_key);
+                let config = self.config_tx.borrow().clone();
                 let sessions = self
                     .terminal_registry
                     .list(project_filter)
                     .sessions
                     .into_iter()
+                    .filter(|session| {
+                        if session.kind.trim() == "ssh" {
+                            config.enable_web_ssh_terminal
+                        } else {
+                            config.enable_web_terminal
+                        }
+                    })
                     .map(terminal_session_to_proto)
                     .collect();
                 Ok(proto::TerminalResponse {
@@ -1550,6 +1592,8 @@ impl GatewayController {
                     default_shell: String::new(),
                     output_start_offset: 0,
                     output_end_offset: 0,
+                    ssh_prompt: None,
+                    latency_ms: 0,
                 })
             }
             "create" => {
@@ -1564,6 +1608,75 @@ impl GatewayController {
                     optional_proto_u16(request.rows),
                 )?;
                 Ok(terminal_snapshot_response_to_proto(action, snapshot))
+            }
+            "create_ssh" => {
+                let project_path_key =
+                    required_terminal_project_path_key(&request.project_path_key)?;
+                let response = self
+                    .terminal_registry
+                    .clone()
+                    .create_ssh(
+                        request.cwd,
+                        Some(project_path_key),
+                        request.ssh_host_id,
+                        optional_proto_text(request.title),
+                        optional_proto_u16(request.cols),
+                        optional_proto_u16(request.rows),
+                    )
+                    .await?;
+                Ok(terminal_ssh_create_response_to_proto(action, response))
+            }
+            "answer_ssh_prompt" => {
+                let response = self
+                    .terminal_registry
+                    .clone()
+                    .answer_ssh_prompt(
+                        request.prompt_id,
+                        optional_proto_text(request.prompt_answer),
+                        request.trust_host_key,
+                    )
+                    .await?;
+                Ok(terminal_ssh_create_response_to_proto(action, response))
+            }
+            "ssh_latency" => {
+                self.ensure_terminal_session_in_project(
+                    &request.session_id,
+                    &request.project_path_key,
+                )?;
+                let latency = self
+                    .terminal_registry
+                    .ssh_latency(request.session_id)
+                    .await?;
+                Ok(proto::TerminalResponse {
+                    action,
+                    sessions: Vec::new(),
+                    session: None,
+                    output: String::new(),
+                    truncated: false,
+                    shell_options: Vec::new(),
+                    default_shell: String::new(),
+                    output_start_offset: 0,
+                    output_end_offset: 0,
+                    ssh_prompt: None,
+                    latency_ms: latency.latency_ms,
+                })
+            }
+            "cancel_ssh_prompt" => {
+                self.terminal_registry
+                    .cancel_ssh_prompt(request.prompt_id)?;
+                Ok(proto::TerminalResponse {
+                    action,
+                    sessions: Vec::new(),
+                    session: None,
+                    output: String::new(),
+                    truncated: false,
+                    shell_options: Vec::new(),
+                    default_shell: String::new(),
+                    output_start_offset: 0,
+                    output_end_offset: 0,
+                    ssh_prompt: None,
+                    latency_ms: 0,
+                })
             }
             "attach" | "snapshot" => {
                 self.ensure_terminal_session_in_project(
@@ -1618,8 +1731,22 @@ impl GatewayController {
             "close_project" => {
                 let project_path_key =
                     required_terminal_project_path_key(&request.project_path_key)?;
-                let response = self.terminal_registry.close_project(project_path_key)?;
-                Ok(terminal_list_response_to_proto(action, response.sessions))
+                let config = self.config_tx.borrow().clone();
+                let sessions = self
+                    .terminal_registry
+                    .list(Some(project_path_key))
+                    .sessions
+                    .into_iter()
+                    .filter(|session| {
+                        if session.kind.trim() == "ssh" {
+                            config.enable_web_ssh_terminal
+                        } else {
+                            config.enable_web_terminal
+                        }
+                    })
+                    .filter_map(|session| self.terminal_registry.close(session.id).ok())
+                    .collect();
+                Ok(terminal_list_response_to_proto(action, sessions))
             }
             "detach" => Ok(proto::TerminalResponse {
                 action,
@@ -1631,6 +1758,8 @@ impl GatewayController {
                 default_shell: String::new(),
                 output_start_offset: 0,
                 output_end_offset: 0,
+                ssh_prompt: None,
+                latency_ms: 0,
             }),
             "" => Err("terminal action is required".to_string()),
             other => Err(format!("unsupported terminal action: {other}")),
@@ -1650,6 +1779,62 @@ impl GatewayController {
             return Err("terminal session is outside the requested project".to_string());
         }
         Ok(())
+    }
+
+    fn ensure_terminal_request_allowed(
+        &self,
+        action: &str,
+        request: &proto::TerminalRequest,
+    ) -> Result<(), String> {
+        let config = self.config_tx.borrow().clone();
+        match action {
+            "create_ssh" | "answer_ssh_prompt" | "cancel_ssh_prompt" => {
+                if config.enable_web_ssh_terminal {
+                    Ok(())
+                } else {
+                    Err("web SSH terminal is disabled in desktop Remote settings".to_string())
+                }
+            }
+            "list" => {
+                if config.enable_web_terminal || config.enable_web_ssh_terminal {
+                    Ok(())
+                } else {
+                    Err("web terminal is disabled in desktop Remote settings".to_string())
+                }
+            }
+            "attach" | "snapshot" | "input" | "resize" | "rename" | "close" | "detach"
+            | "ssh_latency" => {
+                let session = self
+                    .terminal_registry
+                    .session_record(request.session_id.trim().to_string())?;
+                let allowed = if session.kind.trim() == "ssh" {
+                    config.enable_web_ssh_terminal
+                } else {
+                    config.enable_web_terminal
+                };
+                if allowed {
+                    Ok(())
+                } else if session.kind.trim() == "ssh" {
+                    Err("web SSH terminal is disabled in desktop Remote settings".to_string())
+                } else {
+                    Err("web terminal is disabled in desktop Remote settings".to_string())
+                }
+            }
+            "close_project" => {
+                if config.enable_web_terminal || config.enable_web_ssh_terminal {
+                    Ok(())
+                } else {
+                    Err("web terminal is disabled in desktop Remote settings".to_string())
+                }
+            }
+            _ => {
+                if config.enable_web_terminal {
+                    Ok(())
+                } else {
+                    Err("web terminal is disabled in desktop Remote settings".to_string())
+                }
+            }
+        }
     }
 
     async fn send_agent_envelope(&self, envelope: proto::AgentEnvelope) -> Result<(), String> {
@@ -3546,6 +3731,22 @@ fn terminal_session_to_proto(session: TerminalSessionRecord) -> proto::TerminalS
             .unwrap_or_default(),
         exit_code: session.exit_code.unwrap_or_default(),
         running: session.running,
+        kind: if session.kind.trim() == "ssh" {
+            "ssh".to_string()
+        } else {
+            "local".to_string()
+        },
+        ssh: session.ssh.map(|ssh| proto::TerminalSshMetadata {
+            host_id: ssh.host_id,
+            host_name: ssh.host_name,
+            username: ssh.username,
+            host: ssh.host,
+            port: u32::from(ssh.port),
+            auth_type: ssh.auth_type,
+            status: ssh.status,
+            reconnect_attempt: u32::from(ssh.reconnect_attempt),
+            reconnect_max_attempts: u32::from(ssh.reconnect_max_attempts),
+        }),
     }
 }
 
@@ -3574,6 +3775,8 @@ fn terminal_list_response_to_proto(
         default_shell: String::new(),
         output_start_offset: 0,
         output_end_offset: 0,
+        ssh_prompt: None,
+        latency_ms: 0,
     }
 }
 
@@ -3591,6 +3794,8 @@ fn terminal_record_response_to_proto(
         default_shell: String::new(),
         output_start_offset: 0,
         output_end_offset: 0,
+        ssh_prompt: None,
+        latency_ms: 0,
     }
 }
 
@@ -3608,6 +3813,38 @@ fn terminal_snapshot_response_to_proto(
         default_shell: String::new(),
         output_start_offset: snapshot.output_start_offset,
         output_end_offset: snapshot.output_end_offset,
+        ssh_prompt: None,
+        latency_ms: 0,
+    }
+}
+
+fn terminal_ssh_create_response_to_proto(
+    action: String,
+    response: TerminalSshCreateResponse,
+) -> proto::TerminalResponse {
+    proto::TerminalResponse {
+        action,
+        sessions: Vec::new(),
+        session: response.session.map(terminal_session_to_proto),
+        output: response.output,
+        truncated: response.truncated,
+        shell_options: Vec::new(),
+        default_shell: String::new(),
+        output_start_offset: response.output_start_offset,
+        output_end_offset: response.output_end_offset,
+        ssh_prompt: response.ssh_prompt.map(|prompt| proto::TerminalSshPrompt {
+            id: prompt.id,
+            kind: prompt.kind,
+            host_id: prompt.host_id,
+            host_name: prompt.host_name,
+            host: prompt.host,
+            port: u32::from(prompt.port),
+            message: prompt.message,
+            fingerprint_sha256: prompt.fingerprint_sha256,
+            key_type: prompt.key_type,
+            answer_echo: prompt.answer_echo,
+        }),
+        latency_ms: 0,
     }
 }
 
@@ -4055,6 +4292,7 @@ mod tests {
             auto_reconnect: true,
             heartbeat_interval: 30,
             enable_web_terminal: false,
+            enable_web_ssh_terminal: false,
             enable_web_git: false,
             enable_web_tunnels: false,
         };
@@ -4104,6 +4342,7 @@ mod tests {
             auto_reconnect: true,
             heartbeat_interval: 30,
             enable_web_terminal: false,
+            enable_web_ssh_terminal: false,
             enable_web_git: false,
             enable_web_tunnels: false,
         };

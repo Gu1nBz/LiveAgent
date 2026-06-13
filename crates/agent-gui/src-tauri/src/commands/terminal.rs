@@ -5,7 +5,8 @@ use tauri::State;
 use crate::runtime::terminal::{
     terminal_shell_options as runtime_terminal_shell_options, TerminalListResponse,
     TerminalReadTailResponse, TerminalSessionRecord, TerminalSessionRegistry,
-    TerminalShellOptionsResponse, TerminalSnapshotResponse,
+    TerminalShellOptionsResponse, TerminalSnapshotResponse, TerminalSshCreateResponse,
+    TerminalSshLatencyResponse,
 };
 
 #[tauri::command(rename_all = "snake_case")]
@@ -32,6 +33,53 @@ pub fn terminal_create(
     rows: Option<u16>,
 ) -> Result<TerminalSnapshotResponse, String> {
     registry.create(cwd, project_path_key, shell, title, cols, rows)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn terminal_create_ssh(
+    registry: State<'_, Arc<TerminalSessionRegistry>>,
+    cwd: String,
+    project_path_key: Option<String>,
+    ssh_host_id: String,
+    title: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<TerminalSshCreateResponse, String> {
+    registry
+        .inner()
+        .clone()
+        .create_ssh(cwd, project_path_key, ssh_host_id, title, cols, rows)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn terminal_answer_ssh_prompt(
+    registry: State<'_, Arc<TerminalSessionRegistry>>,
+    prompt_id: String,
+    prompt_answer: Option<String>,
+    trust_host_key: Option<bool>,
+) -> Result<TerminalSshCreateResponse, String> {
+    registry
+        .inner()
+        .clone()
+        .answer_ssh_prompt(prompt_id, prompt_answer, trust_host_key.unwrap_or(false))
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn terminal_cancel_ssh_prompt(
+    registry: State<'_, Arc<TerminalSessionRegistry>>,
+    prompt_id: String,
+) -> Result<(), String> {
+    registry.cancel_ssh_prompt(prompt_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn terminal_ssh_latency(
+    registry: State<'_, Arc<TerminalSessionRegistry>>,
+    session_id: String,
+) -> Result<TerminalSshLatencyResponse, String> {
+    registry.ssh_latency(session_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

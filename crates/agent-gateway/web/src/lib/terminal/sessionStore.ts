@@ -54,7 +54,7 @@ export function applyTerminalEventToSessions(
     return sortTerminalSessions(next);
   }
 
-  if (event.kind === "created") {
+  if (event.kind !== "output") {
     return sortTerminalSessions([...current, session]);
   }
 

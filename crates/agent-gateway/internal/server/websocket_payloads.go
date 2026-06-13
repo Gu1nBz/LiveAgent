@@ -98,12 +98,14 @@ func websocketTerminalSessionPayload(session *gatewayv1.TerminalSession) map[str
 	if session == nil {
 		return nil
 	}
+	kind := terminalSessionKind(session)
 	payload := map[string]any{
 		"id":               strings.TrimSpace(session.GetId()),
 		"project_path_key": strings.TrimSpace(session.GetProjectPathKey()),
 		"cwd":              strings.TrimSpace(session.GetCwd()),
 		"shell":            strings.TrimSpace(session.GetShell()),
 		"title":            strings.TrimSpace(session.GetTitle()),
+		"kind":             kind,
 		"pid":              session.GetPid(),
 		"cols":             session.GetCols(),
 		"rows":             session.GetRows(),
@@ -119,7 +121,31 @@ func websocketTerminalSessionPayload(session *gatewayv1.TerminalSession) map[str
 	if session.GetFinishedAt() == 0 {
 		payload["finished_at"] = nil
 	}
+	if kind == "ssh" {
+		payload["pid"] = nil
+	}
+	if ssh := session.GetSsh(); ssh != nil {
+		payload["ssh"] = map[string]any{
+			"host_id":                strings.TrimSpace(ssh.GetHostId()),
+			"host_name":              strings.TrimSpace(ssh.GetHostName()),
+			"username":               strings.TrimSpace(ssh.GetUsername()),
+			"host":                   strings.TrimSpace(ssh.GetHost()),
+			"port":                   ssh.GetPort(),
+			"auth_type":              strings.TrimSpace(ssh.GetAuthType()),
+			"status":                 strings.TrimSpace(ssh.GetStatus()),
+			"reconnect_attempt":      ssh.GetReconnectAttempt(),
+			"reconnect_max_attempts": ssh.GetReconnectMaxAttempts(),
+		}
+	}
 	return payload
+}
+
+func terminalSessionKind(session *gatewayv1.TerminalSession) string {
+	kind := strings.TrimSpace(session.GetKind())
+	if kind == "ssh" {
+		return "ssh"
+	}
+	return "local"
 }
 
 func websocketTerminalShellOptionPayload(option *gatewayv1.TerminalShellOption) map[string]any {
@@ -158,8 +184,25 @@ func websocketTerminalResponsePayload(resp *gatewayv1.TerminalResponse) map[stri
 		payload["output_start_offset"] = resp.GetOutputStartOffset()
 		payload["output_end_offset"] = resp.GetOutputEndOffset()
 	}
+	if resp.GetLatencyMs() > 0 {
+		payload["latency_ms"] = resp.GetLatencyMs()
+	}
 	if session := websocketTerminalSessionPayload(resp.GetSession()); session != nil {
 		payload["session"] = session
+	}
+	if prompt := resp.GetSshPrompt(); prompt != nil {
+		payload["ssh_prompt"] = map[string]any{
+			"id":                 strings.TrimSpace(prompt.GetId()),
+			"kind":               strings.TrimSpace(prompt.GetKind()),
+			"host_id":            strings.TrimSpace(prompt.GetHostId()),
+			"host_name":          strings.TrimSpace(prompt.GetHostName()),
+			"host":               strings.TrimSpace(prompt.GetHost()),
+			"port":               prompt.GetPort(),
+			"message":            strings.TrimSpace(prompt.GetMessage()),
+			"fingerprint_sha256": strings.TrimSpace(prompt.GetFingerprintSha256()),
+			"key_type":           strings.TrimSpace(prompt.GetKeyType()),
+			"answer_echo":        prompt.GetAnswerEcho(),
+		}
 	}
 	return payload
 }

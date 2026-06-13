@@ -1,7 +1,3 @@
-import "@xterm/xterm/css/xterm.css";
-
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal as XTerm } from "@xterm/xterm";
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -20,11 +16,11 @@ import type {
   ProjectToolsPanelTab,
   SshHostConfig,
 } from "../../lib/settings";
+import { workspaceProjectPathKey } from "../../lib/settings";
 import type { GitClient } from "../../lib/git/types";
 import { cn } from "../../lib/shared/utils";
 import type {
   TerminalClient,
-  TerminalEvent,
   TerminalSession,
   TerminalShellOption,
   TerminalSnapshot,
@@ -59,6 +55,7 @@ import {
 import { LocalTunnelPanel, type LocalTunnelClient } from "./LocalTunnelPanel";
 import { ProjectFileTreePanel } from "./ProjectFileTreePanel";
 import { SshTunnelPanel } from "./SshTunnelPanel";
+import { XTermViewport } from "./XTermViewport";
 
 const MIN_PANEL_WIDTH = 320;
 const DEFAULT_MAX_PANEL_WIDTH = 720;
@@ -108,6 +105,7 @@ type ProjectToolsPanelProps = {
   onTunnelOpenChange?: (open: boolean) => void;
   onSshTunnelOpenChange?: (open: boolean) => void;
   onSshProjectHostIdsChange?: (hostIds: string[]) => void;
+  onOpenSshSession?: (session: TerminalSession) => void;
   onSessionsChange?: (sessions: TerminalSession[]) => void;
   onInsertFileMention?: (path: string, kind: "file" | "dir") => void;
   onOpenFile?: (path: string) => void;
@@ -170,6 +168,17 @@ function areSessionsEqual(left: TerminalSession[], right: TerminalSession[]) {
       session.cwd === other.cwd &&
       session.shell === other.shell &&
       session.title === other.title &&
+      session.kind === other.kind &&
+      (session.ssh?.hostId ?? "") === (other.ssh?.hostId ?? "") &&
+      (session.ssh?.hostName ?? "") === (other.ssh?.hostName ?? "") &&
+      (session.ssh?.username ?? "") === (other.ssh?.username ?? "") &&
+      (session.ssh?.host ?? "") === (other.ssh?.host ?? "") &&
+      (session.ssh?.port ?? 0) === (other.ssh?.port ?? 0) &&
+      (session.ssh?.authType ?? "") === (other.ssh?.authType ?? "") &&
+      (session.ssh?.status ?? "") === (other.ssh?.status ?? "") &&
+      (session.ssh?.reconnectAttempt ?? 0) === (other.ssh?.reconnectAttempt ?? 0) &&
+      (session.ssh?.reconnectMaxAttempts ?? 0) ===
+        (other.ssh?.reconnectMaxAttempts ?? 0) &&
       session.pid === other.pid &&
       session.cols === other.cols &&
       session.rows === other.rows &&
@@ -186,6 +195,13 @@ function formatTerminalSessionTitle(title: string, terminalLabel: string) {
   const match = /^Terminal(?:\s+(\d+))?$/.exec(title.trim());
   if (!match) return title;
   return match[1] ? `${terminalLabel} ${match[1]}` : terminalLabel;
+}
+
+function terminalSessionBelongsToProject(session: TerminalSession, projectPathKey: string) {
+  const wantedProjectKey = workspaceProjectPathKey(projectPathKey);
+  if (!wantedProjectKey) return false;
+  const sessionProjectKey = workspaceProjectPathKey(session.projectPathKey || session.cwd);
+  return sessionProjectKey === wantedProjectKey;
 }
 
 function dirname(path: string) {
@@ -334,330 +350,6 @@ function reorderTabIdsByKeyboard(tabIds: readonly string[], tabId: string, key: 
   return nextTabIds;
 }
 
-function terminalTheme(theme: "light" | "dark") {
-  if (theme === "dark") {
-    return {
-      background: "#0b0f14",
-      foreground: "#d6deeb",
-      cursor: "#f8fafc",
-      selectionBackground: "#334155",
-      black: "#0f172a",
-      red: "#ef4444",
-      green: "#22c55e",
-      yellow: "#eab308",
-      blue: "#38bdf8",
-      magenta: "#c084fc",
-      cyan: "#2dd4bf",
-      white: "#e5e7eb",
-    };
-  }
-  return {
-    background: "#ffffff",
-    foreground: "#172033",
-    cursor: "#111827",
-    selectionBackground: "#dbeafe",
-    black: "#111827",
-    red: "#dc2626",
-    green: "#16a34a",
-    yellow: "#ca8a04",
-    blue: "#2563eb",
-    magenta: "#9333ea",
-    cyan: "#0891b2",
-    white: "#f8fafc",
-  };
-}
-
-function terminalContainerHasSize(container: HTMLElement) {
-  const rect = container.getBoundingClientRect();
-  return rect.width > 0 && rect.height > 0;
-}
-
-function XTermViewport({
-  client,
-  session,
-  theme,
-  isActive,
-  initialSnapshot,
-  onError,
-  onInitialSnapshotConsumed,
-}: {
-  client: TerminalClient;
-  session: TerminalSession;
-  theme: "light" | "dark";
-  isActive: boolean;
-  initialSnapshot?: TerminalSnapshot;
-  onError: (message: string | null) => void;
-  onInitialSnapshotConsumed?: (sessionId: string) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const resizeTimerRef = useRef<number | null>(null);
-  const clientRef = useRef(client);
-  const sessionRef = useRef(session);
-  const themeRef = useRef(theme);
-  const onErrorRef = useRef(onError);
-  const initialSnapshotRef = useRef(initialSnapshot);
-  const onInitialSnapshotConsumedRef = useRef(onInitialSnapshotConsumed);
-  clientRef.current = client;
-  sessionRef.current = session;
-  themeRef.current = theme;
-  onErrorRef.current = onError;
-  onInitialSnapshotConsumedRef.current = onInitialSnapshotConsumed;
-
-  const termRef = useRef<XTerm | null>(null);
-  const fitAndResizeRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    if (!termRef.current) return;
-    termRef.current.options.theme = terminalTheme(theme);
-  }, [theme]);
-
-  useEffect(() => {
-    if (!isActive) {
-      termRef.current?.blur();
-      return;
-    }
-    termRef.current?.focus();
-    window.setTimeout(() => {
-      fitAndResizeRef.current?.();
-    }, 0);
-  }, [isActive]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    let disposed = false;
-    let snapshotLoaded = false;
-    let loadingSnapshot = false;
-    let lastOutputOffset = 0;
-    const bufferedEvents: TerminalEvent[] = [];
-    const term = new XTerm({
-      cursorBlink: true,
-      disableStdin: !sessionRef.current.running,
-      fontFamily:
-        '"SF Mono", SFMono-Regular, Menlo, Monaco, "Cascadia Code", Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
-      fontWeight: "normal",
-      fontWeightBold: "bold",
-      lineHeight: 1.1,
-      letterSpacing: 0,
-      scrollback: 5000,
-      theme: terminalTheme(themeRef.current),
-    });
-    termRef.current = term;
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(container);
-
-    const fitAndResize = () => {
-      if (disposed) return;
-      if (!terminalContainerHasSize(container)) return;
-      try {
-        fit.fit();
-        const s = sessionRef.current;
-        void clientRef.current
-          .resize(s.id, term.cols, term.rows, s.projectPathKey)
-          .catch(() => undefined);
-      } catch {
-        // xterm fit can throw while the panel is hidden or measuring at zero size.
-      }
-    };
-    fitAndResizeRef.current = fitAndResize;
-
-    const resizeObserver = new ResizeObserver(() => {
-      if (resizeTimerRef.current !== null) {
-        window.clearTimeout(resizeTimerRef.current);
-      }
-      resizeTimerRef.current = window.setTimeout(fitAndResize, 40);
-    });
-    resizeObserver.observe(container);
-    window.setTimeout(fitAndResize, 0);
-
-    const dataDisposable = term.onData((data) => {
-      const s = sessionRef.current;
-      if (!s.running) return;
-      void clientRef.current.input(s.id, data, s.projectPathKey).catch((error) => {
-        onErrorRef.current(error instanceof Error ? error.message : String(error));
-      });
-    });
-
-    const applySnapshot = (snapshot: TerminalSnapshot) => {
-      if (snapshot.output) {
-        term.write(snapshot.output);
-      }
-      lastOutputOffset = terminalSnapshotEndOffset(snapshot);
-      snapshotLoaded = true;
-      loadingSnapshot = false;
-      term.options.disableStdin = !snapshot.session.running;
-      replayBufferedEvents();
-      window.setTimeout(fitAndResize, 0);
-    };
-
-    const replayBufferedEvents = () => {
-      const events = bufferedEvents.splice(0);
-      for (const event of events) {
-        writeTerminalEvent(
-          term,
-          event,
-          (nextOffset) => {
-            lastOutputOffset = nextOffset;
-          },
-          lastOutputOffset,
-        );
-      }
-    };
-
-    const loadSnapshot = () => {
-      if (disposed || loadingSnapshot) return;
-      const initial = initialSnapshotRef.current;
-      if (initial?.session.id === sessionRef.current.id) {
-        initialSnapshotRef.current = undefined;
-        onInitialSnapshotConsumedRef.current?.(initial.session.id);
-        applySnapshot(initial);
-        return;
-      }
-      loadingSnapshot = true;
-      const s = sessionRef.current;
-      void clientRef.current
-        .snapshot(s.id, undefined, s.projectPathKey)
-        .then((snapshot) => {
-          if (disposed) return;
-          applySnapshot(snapshot);
-        })
-        .catch((error) => {
-          loadingSnapshot = false;
-          if (!disposed) {
-            onErrorRef.current(error instanceof Error ? error.message : String(error));
-            snapshotLoaded = true;
-            replayBufferedEvents();
-          }
-        });
-    };
-
-    const unsubscribe = clientRef.current.subscribe((event) => {
-      if (disposed || event.sessionId !== session.id) return;
-      if (event.kind === "output" && event.data) {
-        if (snapshotLoaded && !loadingSnapshot) {
-          writeTerminalEvent(
-            term,
-            event,
-            (nextOffset) => {
-              lastOutputOffset = nextOffset;
-            },
-            lastOutputOffset,
-          );
-        } else {
-          bufferedEvents.push(event);
-        }
-      }
-      if (event.kind === "exit" || event.kind === "closed") {
-        term.options.disableStdin = true;
-      }
-    });
-
-    loadSnapshot();
-
-    return () => {
-      disposed = true;
-      termRef.current = null;
-      fitAndResizeRef.current = null;
-      unsubscribe();
-      dataDisposable.dispose();
-      resizeObserver.disconnect();
-      if (resizeTimerRef.current !== null) {
-        window.clearTimeout(resizeTimerRef.current);
-        resizeTimerRef.current = null;
-      }
-      const s = sessionRef.current;
-      void clientRef.current.detach(s.id, s.projectPathKey).catch(() => undefined);
-      term.dispose();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.projectPathKey]);
-
-  return <div ref={containerRef} className="h-full min-h-0 w-full overflow-hidden px-2 py-2" />;
-}
-
-function terminalSnapshotEndOffset(snapshot: TerminalSnapshot) {
-  if (
-    typeof snapshot.outputEndOffset === "number" &&
-    Number.isFinite(snapshot.outputEndOffset) &&
-    snapshot.outputEndOffset >= 0
-  ) {
-    return snapshot.outputEndOffset;
-  }
-  const startOffset =
-    typeof snapshot.outputStartOffset === "number" &&
-    Number.isFinite(snapshot.outputStartOffset) &&
-    snapshot.outputStartOffset >= 0
-      ? snapshot.outputStartOffset
-      : 0;
-  return startOffset + utf8ByteLength(snapshot.output);
-}
-
-function writeTerminalEvent(
-  term: XTerm,
-  event: TerminalEvent,
-  setLastOutputOffset: (offset: number) => void,
-  lastOutputOffset: number,
-): "written" | "skipped" {
-  const data = event.data ?? "";
-  if (!data) return "skipped";
-  const startOffset = event.outputStartOffset;
-  const endOffset = event.outputEndOffset;
-  if (
-    typeof startOffset === "number" &&
-    Number.isFinite(startOffset) &&
-    typeof endOffset === "number" &&
-    Number.isFinite(endOffset) &&
-    endOffset >= startOffset
-  ) {
-    if (endOffset <= lastOutputOffset) return "skipped";
-    const alreadyWritten = Math.max(0, lastOutputOffset - startOffset);
-    term.write(alreadyWritten > 0 ? sliceUtf8Bytes(data, alreadyWritten) : data);
-    setLastOutputOffset(endOffset);
-    return "written";
-  }
-  term.write(data);
-  setLastOutputOffset(lastOutputOffset + utf8ByteLength(data));
-  return "written";
-}
-
-function sliceUtf8Bytes(value: string, byteOffset: number) {
-  if (byteOffset <= 0) return value;
-  let consumed = 0;
-  let index = 0;
-  for (const segment of value) {
-    const next = consumed + utf8ByteLengthOfCodePoint(segment);
-    if (next <= byteOffset) {
-      consumed = next;
-      index += segment.length;
-      continue;
-    }
-    if (consumed < byteOffset) {
-      index += segment.length;
-    }
-    return value.slice(index);
-  }
-  return "";
-}
-
-function utf8ByteLength(value: string) {
-  let length = 0;
-  for (const segment of value) {
-    length += utf8ByteLengthOfCodePoint(segment);
-  }
-  return length;
-}
-
-function utf8ByteLengthOfCodePoint(value: string) {
-  const codePoint = value.codePointAt(0) ?? 0;
-  if (codePoint <= 0x7f) return 1;
-  if (codePoint <= 0x7ff) return 2;
-  if (codePoint <= 0xffff) return 3;
-  return 4;
-}
-
 export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const {
     isOpen,
@@ -695,6 +387,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     onTunnelOpenChange,
     onSshTunnelOpenChange,
     onSshProjectHostIdsChange,
+    onOpenSshSession,
     onSessionsChange,
     onInsertFileMention,
     onOpenFile,
@@ -738,6 +431,18 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const effectiveWidthCollapsed = !isOpen && collapseImmediately ? true : widthCollapsed;
   const effectiveShouldRenderContent = !isOpen && collapseImmediately ? false : shouldRenderContent;
   const isControlled = externalSessions !== undefined;
+  const localSessions = useMemo(
+    () =>
+      sessions.filter(
+        (session) =>
+          session.kind !== "ssh" && terminalSessionBelongsToProject(session, projectPathKey),
+      ),
+    [projectPathKey, sessions],
+  );
+  const sshSessions = useMemo(
+    () => sessions.filter((session) => session.kind === "ssh"),
+    [sessions],
+  );
   const fileTreeInitialized = Boolean(projectPathKey && fileTreeOpen);
   const gitReviewInitialized = Boolean(projectPathKey && gitReviewOpen);
   const tunnelInitialized = Boolean(tunnelOpen && tunnelClient);
@@ -759,17 +464,18 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
           : "terminal";
 
   const activeSession = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0] ?? null,
-    [activeSessionId, sessions],
+    () =>
+      localSessions.find((session) => session.id === activeSessionId) ?? localSessions[0] ?? null,
+    [activeSessionId, localSessions],
   );
   const pendingCloseSession = useMemo(
-    () => sessions.find((session) => session.id === pendingCloseSessionId) ?? null,
-    [pendingCloseSessionId, sessions],
+    () => localSessions.find((session) => session.id === pendingCloseSessionId) ?? null,
+    [localSessions, pendingCloseSessionId],
   );
   const [draftTabOrder, setDraftTabOrder] = useState<string[] | null>(null);
   const [draggingTabId, setDraggingTabId] = useState("");
   const visibleTabs = useMemo<ProjectToolsTab[]>(() => {
-    const terminalTabs: ProjectToolsTab[] = sessions.map((session) => ({
+    const terminalTabs: ProjectToolsTab[] = localSessions.map((session) => ({
       id: session.id,
       kind: "terminal",
       session,
@@ -788,7 +494,13 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
       nextTabs.push({ id: SSH_TUNNEL_TAB_ID, kind: "sshTunnel" });
     }
     return nextTabs;
-  }, [fileTreeInitialized, gitReviewInitialized, sessions, sshTunnelInitialized, tunnelInitialized]);
+  }, [
+    fileTreeInitialized,
+    gitReviewInitialized,
+    localSessions,
+    sshTunnelInitialized,
+    tunnelInitialized,
+  ]);
   const effectiveTabOrder = draftTabOrder ?? tabOrder;
   const orderedProjectTabs = useMemo(
     () => orderProjectToolsTabs(visibleTabs, effectiveTabOrder),
@@ -881,13 +593,13 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     setLoading(true);
     setError(null);
     void client
-      .list(projectPathKey)
+      .list()
       .then((nextSessions) => {
         publishSessions(nextSessions, { notifyParent: !isControlled });
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [client, isControlled, projectPathKey, publishSessions, terminalReady]);
+  }, [client, isControlled, publishSessions, terminalReady]);
 
   useEffect(() => {
     if (!isOpen || isControlled) return;
@@ -993,7 +705,6 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   useEffect(() => {
     if (!terminalReady || isControlled) return;
     return client.subscribe((event) => {
-      if (event.projectPathKey !== projectPathKey) return;
       if (event.kind === "output") return;
       setSessions((current) => {
         let next = current;
@@ -1043,10 +754,38 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
 
   useEffect(() => {
     if (!pendingCloseSessionId) return;
-    if (!sessions.some((session) => session.id === pendingCloseSessionId)) {
+    if (!localSessions.some((session) => session.id === pendingCloseSessionId)) {
       setPendingCloseSessionId("");
     }
-  }, [pendingCloseSessionId, sessions]);
+  }, [localSessions, pendingCloseSessionId]);
+
+  const rememberTerminalSnapshot = useCallback(
+    (snapshot: TerminalSnapshot) => {
+      initialTerminalSnapshotsRef.current.set(snapshot.session.id, snapshot);
+      setSessions((current) => {
+        const next = sortSessions([
+          ...current.filter((session) => session.id !== snapshot.session.id),
+          snapshot.session,
+        ]);
+        onSessionsChange?.(next);
+        return next;
+      });
+    },
+    [onSessionsChange],
+  );
+
+  const forgetTerminalSession = useCallback(
+    (sessionId: string) => {
+      initialTerminalSnapshotsRef.current.delete(sessionId);
+      setPendingCloseSessionId((current) => (current === sessionId ? "" : current));
+      setSessions((current) => {
+        const next = sortSessions(current.filter((item) => item.id !== sessionId));
+        onSessionsChange?.(next);
+        return next;
+      });
+    },
+    [onSessionsChange],
+  );
 
   const createTerminal = useCallback(
     (shell?: string) => {
@@ -1062,22 +801,22 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
           rows: DEFAULT_TERMINAL_ROWS,
         })
         .then((snapshot) => {
-          initialTerminalSnapshotsRef.current.set(snapshot.session.id, snapshot);
-          setSessions((current) => {
-            const next = sortSessions([
-              ...current.filter((session) => session.id !== snapshot.session.id),
-              snapshot.session,
-            ]);
-            onSessionsChange?.(next);
-            return next;
-          });
+          rememberTerminalSnapshot(snapshot);
           setActiveSessionId(snapshot.session.id);
           onActiveTabChange("terminal");
         })
         .catch((err) => setError(err instanceof Error ? err.message : String(err)))
         .finally(() => setCreating(false));
     },
-    [client, creating, cwd, onActiveTabChange, onSessionsChange, projectPathKey, terminalReady],
+    [
+      client,
+      creating,
+      cwd,
+      onActiveTabChange,
+      projectPathKey,
+      rememberTerminalSnapshot,
+      terminalReady,
+    ],
   );
 
   const handleCreate = useCallback(() => {
@@ -1092,18 +831,12 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
       void client
         .close(session.id, session.projectPathKey)
         .then(() => {
-          initialTerminalSnapshotsRef.current.delete(session.id);
-          setPendingCloseSessionId((current) => (current === session.id ? "" : current));
-          setSessions((current) => {
-            const next = sortSessions(current.filter((item) => item.id !== session.id));
-            onSessionsChange?.(next);
-            return next;
-          });
+          forgetTerminalSession(session.id);
         })
         .catch((err) => setError(err instanceof Error ? err.message : String(err)))
         .finally(() => setClosingSessionId((current) => (current === session.id ? "" : current)));
     },
-    [client, closingSessionId, onSessionsChange],
+    [client, closingSessionId, forgetTerminalSession],
   );
 
   const handleInitialTerminalSnapshotConsumed = useCallback((sessionId: string) => {
@@ -2083,16 +1816,22 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                     )}
                   >
                     <SshTunnelPanel
+                      cwd={cwd}
                       projectPathKey={projectPathKey}
                       hosts={sshHosts}
                       associatedHostIds={associatedSshHostIds}
+                      client={client}
+                      sessions={sshSessions}
+                      onSessionSnapshot={rememberTerminalSnapshot}
+                      onSessionClosed={forgetTerminalSession}
+                      onOpenSession={(session) => onOpenSshSession?.(session)}
                       onAssociatedHostIdsChange={(hostIds) => {
                         onSshProjectHostIdsChange?.(hostIds);
                       }}
                     />
                   </div>
                 ) : null}
-                {sessions.length > 0 ? (
+                {localSessions.length > 0 ? (
                   <div
                     className={cn(
                       "min-h-0 flex-1 flex-col",
@@ -2105,7 +1844,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       </div>
                     ) : null}
                     <div className="relative min-h-0 flex-1">
-                      {sessions.map((session) => {
+                      {localSessions.map((session) => {
                         const isActiveTerminal =
                           currentActiveTab === "terminal" && activeSession?.id === session.id;
                         return (

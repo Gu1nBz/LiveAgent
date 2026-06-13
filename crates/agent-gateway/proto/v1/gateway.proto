@@ -66,6 +66,7 @@ message GatewayEnvelope {
     TunnelControlRequest tunnel_control = 67;
     TunnelControlResponse tunnel_control_resp = 68;
     TunnelFrame tunnel_frame = 69;
+    SettingsResetSshKnownHostRequest settings_reset_ssh_known_host = 72;
   }
 }
 
@@ -118,6 +119,7 @@ message AgentEnvelope {
     TunnelFrame tunnel_frame = 69;
     ChatControlEvent chat_control = 70;
     RuntimeStatusEvent runtime_status = 71;
+    SettingsResetSshKnownHostResponse settings_reset_ssh_known_host_resp = 72;
     ErrorResponse error = 99;
   }
 }
@@ -257,6 +259,10 @@ message TerminalRequest {
   uint32 cols = 8;
   uint32 rows = 9;
   uint32 max_bytes = 10;
+  string ssh_host_id = 11;
+  string prompt_id = 12;
+  string prompt_answer = 13;
+  bool trust_host_key = 14;
 }
 
 message TerminalSession {
@@ -273,6 +279,33 @@ message TerminalSession {
   uint64 finished_at = 11;
   int32 exit_code = 12;
   bool running = 13;
+  string kind = 14;
+  TerminalSshMetadata ssh = 15;
+}
+
+message TerminalSshMetadata {
+  string host_id = 1;
+  string host_name = 2;
+  string username = 3;
+  string host = 4;
+  uint32 port = 5;
+  string auth_type = 6;
+  string status = 7;
+  uint32 reconnect_attempt = 8;
+  uint32 reconnect_max_attempts = 9;
+}
+
+message TerminalSshPrompt {
+  string id = 1;
+  string kind = 2;
+  string host_id = 3;
+  string host_name = 4;
+  string host = 5;
+  uint32 port = 6;
+  string message = 7;
+  string fingerprint_sha256 = 8;
+  string key_type = 9;
+  bool answer_echo = 10;
 }
 
 message TerminalShellOption {
@@ -291,6 +324,8 @@ message TerminalResponse {
   string default_shell = 7;
   uint64 output_start_offset = 8;
   uint64 output_end_offset = 9;
+  TerminalSshPrompt ssh_prompt = 10;
+  uint32 latency_ms = 11;
 }
 
 message TerminalEvent {
@@ -532,6 +567,15 @@ message SettingsUpdateRequest {
 message SettingsUpdateResponse {
   bool accepted = 1;
   string message = 2;
+}
+
+message SettingsResetSshKnownHostRequest {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message SettingsResetSshKnownHostResponse {
+  uint32 deleted = 1;
 }
 
 message SettingsSyncEvent {

@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -12,6 +13,7 @@ import {
   Pencil,
   Plus,
   Server,
+  Shield,
   Trash2,
   Upload,
 } from "../../components/icons";
@@ -34,11 +36,20 @@ import {
   type SshScanResult,
   scanSshImportCandidates,
 } from "../../lib/ssh/scan";
-import { ConfirmDeletePopover, PromptTag } from "./shared";
+import { ConfirmActionPopover, ConfirmDeletePopover, PromptTag } from "./shared";
 import type { SettingsSectionProps } from "./types";
 
 type SshViewMode = "list" | "grid";
 type SshHostDraft = Omit<SshHostConfig, "id">;
+type SshKnownHostResetStatus = {
+  hostId: string;
+  kind: "success" | "info" | "error";
+  message: string;
+};
+
+type SshKnownHostResetResponse = {
+  deleted: number;
+};
 
 function normalizePortInput(value: string) {
   const port = Number(value);
@@ -120,6 +131,9 @@ function SshHostModal(props: {
   const [password, setPassword] = useState(initialData?.password ?? "");
   const [privateKey, setPrivateKey] = useState(initialData?.privateKey ?? "");
   const [privateKeyPath, setPrivateKeyPath] = useState(initialData?.privateKeyPath ?? "");
+  const [privateKeyPassphrase, setPrivateKeyPassphrase] = useState(
+    initialData?.privateKeyPassphrase ?? "",
+  );
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [proxyType, setProxyType] = useState<SshProxyType>(initialData?.proxy.type ?? "socks5");
   const [proxyUrl, setProxyUrl] = useState(initialData?.proxy.url ?? "");
@@ -138,7 +152,7 @@ function SshHostModal(props: {
     transform: isPasswordAuth ? "translateY(0)" : "translateY(-4px)",
   };
   const privateKeyAuthPanelStyle: CSSProperties = {
-    maxHeight: isPasswordAuth ? "0rem" : "24rem",
+    maxHeight: isPasswordAuth ? "0rem" : "29rem",
     opacity: isPasswordAuth ? 0 : 1,
     pointerEvents: isPasswordAuth ? "none" : "auto",
     transform: isPasswordAuth ? "translateY(4px)" : "translateY(0)",
@@ -164,6 +178,7 @@ function SshHostModal(props: {
     const trimmedPassword = password.trim();
     const trimmedPrivateKey = privateKey.trim();
     const trimmedPrivateKeyPath = privateKeyPath.trim();
+    const trimmedPrivateKeyPassphrase = privateKeyPassphrase.trim();
     const trimmedProxyPassword = proxyPassword.trim();
     onSave({
       name: trimmedName,
@@ -180,6 +195,10 @@ function SshHostModal(props: {
         trimmedPrivateKey.length > 0 ||
         trimmedPrivateKeyPath.length > 0 ||
         initialData?.privateKeyConfigured === true,
+      privateKeyPassphrase: trimmedPrivateKeyPassphrase,
+      privateKeyPassphraseConfigured:
+        trimmedPrivateKeyPassphrase.length > 0 ||
+        initialData?.privateKeyPassphraseConfigured === true,
       proxy: {
         type: proxyType,
         url: proxyUrl.trim(),
@@ -388,6 +407,26 @@ function SshHostModal(props: {
                     {t("settings.sshPrivateKeyConfigured")}
                   </div>
                 ) : null}
+                <div className="space-y-1.5">
+                  <Label
+                    htmlFor="ssh-private-key-passphrase"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
+                    {t("settings.sshPrivateKeyPassphrase")}
+                  </Label>
+                  <SshPasswordInput
+                    id="ssh-private-key-passphrase"
+                    value={privateKeyPassphrase}
+                    disabled={isPasswordAuth}
+                    onChange={setPrivateKeyPassphrase}
+                  />
+                  {initialData?.privateKeyPassphraseConfigured &&
+                  !privateKeyPassphrase.trim() ? (
+                    <div className="text-[11px] text-muted-foreground">
+                      {t("settings.sshPrivateKeyPassphraseConfigured")}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>
@@ -697,19 +736,44 @@ function SshImportModal(props: {
 function SshHostCard(props: {
   host: SshHostConfig;
   viewMode: SshViewMode;
+  resetStatus?: SshKnownHostResetStatus;
+  resettingKnownHost: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onResetKnownHost: () => void;
 }) {
-  const { host, viewMode, onEdit, onDelete } = props;
+  const { host, viewMode, resetStatus, resettingKnownHost, onEdit, onDelete, onResetKnownHost } =
+    props;
   const { t } = useLocale();
   const showKeyPath = host.authType === "privateKey" && host.privateKeyPath.trim().length > 0;
   const showKeyConfigured = host.authType === "privateKey" && host.privateKeyConfigured;
   const showProxy =
     host.proxy.url.trim().length > 0 || host.proxy.port > 0 || host.proxy.passwordConfigured;
   const hasMeta = showKeyPath || showKeyConfigured || showProxy;
+  const hasFooter = hasMeta || resetStatus;
 
   const actions = (
     <div className="settings-hover-actions flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+      <ConfirmActionPopover
+        title={t("settings.sshKnownHostResetTitle")}
+        description={t("settings.sshKnownHostResetDesc")}
+        confirmLabel={t("settings.sshKnownHostResetConfirm")}
+        onConfirm={onResetKnownHost}
+      >
+        {(open) => (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+            onClick={open}
+            title={t("settings.sshKnownHostReset")}
+            aria-label={t("settings.sshKnownHostReset")}
+            disabled={resettingKnownHost}
+          >
+            <Shield className="h-3.5 w-3.5" />
+          </Button>
+        )}
+      </ConfirmActionPopover>
       <Button
         variant="ghost"
         size="icon"
@@ -743,6 +807,16 @@ function SshHostCard(props: {
     </div>
   );
 
+  const resetStatusNode = resetStatus ? (
+    <div
+      className={`text-xs leading-relaxed ${
+        resetStatus.kind === "error" ? "text-destructive" : "text-muted-foreground"
+      }`}
+    >
+      {resetStatus.message}
+    </div>
+  ) : null;
+
   if (viewMode === "grid") {
     return (
       <div className="group relative z-0 flex flex-col rounded-xl border border-border/60 bg-card p-4 transition-all duration-200 hover:z-10 hover:border-emerald-500/40 hover:shadow-md hover:shadow-emerald-500/10">
@@ -761,7 +835,12 @@ function SshHostCard(props: {
         <div className="mt-3 truncate font-mono text-xs text-muted-foreground">
           {endpointLabel(host)}
         </div>
-        {hasMeta ? <div className="mt-auto pt-3">{metaTags}</div> : null}
+        {hasFooter ? (
+          <div className="mt-auto space-y-2 pt-3">
+            {hasMeta ? metaTags : null}
+            {resetStatusNode}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -783,7 +862,12 @@ function SshHostCard(props: {
         </div>
         {actions}
       </div>
-      {hasMeta ? <div className="border-t border-border/40 px-4 py-2.5">{metaTags}</div> : null}
+      {hasFooter ? (
+        <div className="space-y-2 border-t border-border/40 px-4 py-2.5">
+          {hasMeta ? metaTags : null}
+          {resetStatusNode}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -836,7 +920,30 @@ export function SshSection(props: SettingsSectionProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [editingHost, setEditingHost] = useState<SshHostConfig | null>(null);
+  const [knownHostResettingId, setKnownHostResettingId] = useState<string | null>(null);
+  const [knownHostResetStatus, setKnownHostResetStatus] =
+    useState<SshKnownHostResetStatus | null>(null);
+  const knownHostResetTimerRef = useRef<number | null>(null);
   const hosts = settings.ssh.hosts;
+
+  useEffect(() => {
+    return () => {
+      if (knownHostResetTimerRef.current !== null) {
+        window.clearTimeout(knownHostResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  function showKnownHostResetStatus(status: SshKnownHostResetStatus) {
+    if (knownHostResetTimerRef.current !== null) {
+      window.clearTimeout(knownHostResetTimerRef.current);
+    }
+    setKnownHostResetStatus(status);
+    knownHostResetTimerRef.current = window.setTimeout(() => {
+      setKnownHostResetStatus((current) => (current?.hostId === status.hostId ? null : current));
+      knownHostResetTimerRef.current = null;
+    }, 5000);
+  }
 
   function openAdd() {
     setEditingHost(null);
@@ -864,12 +971,17 @@ export function SshSection(props: SettingsSectionProps) {
                   ...data,
                   password: data.password || host.password,
                   privateKey: data.privateKey || host.privateKey,
+                  privateKeyPassphrase:
+                    data.privateKeyPassphrase || host.privateKeyPassphrase,
                   passwordConfigured:
                     data.password.trim().length > 0 || host.passwordConfigured === true,
                   privateKeyConfigured:
                     data.privateKey.trim().length > 0 ||
                     data.privateKeyPath.trim().length > 0 ||
                     host.privateKeyConfigured === true,
+                  privateKeyPassphraseConfigured:
+                    data.privateKeyPassphrase.trim().length > 0 ||
+                    host.privateKeyPassphraseConfigured === true,
                   proxy: {
                     ...data.proxy,
                     password: data.proxy.password || host.proxy.password,
@@ -903,6 +1015,46 @@ export function SshSection(props: SettingsSectionProps) {
         id,
       ),
     );
+  }
+
+  async function handleResetKnownHost(host: SshHostConfig) {
+    const targetHost = host.host.trim();
+    if (!targetHost || host.port <= 0) {
+      showKnownHostResetStatus({
+        hostId: host.id,
+        kind: "error",
+        message: t("settings.sshKnownHostResetFailed").replace(
+          "{error}",
+          t("settings.sshRequired"),
+        ),
+      });
+      return;
+    }
+
+    setKnownHostResettingId(host.id);
+    try {
+      const response = await invoke<SshKnownHostResetResponse>("settings_reset_ssh_known_host", {
+        host: targetHost,
+        port: host.port,
+      });
+      showKnownHostResetStatus({
+        hostId: host.id,
+        kind: response.deleted > 0 ? "success" : "info",
+        message:
+          response.deleted > 0
+            ? t("settings.sshKnownHostResetSuccess")
+            : t("settings.sshKnownHostResetEmpty"),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      showKnownHostResetStatus({
+        hostId: host.id,
+        kind: "error",
+        message: t("settings.sshKnownHostResetFailed").replace("{error}", message),
+      });
+    } finally {
+      setKnownHostResettingId((current) => (current === host.id ? null : current));
+    }
   }
 
   function handleImport(candidates: SshImportCandidate[]) {
@@ -996,8 +1148,13 @@ export function SshSection(props: SettingsSectionProps) {
                 key={host.id}
                 host={host}
                 viewMode={viewMode}
+                resetStatus={
+                  knownHostResetStatus?.hostId === host.id ? knownHostResetStatus : undefined
+                }
+                resettingKnownHost={knownHostResettingId === host.id}
                 onEdit={() => openEdit(host)}
                 onDelete={() => handleDelete(host.id)}
+                onResetKnownHost={() => void handleResetKnownHost(host)}
               />
             ))}
           </div>

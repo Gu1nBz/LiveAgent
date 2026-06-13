@@ -271,6 +271,8 @@ export type SshHostConfig = {
   privateKey: string;
   privateKeyPath: string;
   privateKeyConfigured?: boolean;
+  privateKeyPassphrase: string;
+  privateKeyPassphraseConfigured?: boolean;
   proxy: SshProxyConfig;
 };
 
@@ -306,6 +308,7 @@ export type RemoteSettings = {
   autoReconnect: boolean;
   heartbeatInterval: number;
   enableWebTerminal: boolean;
+  enableWebSshTerminal: boolean;
   enableWebGit: boolean;
   enableWebTunnels: boolean;
 };
@@ -1099,6 +1102,7 @@ export function normalizeRemoteSettings(input: unknown): RemoteSettings {
     autoReconnect: obj.autoReconnect !== false,
     heartbeatInterval: normalizePositiveInteger(obj.heartbeatInterval, 30),
     enableWebTerminal: obj.enableWebTerminal === true,
+    enableWebSshTerminal: obj.enableWebSshTerminal === true,
     enableWebGit: obj.enableWebGit === true,
     enableWebTunnels: obj.enableWebTunnels === true,
   };
@@ -1300,6 +1304,7 @@ export function normalizeSshHostConfig(input: unknown): SshHostConfig {
   const password = normalizeOptionalText(obj.password);
   const privateKey = normalizeOptionalText(obj.privateKey);
   const privateKeyPath = normalizeOptionalText(obj.privateKeyPath);
+  const privateKeyPassphrase = normalizeOptionalText(obj.privateKeyPassphrase);
 
   return {
     id: typeof obj.id === "string" && obj.id.trim() ? obj.id.trim() : crypto.randomUUID(),
@@ -1315,6 +1320,9 @@ export function normalizeSshHostConfig(input: unknown): SshHostConfig {
     privateKeyPath,
     privateKeyConfigured:
       privateKey.length > 0 || privateKeyPath.length > 0 || obj.privateKeyConfigured === true,
+    privateKeyPassphrase,
+    privateKeyPassphraseConfigured:
+      privateKeyPassphrase.length > 0 || obj.privateKeyPassphraseConfigured === true,
     proxy: normalizeSshProxyConfig(obj.proxy),
   };
 }
@@ -1807,9 +1815,6 @@ export function normalizeCustomSettings(
   const chatSidebar = (
     obj.chatSidebar && typeof obj.chatSidebar === "object" ? obj.chatSidebar : {}
   ) as Record<string, unknown>;
-  const legacyTerminalPanel = (
-    obj.terminalPanel && typeof obj.terminalPanel === "object" ? obj.terminalPanel : {}
-  ) as Record<string, unknown>;
   const projectToolsPanel = (
     obj.projectToolsPanel && typeof obj.projectToolsPanel === "object" ? obj.projectToolsPanel : {}
   ) as Record<string, unknown>;
@@ -1847,7 +1852,7 @@ export function normalizeCustomSettings(
     },
     projectToolsPanel: {
       width: normalizeIntegerInRange(
-        obj.terminalPanelWidth ?? projectToolsPanel.width ?? legacyTerminalPanel.width,
+        projectToolsPanel.width,
         320,
         1280,
         420,
@@ -1904,6 +1909,7 @@ export function getDefaultSettings(): AppSettings {
       autoReconnect: true,
       heartbeatInterval: 30,
       enableWebTerminal: false,
+      enableWebSshTerminal: false,
       enableWebGit: false,
       enableWebTunnels: false,
     },

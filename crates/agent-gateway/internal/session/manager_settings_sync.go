@@ -41,6 +41,18 @@ func (m *Manager) WebTerminalEnabled() bool {
 	return ok && enabled
 }
 
+func (m *Manager) WebSshTerminalEnabled() bool {
+	m.syncHub.settingsSnapshotMu.RLock()
+	defer m.syncHub.settingsSnapshotMu.RUnlock()
+
+	remote, ok := m.syncHub.settingsSnapshot["remote"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, ok := remote["enableWebSshTerminal"].(bool)
+	return ok && enabled
+}
+
 func (m *Manager) WebGitEnabled() bool {
 	m.syncHub.settingsSnapshotMu.RLock()
 	defer m.syncHub.settingsSnapshotMu.RUnlock()

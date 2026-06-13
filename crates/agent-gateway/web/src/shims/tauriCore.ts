@@ -292,6 +292,14 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
       return (await listGatewayCronLogs(args)) as T;
     case "cron_clear_logs":
       return (await clearGatewayCronLogs(args)) as T;
+    case "settings_reset_ssh_known_host": {
+      const host = String(args?.host ?? "").trim();
+      const port = typeof args?.port === "number" ? args.port : Number(args?.port ?? 0);
+      return (await getGatewayWebSocketClient(loadToken().trim()).resetSshKnownHost({
+        host,
+        port,
+      })) as T;
+    }
     case "system_http_get_test":
       return {
         url: `${window.location.origin}/api/status`,

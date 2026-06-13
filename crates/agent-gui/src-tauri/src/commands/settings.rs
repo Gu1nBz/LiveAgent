@@ -20,6 +20,8 @@ const SYSTEM_SETTINGS_TABLE: &str = "system_settings";
 const MCP_SETTINGS_TABLE: &str = "mcp_settings";
 const AGENT_PROMPT_TEMPLATES_TABLE: &str = "agent_prompt_templates";
 const SSH_SETTINGS_TABLE: &str = "ssh_settings";
+const SSH_PROJECT_HOST_ASSOCIATIONS_TABLE: &str = "ssh_project_host_associations";
+const SSH_KNOWN_HOSTS_TABLE: &str = "ssh_known_hosts";
 const HOOK_SETTINGS_TABLE: &str = "hook_settings";
 const CRON_SETTINGS_TABLE: &str = "cron_settings";
 const CRON_EXECUTION_LOGS_TABLE: &str = "cron_execution_logs";
@@ -96,6 +98,8 @@ const SSH_SETTINGS_SELECT_SQL: &str = "
         private_key,
         private_key_path,
         private_key_configured,
+        private_key_passphrase,
+        private_key_passphrase_configured,
         proxy_json
     FROM ssh_settings
     ORDER BY sort_index ASC, host_id ASC
@@ -114,13 +118,29 @@ const SSH_SETTINGS_INSERT_SQL: &str = "
         private_key,
         private_key_path,
         private_key_configured,
+        private_key_passphrase,
+        private_key_passphrase_configured,
         proxy_json,
         sort_index,
         updated_at
     )
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
 ";
 const SSH_SETTINGS_DELETE_SQL: &str = "DELETE FROM ssh_settings";
+const SSH_PROJECT_HOST_ASSOCIATIONS_SELECT_SQL: &str = "
+    SELECT project_path_key, host_ids_json
+    FROM ssh_project_host_associations
+    ORDER BY project_path_key ASC
+";
+const SSH_PROJECT_HOST_ASSOCIATIONS_INSERT_SQL: &str = "
+    INSERT INTO ssh_project_host_associations (project_path_key, host_ids_json, updated_at)
+    VALUES (?1, ?2, ?3)
+";
+const SSH_PROJECT_HOST_ASSOCIATIONS_DELETE_SQL: &str = "DELETE FROM ssh_project_host_associations";
+const SSH_KNOWN_HOSTS_DELETE_SQL: &str = "
+    DELETE FROM ssh_known_hosts
+    WHERE host = ?1 AND port = ?2
+";
 
 const HOOK_SETTINGS_SELECT_SQL: &str = "
     SELECT hook_id, payload_json
@@ -186,6 +206,8 @@ pub struct RemoteSettingsPayload {
     #[serde(default)]
     pub enable_web_terminal: bool,
     #[serde(default)]
+    pub enable_web_ssh_terminal: bool,
+    #[serde(default)]
     pub enable_web_git: bool,
     #[serde(default)]
     pub enable_web_tunnels: bool,
@@ -215,6 +237,7 @@ impl Default for RemoteSettingsPayload {
             auto_reconnect: default_remote_auto_reconnect(),
             heartbeat_interval: default_remote_heartbeat_interval(),
             enable_web_terminal: false,
+            enable_web_ssh_terminal: false,
             enable_web_git: false,
             enable_web_tunnels: false,
         }
@@ -238,6 +261,7 @@ pub(crate) fn normalize_remote_settings_payload(
         auto_reconnect: payload.auto_reconnect,
         heartbeat_interval: payload.heartbeat_interval.max(1),
         enable_web_terminal: payload.enable_web_terminal,
+        enable_web_ssh_terminal: payload.enable_web_ssh_terminal,
         enable_web_git: payload.enable_web_git,
         enable_web_tunnels: payload.enable_web_tunnels,
     }
@@ -281,6 +305,45 @@ pub(crate) fn parse_remote_settings_payload(value: Value) -> Result<RemoteSettin
     let parsed = serde_json::from_value::<RemoteSettingsPayload>(value)
         .map_err(|e| format!("解析 remote settings 失败：{e}"))?;
     Ok(normalize_remote_settings_payload(parsed))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeSshProxyConfig {
+    pub url: String,
+    pub port: i64,
+    pub username: String,
+    pub password_configured: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeSshHostConfig {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_type: String,
+    pub password: String,
+    pub private_key: String,
+    pub private_key_path: String,
+    pub private_key_passphrase: String,
+    pub proxy: RuntimeSshProxyConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeSshKnownHostStatus {
+    Known,
+    Unknown,
+    Changed { stored_fingerprint: String },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeSshKnownHostKey {
+    pub host: String,
+    pub port: u16,
+    pub key_type: String,
+    pub key_base64: String,
+    pub fingerprint_sha256: String,
 }
 
 fn now_ms() -> i64 {
@@ -350,9 +413,26 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
             private_key TEXT NOT NULL,
             private_key_path TEXT NOT NULL,
             private_key_configured INTEGER NOT NULL DEFAULT 0,
+            private_key_passphrase TEXT NOT NULL DEFAULT '',
+            private_key_passphrase_configured INTEGER NOT NULL DEFAULT 0,
             proxy_json TEXT NOT NULL,
             sort_index INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ssh_project_host_associations (
+            project_path_key TEXT PRIMARY KEY,
+            host_ids_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ssh_known_hosts (
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            key_type TEXT NOT NULL,
+            key_base64 TEXT NOT NULL,
+            fingerprint_sha256 TEXT NOT NULL,
+            trusted_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (host, port)
         );
         CREATE TABLE IF NOT EXISTS hook_settings (
             hook_id TEXT PRIMARY KEY,
@@ -1386,6 +1466,7 @@ pub(crate) fn load_gateway_settings_sync_snapshot(conn: &Connection) -> Result<V
         "remote".to_string(),
         json!({
             "enableWebTerminal": remote.enable_web_terminal,
+            "enableWebSshTerminal": remote.enable_web_ssh_terminal,
             "enableWebGit": remote.enable_web_git,
             "enableWebTunnels": remote.enable_web_tunnels,
         }),
@@ -1437,14 +1518,23 @@ fn redact_ssh_settings(ssh: Value) -> Result<Value, String> {
         ssh.remove("hosts").unwrap_or(Value::Array(Vec::new())),
         "ssh settings hosts",
     )?;
+    let project_host_associations = ssh
+        .remove("projectHostAssociations")
+        .unwrap_or(Value::Object(Map::new()));
     let redacted = hosts
         .into_iter()
         .map(redact_ssh_host_secret)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Value::Object(Map::from_iter([(
-        "hosts".to_string(),
-        Value::Array(redacted),
-    )])))
+    Ok(Value::Object(Map::from_iter([
+        ("hosts".to_string(), Value::Array(redacted)),
+        (
+            "projectHostAssociations".to_string(),
+            Value::Object(normalize_ssh_project_host_associations_value(
+                project_host_associations,
+                None,
+            )?),
+        ),
+    ])))
 }
 
 fn redact_ssh_host_secret(host: Value) -> Result<Value, String> {
@@ -1464,6 +1554,14 @@ fn redact_ssh_host_secret(host: Value) -> Result<Value, String> {
         .and_then(Value::as_str)
         .is_some_and(|value| !value.trim().is_empty())
         || matches!(payload.get("privateKeyConfigured"), Some(Value::Bool(true)));
+    let private_key_passphrase_configured = match payload.remove("privateKeyPassphrase") {
+        Some(Value::String(value)) => !value.trim().is_empty(),
+        Some(Value::Null) | None => false,
+        Some(_) => return Err("ssh settings privateKeyPassphrase must be a string".to_string()),
+    } || matches!(
+        payload.get("privateKeyPassphraseConfigured"),
+        Some(Value::Bool(true))
+    );
     payload.insert(
         "passwordConfigured".to_string(),
         Value::Bool(password_configured),
@@ -1471,6 +1569,10 @@ fn redact_ssh_host_secret(host: Value) -> Result<Value, String> {
     payload.insert(
         "privateKeyConfigured".to_string(),
         Value::Bool(private_key_configured),
+    );
+    payload.insert(
+        "privateKeyPassphraseConfigured".to_string(),
+        Value::Bool(private_key_passphrase_configured),
     );
     if let Some(proxy) = payload.remove("proxy") {
         if !matches!(proxy, Value::Null) {
@@ -1499,21 +1601,23 @@ fn redact_remote_settings(remote: Value) -> Result<Value, String> {
     let remote = expect_object(remote, "remote settings payload")?;
     let enable_web_terminal = remote
         .get("enableWebTerminal")
-        .or_else(|| remote.get("enable_web_terminal"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let enable_web_git = remote
         .get("enableWebGit")
-        .or_else(|| remote.get("enable_web_git"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let enable_web_ssh_terminal = remote
+        .get("enableWebSshTerminal")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let enable_web_tunnels = remote
         .get("enableWebTunnels")
-        .or_else(|| remote.get("enable_web_tunnels"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
     Ok(json!({
         "enableWebTerminal": enable_web_terminal,
+        "enableWebSshTerminal": enable_web_ssh_terminal,
         "enableWebGit": enable_web_git,
         "enableWebTunnels": enable_web_tunnels,
     }))
@@ -1594,10 +1698,10 @@ fn load_ssh(conn: &Connection) -> Result<Option<Value>, String> {
         .map_err(|e| format!("准备读取 {SSH_SETTINGS_TABLE} 失败：{e}"))?;
     let rows = stmt
         .query_map([], |row| {
-            let proxy_json = row.get::<_, String>(12)?;
+            let proxy_json = row.get::<_, String>(14)?;
             let proxy = parse_json(&proxy_json, SSH_SETTINGS_TABLE).map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    12,
+                    14,
                     rusqlite::types::Type::Text,
                     Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
                 )
@@ -1642,6 +1746,14 @@ fn load_ssh(conn: &Connection) -> Result<Option<Value>, String> {
                     "privateKeyConfigured".to_string(),
                     Value::Bool(row.get::<_, i64>(11)? != 0),
                 ),
+                (
+                    "privateKeyPassphrase".to_string(),
+                    Value::String(row.get::<_, String>(12)?),
+                ),
+                (
+                    "privateKeyPassphraseConfigured".to_string(),
+                    Value::Bool(row.get::<_, i64>(13)? != 0),
+                ),
                 ("proxy".to_string(), proxy),
             ])))
         })
@@ -1652,14 +1764,249 @@ fn load_ssh(conn: &Connection) -> Result<Option<Value>, String> {
         hosts.push(row.map_err(|e| format!("读取 {SSH_SETTINGS_TABLE} 行失败：{e}"))?);
     }
 
-    if hosts.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(Value::Object(Map::from_iter([(
-            "hosts".to_string(),
-            Value::Array(hosts),
-        )]))))
+    let project_host_associations = load_ssh_project_host_associations(conn, &hosts)?;
+    if hosts.is_empty() && project_host_associations.is_empty() {
+        return Ok(None);
     }
+    Ok(Some(Value::Object(Map::from_iter([
+        ("hosts".to_string(), Value::Array(hosts)),
+        (
+            "projectHostAssociations".to_string(),
+            Value::Object(project_host_associations),
+        ),
+    ]))))
+}
+
+fn load_ssh_project_host_associations(
+    conn: &Connection,
+    hosts: &[Value],
+) -> Result<Map<String, Value>, String> {
+    let host_ids = hosts
+        .iter()
+        .filter_map(|host| host.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect::<HashSet<_>>();
+    let mut stmt = conn
+        .prepare(SSH_PROJECT_HOST_ASSOCIATIONS_SELECT_SQL)
+        .map_err(|e| format!("准备读取 {SSH_PROJECT_HOST_ASSOCIATIONS_TABLE} 失败：{e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("读取 {SSH_PROJECT_HOST_ASSOCIATIONS_TABLE} 失败：{e}"))?;
+    let mut associations = Map::new();
+    for row in rows {
+        let (project_path_key, host_ids_json) =
+            row.map_err(|e| format!("读取 {SSH_PROJECT_HOST_ASSOCIATIONS_TABLE} 行失败：{e}"))?;
+        let normalized_project_path_key = project_path_key.trim();
+        if normalized_project_path_key.is_empty() {
+            continue;
+        }
+        let parsed = parse_json(&host_ids_json, SSH_PROJECT_HOST_ASSOCIATIONS_TABLE)?;
+        let ids = expect_array(parsed, SSH_PROJECT_HOST_ASSOCIATIONS_TABLE)?
+            .into_iter()
+            .filter_map(|item| item.as_str().map(str::trim).map(str::to_string))
+            .filter(|id| !id.is_empty() && host_ids.contains(id))
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            continue;
+        }
+        associations.insert(
+            normalized_project_path_key.to_string(),
+            Value::Array(ids.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(associations)
+}
+
+pub(crate) fn load_runtime_ssh_host(host_id: &str) -> Result<Option<RuntimeSshHostConfig>, String> {
+    let host_id = host_id.trim();
+    if host_id.is_empty() {
+        return Ok(None);
+    }
+    let conn = open_db()?;
+    conn.query_row(
+        "
+        SELECT
+            host_id,
+            name,
+            host,
+            port,
+            username,
+            auth_type,
+            password,
+            private_key,
+            private_key_path,
+            private_key_passphrase,
+            proxy_json
+        FROM ssh_settings
+        WHERE host_id = ?1
+        ",
+        params![host_id],
+        |row| {
+            let proxy_json = row.get::<_, String>(10)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                proxy_json,
+            ))
+        },
+    )
+    .optional()
+    .map_err(|e| format!("读取 {SSH_SETTINGS_TABLE} runtime host 失败：{e}"))?
+    .map(
+        |(
+            id,
+            name,
+            host,
+            port,
+            username,
+            auth_type,
+            password,
+            private_key,
+            private_key_path,
+            private_key_passphrase,
+            proxy_json,
+        )| {
+            let proxy_value = parse_json(&proxy_json, SSH_SETTINGS_TABLE)?;
+            let proxy = expect_object(proxy_value, "ssh runtime proxy")?;
+            let port = u16::try_from(port)
+                .ok()
+                .filter(|port| *port >= 1)
+                .ok_or_else(|| format!("{SSH_SETTINGS_TABLE}.port 无效：{port}"))?;
+            Ok(RuntimeSshHostConfig {
+                id,
+                name,
+                host,
+                port,
+                username,
+                auth_type,
+                password,
+                private_key,
+                private_key_path,
+                private_key_passphrase,
+                proxy: RuntimeSshProxyConfig {
+                    url: extract_optional_string(&proxy, "url"),
+                    port: proxy.get("port").and_then(Value::as_i64).unwrap_or(0),
+                    username: extract_optional_string(&proxy, "username"),
+                    password_configured: proxy
+                        .get("passwordConfigured")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                },
+            })
+        },
+    )
+    .transpose()
+}
+
+pub(crate) fn check_runtime_ssh_known_host(
+    key: &RuntimeSshKnownHostKey,
+) -> Result<RuntimeSshKnownHostStatus, String> {
+    let conn = open_db()?;
+    check_runtime_ssh_known_host_with_conn(&conn, key)
+}
+
+fn check_runtime_ssh_known_host_with_conn(
+    conn: &Connection,
+    key: &RuntimeSshKnownHostKey,
+) -> Result<RuntimeSshKnownHostStatus, String> {
+    let stored = conn
+        .query_row(
+            "
+            SELECT key_base64, fingerprint_sha256
+            FROM ssh_known_hosts
+            WHERE host = ?1 AND port = ?2
+            ",
+            params![key.host.trim(), i64::from(key.port)],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|e| format!("读取 {SSH_KNOWN_HOSTS_TABLE} 失败：{e}"))?;
+    let Some((stored_key_base64, stored_fingerprint)) = stored else {
+        return Ok(RuntimeSshKnownHostStatus::Unknown);
+    };
+    if stored_key_base64 == key.key_base64 || stored_fingerprint == key.fingerprint_sha256 {
+        Ok(RuntimeSshKnownHostStatus::Known)
+    } else {
+        Ok(RuntimeSshKnownHostStatus::Changed { stored_fingerprint })
+    }
+}
+
+pub(crate) fn trust_runtime_ssh_known_host(key: &RuntimeSshKnownHostKey) -> Result<(), String> {
+    let conn = open_db()?;
+    trust_runtime_ssh_known_host_with_conn(&conn, key)
+}
+
+fn trust_runtime_ssh_known_host_with_conn(
+    conn: &Connection,
+    key: &RuntimeSshKnownHostKey,
+) -> Result<(), String> {
+    let now = now_ms();
+    conn.execute(
+        "
+        INSERT INTO ssh_known_hosts (
+            host,
+            port,
+            key_type,
+            key_base64,
+            fingerprint_sha256,
+            trusted_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        ON CONFLICT(host, port) DO UPDATE SET
+            key_type = excluded.key_type,
+            key_base64 = excluded.key_base64,
+            fingerprint_sha256 = excluded.fingerprint_sha256,
+            updated_at = excluded.updated_at
+        ",
+        params![
+            key.host.trim(),
+            i64::from(key.port),
+            key.key_type.trim(),
+            key.key_base64.trim(),
+            key.fingerprint_sha256.trim(),
+            now,
+            now
+        ],
+    )
+    .map_err(|e| format!("写入 {SSH_KNOWN_HOSTS_TABLE} 失败：{e}"))?;
+    Ok(())
+}
+
+pub(crate) fn reset_runtime_ssh_known_host(host: &str, port: u16) -> Result<usize, String> {
+    let conn = open_db()?;
+    reset_runtime_ssh_known_host_with_conn(&conn, host, port)
+}
+
+fn reset_runtime_ssh_known_host_with_conn(
+    conn: &Connection,
+    host: &str,
+    port: u16,
+) -> Result<usize, String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("SSH host is required".to_string());
+    }
+    if port == 0 {
+        return Err("SSH port is required".to_string());
+    }
+    conn.execute(SSH_KNOWN_HOSTS_DELETE_SQL, params![host, i64::from(port)])
+        .map_err(|e| format!("重置 {SSH_KNOWN_HOSTS_TABLE} 失败：{e}"))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKnownHostResetResponse {
+    pub deleted: usize,
 }
 
 fn load_hooks(conn: &Connection) -> Result<Option<Value>, String> {
@@ -1974,12 +2321,16 @@ fn validate_and_normalize_ssh_host(
     let password = extract_optional_string(&host, "password");
     let private_key = extract_optional_string(&host, "privateKey");
     let private_key_path = extract_optional_string(&host, "privateKeyPath");
+    let private_key_passphrase = extract_optional_string(&host, "privateKeyPassphrase");
     let password_configured = extract_bool_with_default(&host, "passwordConfigured", label, false)?
         || !password.is_empty();
     let private_key_configured =
         extract_bool_with_default(&host, "privateKeyConfigured", label, false)?
             || !private_key.is_empty()
             || !private_key_path.is_empty();
+    let private_key_passphrase_configured =
+        extract_bool_with_default(&host, "privateKeyPassphraseConfigured", label, false)?
+            || !private_key_passphrase.is_empty();
     let proxy = validate_and_normalize_ssh_proxy(host.get("proxy"), label)?;
 
     let mut payload = Map::new();
@@ -2002,6 +2353,14 @@ fn validate_and_normalize_ssh_host(
     payload.insert(
         "privateKeyConfigured".to_string(),
         Value::Bool(private_key_configured),
+    );
+    payload.insert(
+        "privateKeyPassphrase".to_string(),
+        Value::String(private_key_passphrase),
+    );
+    payload.insert(
+        "privateKeyPassphraseConfigured".to_string(),
+        Value::Bool(private_key_passphrase_configured),
     );
     payload.insert("proxy".to_string(), Value::Object(proxy));
 
@@ -2060,6 +2419,8 @@ fn insert_ssh_settings_row(
             ssh_payload_string(payload, "privateKey")?,
             ssh_payload_string(payload, "privateKeyPath")?,
             ssh_payload_bool(payload, "privateKeyConfigured")?,
+            ssh_payload_string(payload, "privateKeyPassphrase")?,
+            ssh_payload_bool(payload, "privateKeyPassphraseConfigured")?,
             ssh_payload_proxy_json(payload)?,
             sort_index,
             updated_at
@@ -2070,19 +2431,22 @@ fn insert_ssh_settings_row(
 }
 
 fn save_ssh(conn: &mut Connection, payload: Value) -> Result<(), String> {
-    let ssh = expect_object(payload, "settings_save_ssh payload")?;
+    let mut ssh = expect_object(payload, "settings_save_ssh payload")?;
     let hosts = expect_array(
-        ssh.get("hosts")
-            .cloned()
-            .unwrap_or(Value::Array(Vec::new())),
+        ssh.remove("hosts").unwrap_or(Value::Array(Vec::new())),
         "settings_save_ssh payload.hosts",
     )?;
+    let raw_project_host_associations = ssh
+        .remove("projectHostAssociations")
+        .unwrap_or(Value::Object(Map::new()));
     let updated_at = now_ms();
     let tx = conn
         .transaction()
         .map_err(|e| format!("开启 {SSH_SETTINGS_TABLE} 事务失败：{e}"))?;
     tx.execute(SSH_SETTINGS_DELETE_SQL, [])
         .map_err(|e| format!("清空 {SSH_SETTINGS_TABLE} 失败：{e}"))?;
+    tx.execute(SSH_PROJECT_HOST_ASSOCIATIONS_DELETE_SQL, [])
+        .map_err(|e| format!("清空 {SSH_PROJECT_HOST_ASSOCIATIONS_TABLE} 失败：{e}"))?;
 
     let mut seen = HashSet::new();
     for (sort_index, host) in hosts.into_iter().enumerate() {
@@ -2097,9 +2461,62 @@ fn save_ssh(conn: &mut Connection, payload: Value) -> Result<(), String> {
         insert_ssh_settings_row(&tx, &host_id, &payload, sort_index as i64, updated_at)?;
     }
 
+    let project_host_associations =
+        normalize_ssh_project_host_associations_value(raw_project_host_associations, Some(&seen))?;
+    for (project_path_key, host_ids) in project_host_associations {
+        tx.execute(
+            SSH_PROJECT_HOST_ASSOCIATIONS_INSERT_SQL,
+            params![
+                project_path_key,
+                serialize_json(&host_ids, SSH_PROJECT_HOST_ASSOCIATIONS_TABLE)?,
+                updated_at
+            ],
+        )
+        .map_err(|e| format!("写入 {SSH_PROJECT_HOST_ASSOCIATIONS_TABLE} 失败：{e}"))?;
+    }
+
     tx.commit()
         .map_err(|e| format!("提交 {SSH_SETTINGS_TABLE} 事务失败：{e}"))?;
     Ok(())
+}
+
+fn normalize_ssh_project_host_associations_value(
+    value: Value,
+    available_host_ids: Option<&HashSet<String>>,
+) -> Result<Map<String, Value>, String> {
+    let raw = match value {
+        Value::Object(map) => map,
+        Value::Null => Map::new(),
+        _ => return Err("ssh.projectHostAssociations 必须是对象".to_string()),
+    };
+    let mut normalized = Map::new();
+    for (project_path_key, host_ids) in raw {
+        let project_path_key = project_path_key.trim().to_string();
+        if project_path_key.is_empty() {
+            continue;
+        }
+        let items = expect_array(host_ids, "ssh.projectHostAssociations[]")?;
+        let mut seen = HashSet::new();
+        let mut ids = Vec::new();
+        for item in items {
+            let Some(host_id) = item.as_str().map(str::trim).filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            if available_host_ids.is_some_and(|available| !available.contains(host_id)) {
+                continue;
+            }
+            if seen.insert(host_id.to_string()) {
+                ids.push(Value::String(host_id.to_string()));
+            }
+            if ids.len() >= 64 {
+                break;
+            }
+        }
+        if !ids.is_empty() {
+            normalized.insert(project_path_key, Value::Array(ids));
+        }
+    }
+    Ok(normalized)
 }
 
 fn save_hooks(conn: &mut Connection, payload: Value) -> Result<(), String> {
@@ -2445,6 +2862,19 @@ pub async fn settings_save_ssh(payload: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn settings_reset_ssh_known_host(
+    host: String,
+    port: u16,
+) -> Result<SshKnownHostResetResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let deleted = reset_runtime_ssh_known_host(&host, port)?;
+        Ok(SshKnownHostResetResponse { deleted })
+    })
+    .await
+    .map_err(|e| format!("settings_reset_ssh_known_host join 失败：{e}"))?
+}
+
+#[tauri::command]
 pub async fn settings_save_hooks(payload: Value) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut conn = open_db()?;
@@ -2505,6 +2935,8 @@ mod tests {
             CRON_EXECUTION_LOGS_TABLE,
             REMOTE_SETTINGS_TABLE,
             MEMORY_SETTINGS_TABLE,
+            SSH_PROJECT_HOST_ASSOCIATIONS_TABLE,
+            SSH_KNOWN_HOSTS_TABLE,
         ] {
             let exists = conn
                 .query_row(
@@ -2535,6 +2967,8 @@ mod tests {
             "private_key",
             "private_key_path",
             "private_key_configured",
+            "private_key_passphrase",
+            "private_key_passphrase_configured",
             "proxy_json",
             "sort_index",
             "updated_at",
@@ -2587,6 +3021,7 @@ mod tests {
             auto_reconnect: true,
             heartbeat_interval: 30,
             enable_web_terminal: false,
+            enable_web_ssh_terminal: false,
             enable_web_git: false,
             enable_web_tunnels: false,
         });
@@ -2674,6 +3109,7 @@ mod tests {
                         "password": "ssh-password",
                         "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----",
                         "privateKeyPath": "~/.ssh/id_ed25519",
+                        "privateKeyPassphrase": "key-passphrase",
                         "proxy": {
                             "type": "http",
                             "url": "http://127.0.0.1",
@@ -2691,7 +3127,12 @@ mod tests {
                         "authType": "password",
                         "passwordConfigured": true
                     }
-                ]
+                ],
+                "projectHostAssociations": {
+                    " /repo/project ": ["prod", "missing", "prod", "staging"],
+                    "empty": ["missing"],
+                    "  ": ["prod"]
+                }
             }),
         )
         .expect("save ssh settings");
@@ -2707,7 +3148,7 @@ mod tests {
         let stored = conn
             .query_row(
                 "
-                SELECT name, host, port, auth_type, private_key, proxy_json
+                SELECT name, host, port, auth_type, private_key, private_key_passphrase, proxy_json
                 FROM ssh_settings
                 WHERE host_id = 'prod'
                 ",
@@ -2720,6 +3161,7 @@ mod tests {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
                     ))
                 },
             )
@@ -2732,8 +3174,9 @@ mod tests {
             stored.4,
             "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----"
         );
+        assert_eq!(stored.5, "key-passphrase");
         assert_eq!(
-            parse_json(&stored.5, SSH_SETTINGS_TABLE).expect("parse proxy json"),
+            parse_json(&stored.6, SSH_SETTINGS_TABLE).expect("parse proxy json"),
             json!({
                 "type": "http",
                 "url": "http://127.0.0.1",
@@ -2760,6 +3203,8 @@ mod tests {
                         "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----",
                         "privateKeyPath": "~/.ssh/id_ed25519",
                         "privateKeyConfigured": true,
+                        "privateKeyPassphrase": "key-passphrase",
+                        "privateKeyPassphraseConfigured": true,
                         "proxy": {
                             "type": "http",
                             "url": "http://127.0.0.1",
@@ -2782,6 +3227,8 @@ mod tests {
                         "privateKey": "",
                         "privateKeyPath": "",
                         "privateKeyConfigured": false,
+                        "privateKeyPassphrase": "",
+                        "privateKeyPassphraseConfigured": false,
                         "proxy": {
                             "type": "socks5",
                             "url": "",
@@ -2791,7 +3238,10 @@ mod tests {
                             "passwordConfigured": false
                         }
                     }
-                ]
+                ],
+                "projectHostAssociations": {
+                    "/repo/project": ["prod", "staging"]
+                }
             }))
         );
 
@@ -2799,8 +3249,16 @@ mod tests {
             load_gateway_settings_sync_snapshot(&conn).expect("load gateway settings snapshot");
         assert_eq!(snapshot["ssh"]["hosts"][0]["password"], Value::Null);
         assert_eq!(snapshot["ssh"]["hosts"][0]["privateKey"], Value::Null);
+        assert_eq!(
+            snapshot["ssh"]["hosts"][0]["privateKeyPassphrase"],
+            Value::Null
+        );
         assert_eq!(snapshot["ssh"]["hosts"][0]["passwordConfigured"], true);
         assert_eq!(snapshot["ssh"]["hosts"][0]["privateKeyConfigured"], true);
+        assert_eq!(
+            snapshot["ssh"]["hosts"][0]["privateKeyPassphraseConfigured"],
+            true
+        );
         assert_eq!(
             snapshot["ssh"]["hosts"][0]["proxy"]["password"],
             Value::Null
@@ -2811,7 +3269,15 @@ mod tests {
         );
         assert_eq!(snapshot["ssh"]["hosts"][1]["password"], Value::Null);
         assert_eq!(snapshot["ssh"]["hosts"][1]["privateKey"], Value::Null);
+        assert_eq!(
+            snapshot["ssh"]["hosts"][1]["privateKeyPassphrase"],
+            Value::Null
+        );
         assert_eq!(snapshot["ssh"]["hosts"][1]["passwordConfigured"], true);
+        assert_eq!(
+            snapshot["ssh"]["hosts"][1]["privateKeyPassphraseConfigured"],
+            false
+        );
         assert_eq!(
             snapshot["ssh"]["hosts"][1]["proxy"]["password"],
             Value::Null
@@ -2819,6 +3285,63 @@ mod tests {
         assert_eq!(
             snapshot["ssh"]["hosts"][1]["proxy"]["passwordConfigured"],
             false
+        );
+        assert_eq!(
+            snapshot["ssh"]["projectHostAssociations"],
+            json!({
+                "/repo/project": ["prod", "staging"]
+            })
+        );
+    }
+
+    #[test]
+    fn ssh_known_hosts_tracks_unknown_known_and_changed_keys() {
+        let conn = open_memory_db();
+        let key = RuntimeSshKnownHostKey {
+            host: "example.com".to_string(),
+            port: 22,
+            key_type: "ssh-ed25519".to_string(),
+            key_base64: "known-key".to_string(),
+            fingerprint_sha256: "SHA256:known".to_string(),
+        };
+
+        assert_eq!(
+            check_runtime_ssh_known_host_with_conn(&conn, &key).expect("check unknown host key"),
+            RuntimeSshKnownHostStatus::Unknown
+        );
+
+        trust_runtime_ssh_known_host_with_conn(&conn, &key).expect("trust host key");
+        assert_eq!(
+            check_runtime_ssh_known_host_with_conn(&conn, &key).expect("check trusted host key"),
+            RuntimeSshKnownHostStatus::Known
+        );
+
+        let changed = RuntimeSshKnownHostKey {
+            key_base64: "changed-key".to_string(),
+            fingerprint_sha256: "SHA256:changed".to_string(),
+            ..key.clone()
+        };
+        assert_eq!(
+            check_runtime_ssh_known_host_with_conn(&conn, &changed)
+                .expect("check changed host key"),
+            RuntimeSshKnownHostStatus::Changed {
+                stored_fingerprint: "SHA256:known".to_string()
+            }
+        );
+
+        assert_eq!(
+            reset_runtime_ssh_known_host_with_conn(&conn, "example.com", 22)
+                .expect("reset host key"),
+            1
+        );
+        assert_eq!(
+            check_runtime_ssh_known_host_with_conn(&conn, &key).expect("check reset host key"),
+            RuntimeSshKnownHostStatus::Unknown
+        );
+        assert_eq!(
+            reset_runtime_ssh_known_host_with_conn(&conn, "example.com", 22)
+                .expect("reset missing host key"),
+            0
         );
     }
 
@@ -3204,7 +3727,7 @@ mod tests {
     }
 
     #[test]
-    fn save_hooks_rejects_legacy_commands() {
+    fn save_hooks_rejects_unsupported_commands_field() {
         let mut conn = open_memory_db();
         let error = save_hooks(
             &mut conn,
@@ -3220,7 +3743,7 @@ mod tests {
                 }
             ]),
         )
-        .expect_err("reject legacy hook commands");
+        .expect_err("reject unsupported hook commands field");
 
         assert!(error.contains("commands"));
         let count = conn
@@ -3406,7 +3929,7 @@ mod tests {
     }
 
     #[test]
-    fn save_cron_rejects_legacy_bash_commands() {
+    fn save_cron_rejects_unsupported_bash_commands_field() {
         let mut conn = open_memory_db();
         let error = save_cron(
             &mut conn,
@@ -3422,7 +3945,7 @@ mod tests {
                 }
             ]),
         )
-        .expect_err("reject legacy bash commands");
+        .expect_err("reject unsupported bash commands field");
 
         assert!(error.contains("commands"));
         let count = conn

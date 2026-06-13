@@ -454,6 +454,26 @@ export function RemoteSection(props: SettingsSectionProps) {
 
         <div className="settings-card-row flex items-center justify-between gap-4 rounded-lg bg-muted/30 px-4 py-3">
           <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{t("settings.remoteWebSshTerminal")}</div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {t("settings.remoteWebSshTerminalHint")}
+            </p>
+          </div>
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${
+              settings.remote.enableWebSshTerminal
+                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            {settings.remote.enableWebSshTerminal
+              ? t("settings.cronViewStatusEnabled")
+              : t("settings.cronViewStatusDisabled")}
+          </span>
+        </div>
+
+        <div className="settings-card-row flex items-center justify-between gap-4 rounded-lg bg-muted/30 px-4 py-3">
+          <div className="min-w-0 flex-1">
             <div className="text-sm font-medium">{t("settings.remoteWebGit")}</div>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t("settings.remoteWebGitHint")}

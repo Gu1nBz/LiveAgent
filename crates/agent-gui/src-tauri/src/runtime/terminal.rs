@@ -1,16 +1,28 @@
+use base64::Engine;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use russh::client;
+use russh::keys::ssh_key::HashAlg;
+use russh::keys::{PrivateKeyWithHashAlg, PublicKey, PublicKeyBase64};
+use russh::ChannelMsg;
+use russh::MethodKind;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::str;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncWriteExt;
+use tokio::time::timeout;
 
+use crate::commands::settings::{
+    check_runtime_ssh_known_host, load_runtime_ssh_host, trust_runtime_ssh_known_host,
+    RuntimeSshHostConfig, RuntimeSshKnownHostKey, RuntimeSshKnownHostStatus,
+};
 use crate::runtime::platform::expand_tilde_path;
 #[cfg(windows)]
 use crate::runtime::process::configure_child_process_group;
@@ -19,6 +31,16 @@ const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 const MAX_RING_CHUNKS: usize = 4096;
 const MAX_TAIL_BYTES: usize = 256 * 1024;
+const SSH_PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
+const SSH_RECONNECT_MAX_ATTEMPTS: u8 = 3;
+const SSH_RECONNECT_DELAYS: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+];
+const SSH_STATUS_CONNECTED: &str = "connected";
+const SSH_STATUS_RECONNECTING: &str = "reconnecting";
+const SSH_STATUS_DISCONNECTED: &str = "disconnected";
 pub const TERMINAL_EVENT_NAME: &str = "terminal:event";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +51,9 @@ pub struct TerminalSessionRecord {
     pub cwd: String,
     pub shell: String,
     pub title: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<TerminalSshMetadata>,
     pub pid: Option<u32>,
     pub cols: u16,
     pub rows: u16,
@@ -37,6 +62,35 @@ pub struct TerminalSessionRecord {
     pub finished_at: Option<u128>,
     pub exit_code: Option<i32>,
     pub running: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSshMetadata {
+    pub host_id: String,
+    pub host_name: String,
+    pub username: String,
+    pub host: String,
+    pub port: u16,
+    pub auth_type: String,
+    pub status: String,
+    pub reconnect_attempt: u8,
+    pub reconnect_max_attempts: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSshPrompt {
+    pub id: String,
+    pub kind: String,
+    pub host_id: String,
+    pub host_name: String,
+    pub host: String,
+    pub port: u16,
+    pub message: String,
+    pub fingerprint_sha256: String,
+    pub key_type: String,
+    pub answer_echo: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,6 +107,26 @@ pub struct TerminalSnapshotResponse {
     pub truncated: bool,
     pub output_start_offset: u64,
     pub output_end_offset: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSshCreateResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<TerminalSessionRecord>,
+    pub output: String,
+    pub truncated: bool,
+    pub output_start_offset: u64,
+    pub output_end_offset: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_prompt: Option<TerminalSshPrompt>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSshLatencyResponse {
+    pub session_id: String,
+    pub latency_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,11 +171,156 @@ struct TerminalSize {
 }
 
 struct TerminalSessionEntry {
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
-    child: Mutex<Box<dyn Child + Send + Sync>>,
+    backend: TerminalSessionBackend,
     record: Mutex<TerminalSessionRecord>,
     output: Mutex<TerminalOutputBuffer>,
+}
+
+enum TerminalSessionBackend {
+    Local {
+        master: Mutex<Box<dyn MasterPty + Send>>,
+        writer: Mutex<Box<dyn Write + Send>>,
+        child: Mutex<Box<dyn Child + Send + Sync>>,
+    },
+    Ssh {
+        runtime: Arc<SshSessionRuntime>,
+    },
+}
+
+struct SshSessionRuntime {
+    handle: tokio::sync::Mutex<Option<client::Handle<LiveAgentSshClient>>>,
+    input_tx: Mutex<Option<tokio::sync::mpsc::Sender<SshSessionInput>>>,
+    shutdown_tx: Mutex<Option<tokio::sync::mpsc::Sender<()>>>,
+    connection_id: AtomicUsize,
+    closing: AtomicBool,
+    reconnect_runner_active: AtomicBool,
+}
+
+impl SshSessionRuntime {
+    fn new() -> Self {
+        Self {
+            handle: tokio::sync::Mutex::new(None),
+            input_tx: Mutex::new(None),
+            shutdown_tx: Mutex::new(None),
+            connection_id: AtomicUsize::new(0),
+            closing: AtomicBool::new(false),
+            reconnect_runner_active: AtomicBool::new(false),
+        }
+    }
+
+    async fn install_connection(
+        &self,
+        handle: client::Handle<LiveAgentSshClient>,
+        input_tx: tokio::sync::mpsc::Sender<SshSessionInput>,
+        shutdown_tx: tokio::sync::mpsc::Sender<()>,
+    ) -> usize {
+        let connection_id = self.connection_id.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.handle.lock().await = Some(handle);
+        if let Ok(mut slot) = self.input_tx.lock() {
+            *slot = Some(input_tx);
+        }
+        if let Ok(mut slot) = self.shutdown_tx.lock() {
+            *slot = Some(shutdown_tx);
+        }
+        connection_id
+    }
+
+    async fn clear_connection_if_current(&self, connection_id: usize) {
+        if self.connection_id.load(Ordering::SeqCst) != connection_id {
+            return;
+        }
+        *self.handle.lock().await = None;
+        if let Ok(mut slot) = self.input_tx.lock() {
+            *slot = None;
+        }
+        if let Ok(mut slot) = self.shutdown_tx.lock() {
+            *slot = None;
+        }
+    }
+
+    fn input_sender(&self) -> Option<tokio::sync::mpsc::Sender<SshSessionInput>> {
+        self.input_tx.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    fn shutdown_sender(&self) -> Option<tokio::sync::mpsc::Sender<()>> {
+        self.shutdown_tx.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    fn close(&self) -> Option<tokio::sync::mpsc::Sender<()>> {
+        self.closing.store(true, Ordering::SeqCst);
+        self.shutdown_sender()
+    }
+
+    fn is_closing(&self) -> bool {
+        self.closing.load(Ordering::SeqCst)
+    }
+
+    fn current_connection_id(&self) -> usize {
+        self.connection_id.load(Ordering::SeqCst)
+    }
+
+    fn begin_reconnect_runner(&self) -> bool {
+        !self.reconnect_runner_active.swap(true, Ordering::SeqCst)
+    }
+
+    fn finish_reconnect_runner(&self) {
+        self.reconnect_runner_active.store(false, Ordering::SeqCst);
+    }
+}
+
+enum SshSessionInput {
+    Data(Vec<u8>),
+    Resize(u32, u32),
+}
+
+#[derive(Debug, Clone)]
+struct PendingSshConnectRequest {
+    cwd: String,
+    project_path_key: String,
+    ssh_host_id: String,
+    title: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+}
+
+enum PendingSshPrompt {
+    HostKey {
+        request: PendingSshConnectRequest,
+        host_key: RuntimeSshKnownHostKey,
+    },
+    KeyboardInteractive {
+        request: PendingSshConnectRequest,
+        host_config: RuntimeSshHostConfig,
+        title: String,
+        size: TerminalSize,
+        handle: client::Handle<LiveAgentSshClient>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct KeyboardInteractivePromptData {
+    name: String,
+    instructions: String,
+    prompt: String,
+    echo: bool,
+}
+
+enum SshAuthOutcome {
+    Authenticated,
+    KeyboardInteractivePrompt(KeyboardInteractivePromptData),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PasswordKbiPromptAction {
+    RespondEmpty,
+    SendPassword,
+    PromptUser,
+}
+
+#[derive(Debug, Clone)]
+struct CapturedHostKey {
+    key: RuntimeSshKnownHostKey,
+    status: RuntimeSshKnownHostStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +359,7 @@ struct TerminalOutputTail {
 #[derive(Default)]
 pub struct TerminalSessionRegistry {
     sessions: Mutex<HashMap<String, Arc<TerminalSessionEntry>>>,
+    pending_ssh_prompts: Mutex<HashMap<String, PendingSshPrompt>>,
     app_handle: Mutex<Option<AppHandle>>,
     subscribers: Arc<Mutex<HashMap<usize, mpsc::Sender<TerminalEvent>>>>,
     next_subscriber_id: AtomicUsize,
@@ -268,6 +488,8 @@ impl TerminalSessionRegistry {
             cwd: cwd.display().to_string(),
             shell: shell_spec.label,
             title,
+            kind: "local".to_string(),
+            ssh: None,
             pid,
             cols: size.cols,
             rows: size.rows,
@@ -279,9 +501,11 @@ impl TerminalSessionRegistry {
         };
 
         let entry = Arc::new(TerminalSessionEntry {
-            master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
-            child: Mutex::new(child),
+            backend: TerminalSessionBackend::Local {
+                master: Mutex::new(pair.master),
+                writer: Mutex::new(writer),
+                child: Mutex::new(child),
+            },
             record: Mutex::new(record),
             output: Mutex::new(TerminalOutputBuffer::default()),
         });
@@ -318,6 +542,589 @@ impl TerminalSessionRegistry {
         self.snapshot(id, Some(MAX_TAIL_BYTES))
     }
 
+    pub async fn create_ssh(
+        self: &Arc<Self>,
+        cwd: String,
+        project_path_key: Option<String>,
+        ssh_host_id: String,
+        title: Option<String>,
+        cols: Option<u16>,
+        rows: Option<u16>,
+    ) -> Result<TerminalSshCreateResponse, String> {
+        let cwd = canonicalize_workdir(&cwd)?;
+        let project_key = project_path_key
+            .map(|value| workspace_project_path_key(&value))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| workspace_project_path_key(&cwd.display().to_string()));
+        if project_key.is_empty() {
+            return Err("project_path_key is required".to_string());
+        }
+        let request = PendingSshConnectRequest {
+            cwd: cwd.display().to_string(),
+            project_path_key: project_key,
+            ssh_host_id,
+            title,
+            cols,
+            rows,
+        };
+        self.create_ssh_from_request(request).await
+    }
+
+    pub async fn answer_ssh_prompt(
+        self: &Arc<Self>,
+        prompt_id: String,
+        answer: Option<String>,
+        trust_host_key: bool,
+    ) -> Result<TerminalSshCreateResponse, String> {
+        let prompt_id = prompt_id.trim().to_string();
+        if prompt_id.is_empty() {
+            return Err("prompt_id is required".to_string());
+        }
+        let pending = self
+            .pending_ssh_prompts
+            .lock()
+            .map_err(|_| "ssh prompt registry poisoned".to_string())?
+            .remove(&prompt_id)
+            .ok_or_else(|| format!("ssh prompt not found: {prompt_id}"))?;
+        match pending {
+            PendingSshPrompt::HostKey { request, host_key } => {
+                if !trust_host_key {
+                    return Err("SSH host key trust was cancelled".to_string());
+                }
+                trust_runtime_ssh_known_host(&host_key)?;
+                self.create_ssh_from_request(request).await
+            }
+            PendingSshPrompt::KeyboardInteractive {
+                request,
+                host_config,
+                title,
+                size,
+                mut handle,
+            } => {
+                let response = handle
+                    .authenticate_keyboard_interactive_respond(vec![answer.unwrap_or_default()])
+                    .await
+                    .map_err(|error| {
+                        format!("SSH keyboard-interactive response failed: {error}")
+                    })?;
+                self.continue_ssh_keyboard_interactive(
+                    request,
+                    host_config,
+                    title,
+                    size,
+                    handle,
+                    response,
+                    None,
+                )
+                .await
+            }
+        }
+    }
+
+    pub fn cancel_ssh_prompt(&self, prompt_id: String) -> Result<(), String> {
+        let prompt_id = prompt_id.trim().to_string();
+        if prompt_id.is_empty() {
+            return Err("prompt_id is required".to_string());
+        }
+        let pending = self
+            .pending_ssh_prompts
+            .lock()
+            .map_err(|_| "ssh prompt registry poisoned".to_string())?
+            .remove(&prompt_id);
+        if let Some(PendingSshPrompt::KeyboardInteractive { handle, .. }) = pending {
+            tokio::spawn(async move {
+                let _ = handle
+                    .disconnect(
+                        russh::Disconnect::ByApplication,
+                        "Authentication cancelled",
+                        "en",
+                    )
+                    .await;
+            });
+        }
+        Ok(())
+    }
+
+    async fn create_ssh_from_request(
+        self: &Arc<Self>,
+        request: PendingSshConnectRequest,
+    ) -> Result<TerminalSshCreateResponse, String> {
+        let host_config = load_runtime_ssh_host(&request.ssh_host_id)?
+            .ok_or_else(|| format!("SSH host not found: {}", request.ssh_host_id.trim()))?;
+        if ssh_proxy_configured(&host_config) {
+            return Err("SSH proxy is configured for this host, but V1 SSH terminal does not support proxy connections yet.".to_string());
+        }
+        if host_config.host.trim().is_empty() {
+            return Err("SSH host is required".to_string());
+        }
+        if host_config.username.trim().is_empty() {
+            return Err("SSH username is required".to_string());
+        }
+
+        let size = TerminalSize {
+            cols: request.cols.unwrap_or(DEFAULT_COLS).clamp(20, 400),
+            rows: request.rows.unwrap_or(DEFAULT_ROWS).clamp(6, 200),
+        };
+        let title = request
+            .title
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| self.next_ssh_title(&request.project_path_key, &host_config.name));
+
+        let auth = resolve_ssh_auth_material(&host_config)?;
+        let captured_host_key = Arc::new(tokio::sync::Mutex::new(None::<CapturedHostKey>));
+        let ssh_client = LiveAgentSshClient {
+            host: host_config.host.clone(),
+            port: host_config.port,
+            captured_host_key: Arc::clone(&captured_host_key),
+        };
+        let config = Arc::new(client::Config {
+            ..Default::default()
+        });
+        let mut handle = match client::connect(
+            config,
+            (host_config.host.as_str(), host_config.port),
+            ssh_client,
+        )
+        .await
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                if let Some(captured) = captured_host_key.lock().await.clone() {
+                    return self.ssh_host_key_response(request, &host_config, captured);
+                }
+                return Err(format!("SSH connection failed: {error}"));
+            }
+        };
+
+        match authenticate_ssh_handle(&mut handle, &host_config, auth).await? {
+            SshAuthOutcome::Authenticated => {
+                self.finish_create_ssh_session(request, host_config, title, size, handle)
+                    .await
+            }
+            SshAuthOutcome::KeyboardInteractivePrompt(prompt_data) => self
+                .ssh_keyboard_interactive_response(
+                    request,
+                    host_config,
+                    title,
+                    size,
+                    handle,
+                    prompt_data,
+                ),
+        }
+    }
+
+    async fn finish_create_ssh_session(
+        self: &Arc<Self>,
+        request: PendingSshConnectRequest,
+        host_config: RuntimeSshHostConfig,
+        title: String,
+        size: TerminalSize,
+        handle: client::Handle<LiveAgentSshClient>,
+    ) -> Result<TerminalSshCreateResponse, String> {
+        let channel = open_ssh_shell_channel(&handle, size).await?;
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = now_ms();
+        let ssh = TerminalSshMetadata {
+            host_id: host_config.id.clone(),
+            host_name: host_config.name.clone(),
+            username: host_config.username.clone(),
+            host: host_config.host.clone(),
+            port: host_config.port,
+            auth_type: host_config.auth_type.clone(),
+            status: SSH_STATUS_CONNECTED.to_string(),
+            reconnect_attempt: 0,
+            reconnect_max_attempts: SSH_RECONNECT_MAX_ATTEMPTS,
+        };
+        let record = TerminalSessionRecord {
+            id: id.clone(),
+            project_path_key: request.project_path_key.clone(),
+            cwd: request.cwd.clone(),
+            shell: "ssh".to_string(),
+            title,
+            kind: "ssh".to_string(),
+            ssh: Some(ssh),
+            pid: None,
+            cols: size.cols,
+            rows: size.rows,
+            created_at: now,
+            updated_at: now,
+            finished_at: None,
+            exit_code: None,
+            running: true,
+        };
+
+        let runtime = Arc::new(SshSessionRuntime::new());
+        let (input_tx, input_rx) = tokio::sync::mpsc::channel::<SshSessionInput>(256);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let connection_id = runtime
+            .install_connection(handle, input_tx, shutdown_tx)
+            .await;
+        let entry = Arc::new(TerminalSessionEntry {
+            backend: TerminalSessionBackend::Ssh {
+                runtime: Arc::clone(&runtime),
+            },
+            record: Mutex::new(record),
+            output: Mutex::new(TerminalOutputBuffer::default()),
+        });
+        self.sessions
+            .lock()
+            .expect("terminal session registry poisoned")
+            .insert(id.clone(), Arc::clone(&entry));
+        self.broadcast("created", &entry, None, None, None);
+
+        let registry = Arc::clone(self);
+        tauri::async_runtime::spawn(run_ssh_session_io(
+            registry,
+            id.clone(),
+            Arc::clone(&runtime),
+            connection_id,
+            channel,
+            input_rx,
+            shutdown_rx,
+        ));
+
+        self.snapshot(id, Some(MAX_TAIL_BYTES))
+            .map(terminal_ssh_create_response_from_snapshot)
+    }
+
+    async fn reconnect_ssh_session(
+        self: &Arc<Self>,
+        entry: Arc<TerminalSessionEntry>,
+        attempt: u8,
+    ) -> Result<(), String> {
+        let record = entry
+            .record
+            .lock()
+            .map_err(|_| "terminal session lock poisoned".to_string())?
+            .clone();
+        let ssh = record
+            .ssh
+            .clone()
+            .ok_or_else(|| "SSH session metadata is missing".to_string())?;
+        let TerminalSessionBackend::Ssh { runtime } = &entry.backend else {
+            return Err("terminal session is not an SSH connection".to_string());
+        };
+        if runtime.is_closing() {
+            return Err("SSH session is closing".to_string());
+        }
+        let host_config = load_runtime_ssh_host(&ssh.host_id)?
+            .ok_or_else(|| format!("SSH host not found: {}", ssh.host_id.trim()))?;
+        if ssh_proxy_configured(&host_config) {
+            return Err("SSH proxy is configured for this host, but V1 SSH terminal does not support proxy connections yet.".to_string());
+        }
+
+        let auth = resolve_ssh_auth_material(&host_config)?;
+        let captured_host_key = Arc::new(tokio::sync::Mutex::new(None::<CapturedHostKey>));
+        let ssh_client = LiveAgentSshClient {
+            host: host_config.host.clone(),
+            port: host_config.port,
+            captured_host_key: Arc::clone(&captured_host_key),
+        };
+        let config = Arc::new(client::Config {
+            ..Default::default()
+        });
+        let mut handle = match client::connect(
+            config,
+            (host_config.host.as_str(), host_config.port),
+            ssh_client,
+        )
+        .await
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                if captured_host_key.lock().await.is_some() {
+                    return Err(
+                        "SSH host key requires confirmation before reconnecting".to_string()
+                    );
+                }
+                return Err(format!("SSH connection failed: {error}"));
+            }
+        };
+
+        match authenticate_ssh_handle(&mut handle, &host_config, auth).await? {
+            SshAuthOutcome::Authenticated => {}
+            SshAuthOutcome::KeyboardInteractivePrompt(_) => {
+                let _ = handle
+                    .disconnect(
+                        russh::Disconnect::ByApplication,
+                        "Keyboard-interactive reconnect requires user input",
+                        "en",
+                    )
+                    .await;
+                return Err(
+                    "SSH reconnect requires keyboard-interactive input from the user".to_string(),
+                );
+            }
+        }
+
+        let size = TerminalSize {
+            cols: record.cols,
+            rows: record.rows,
+        };
+        let channel = open_ssh_shell_channel(&handle, size).await?;
+        let (input_tx, input_rx) = tokio::sync::mpsc::channel::<SshSessionInput>(256);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let connection_id = runtime
+            .install_connection(handle, input_tx, shutdown_tx)
+            .await;
+        {
+            let mut record = entry
+                .record
+                .lock()
+                .map_err(|_| "terminal session lock poisoned".to_string())?;
+            record.running = true;
+            record.finished_at = None;
+            record.exit_code = None;
+            record.updated_at = now_ms();
+            if let Some(ssh) = record.ssh.as_mut() {
+                ssh.status = SSH_STATUS_CONNECTED.to_string();
+                ssh.reconnect_attempt = 0;
+                ssh.reconnect_max_attempts = SSH_RECONNECT_MAX_ATTEMPTS;
+            }
+        }
+        self.append_output(
+            &record.id,
+            format!("\r\n[SSH] Reconnected after attempt {attempt}.\r\n"),
+        );
+        self.broadcast("reconnected", &entry, None, None, None);
+
+        let registry = Arc::clone(self);
+        tauri::async_runtime::spawn(run_ssh_session_io(
+            registry,
+            record.id,
+            Arc::clone(runtime),
+            connection_id,
+            channel,
+            input_rx,
+            shutdown_rx,
+        ));
+        Ok(())
+    }
+
+    async fn handle_ssh_unexpected_disconnect(
+        self: Arc<Self>,
+        session_id: String,
+        runtime: Arc<SshSessionRuntime>,
+        connection_id: usize,
+    ) {
+        if !runtime.begin_reconnect_runner() {
+            return;
+        }
+        if runtime.current_connection_id() != connection_id {
+            runtime.finish_reconnect_runner();
+            return;
+        }
+        runtime.clear_connection_if_current(connection_id).await;
+        if runtime.is_closing() {
+            runtime.finish_reconnect_runner();
+            return;
+        }
+        let Ok(entry) = self.entry(&session_id) else {
+            runtime.finish_reconnect_runner();
+            return;
+        };
+        for attempt in 1..=SSH_RECONNECT_MAX_ATTEMPTS {
+            if runtime.is_closing() {
+                runtime.finish_reconnect_runner();
+                return;
+            }
+            self.mark_ssh_reconnecting(&entry, attempt);
+            self.append_output(
+                &session_id,
+                format!(
+                    "\r\n[SSH] Connection lost. Reconnecting ({attempt}/{SSH_RECONNECT_MAX_ATTEMPTS})...\r\n"
+                ),
+            );
+            let delay = SSH_RECONNECT_DELAYS
+                .get(usize::from(attempt.saturating_sub(1)))
+                .copied()
+                .unwrap_or_else(|| Duration::from_secs(10));
+            tokio::time::sleep(delay).await;
+            if runtime.is_closing() {
+                runtime.finish_reconnect_runner();
+                return;
+            }
+            match self
+                .reconnect_ssh_session(Arc::clone(&entry), attempt)
+                .await
+            {
+                Ok(()) => {
+                    runtime.finish_reconnect_runner();
+                    return;
+                }
+                Err(error) => {
+                    self.append_output(
+                        &session_id,
+                        format!(
+                            "[SSH] Reconnect attempt {attempt}/{SSH_RECONNECT_MAX_ATTEMPTS} failed: {error}\r\n"
+                        ),
+                    );
+                }
+            }
+        }
+        self.mark_ssh_disconnected(&entry);
+        self.append_output(
+            &session_id,
+            format!("[SSH] Reconnect failed after {SSH_RECONNECT_MAX_ATTEMPTS} attempts.\r\n"),
+        );
+        runtime.finish_reconnect_runner();
+    }
+
+    async fn continue_ssh_keyboard_interactive(
+        self: &Arc<Self>,
+        request: PendingSshConnectRequest,
+        host_config: RuntimeSshHostConfig,
+        title: String,
+        size: TerminalSize,
+        mut handle: client::Handle<LiveAgentSshClient>,
+        response: client::KeyboardInteractiveAuthResponse,
+        auto_password: Option<String>,
+    ) -> Result<TerminalSshCreateResponse, String> {
+        match continue_keyboard_interactive_auth(&mut handle, response, auto_password).await? {
+            SshAuthOutcome::Authenticated => {
+                self.finish_create_ssh_session(request, host_config, title, size, handle)
+                    .await
+            }
+            SshAuthOutcome::KeyboardInteractivePrompt(prompt_data) => self
+                .ssh_keyboard_interactive_response(
+                    request,
+                    host_config,
+                    title,
+                    size,
+                    handle,
+                    prompt_data,
+                ),
+        }
+    }
+
+    fn ssh_keyboard_interactive_response(
+        self: &Arc<Self>,
+        request: PendingSshConnectRequest,
+        host_config: RuntimeSshHostConfig,
+        title: String,
+        size: TerminalSize,
+        handle: client::Handle<LiveAgentSshClient>,
+        prompt_data: KeyboardInteractivePromptData,
+    ) -> Result<TerminalSshCreateResponse, String> {
+        let prompt_id = uuid::Uuid::new_v4().to_string();
+        let message = ssh_keyboard_interactive_message(&prompt_data);
+        let prompt = TerminalSshPrompt {
+            id: prompt_id.clone(),
+            kind: "keyboardInteractive".to_string(),
+            host_id: host_config.id.clone(),
+            host_name: host_config.name.clone(),
+            host: host_config.host.clone(),
+            port: host_config.port,
+            message,
+            fingerprint_sha256: String::new(),
+            key_type: String::new(),
+            answer_echo: prompt_data.echo,
+        };
+        self.pending_ssh_prompts
+            .lock()
+            .map_err(|_| "ssh prompt registry poisoned".to_string())?
+            .insert(
+                prompt_id.clone(),
+                PendingSshPrompt::KeyboardInteractive {
+                    request,
+                    host_config,
+                    title,
+                    size,
+                    handle,
+                },
+            );
+        self.schedule_ssh_prompt_timeout(prompt_id);
+        Ok(TerminalSshCreateResponse {
+            session: None,
+            output: String::new(),
+            truncated: false,
+            output_start_offset: 0,
+            output_end_offset: 0,
+            ssh_prompt: Some(prompt),
+        })
+    }
+
+    fn ssh_host_key_response(
+        self: &Arc<Self>,
+        request: PendingSshConnectRequest,
+        host_config: &RuntimeSshHostConfig,
+        captured: CapturedHostKey,
+    ) -> Result<TerminalSshCreateResponse, String> {
+        match captured.status {
+            RuntimeSshKnownHostStatus::Known => {
+                Err("SSH host key check failed unexpectedly".to_string())
+            }
+            RuntimeSshKnownHostStatus::Changed { stored_fingerprint } => Err(format!(
+                "SSH host key changed for {}:{}. Stored fingerprint: {}. Received fingerprint: {}.",
+                host_config.host,
+                host_config.port,
+                stored_fingerprint,
+                captured.key.fingerprint_sha256
+            )),
+            RuntimeSshKnownHostStatus::Unknown => {
+                let prompt_id = uuid::Uuid::new_v4().to_string();
+                let prompt = TerminalSshPrompt {
+                    id: prompt_id.clone(),
+                    kind: "hostKey".to_string(),
+                    host_id: host_config.id.clone(),
+                    host_name: host_config.name.clone(),
+                    host: host_config.host.clone(),
+                    port: host_config.port,
+                    message: format!(
+                        "Trust SSH host key for {}:{}?",
+                        host_config.host, host_config.port
+                    ),
+                    fingerprint_sha256: captured.key.fingerprint_sha256.clone(),
+                    key_type: captured.key.key_type.clone(),
+                    answer_echo: false,
+                };
+                self.pending_ssh_prompts
+                    .lock()
+                    .map_err(|_| "ssh prompt registry poisoned".to_string())?
+                    .insert(
+                        prompt_id.clone(),
+                        PendingSshPrompt::HostKey {
+                            request,
+                            host_key: captured.key,
+                        },
+                    );
+                self.schedule_ssh_prompt_timeout(prompt_id);
+                Ok(TerminalSshCreateResponse {
+                    session: None,
+                    output: String::new(),
+                    truncated: false,
+                    output_start_offset: 0,
+                    output_end_offset: 0,
+                    ssh_prompt: Some(prompt),
+                })
+            }
+        }
+    }
+
+    fn schedule_ssh_prompt_timeout(self: &Arc<Self>, prompt_id: String) {
+        let registry = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(SSH_PROMPT_TIMEOUT).await;
+            let pending = registry
+                .pending_ssh_prompts
+                .lock()
+                .ok()
+                .and_then(|mut prompts| prompts.remove(&prompt_id));
+            if let Some(PendingSshPrompt::KeyboardInteractive { handle, .. }) = pending {
+                let _ = handle
+                    .disconnect(
+                        russh::Disconnect::ByApplication,
+                        "Authentication prompt timed out",
+                        "en",
+                    )
+                    .await;
+            }
+        });
+    }
+
     pub fn snapshot(
         &self,
         session_id: String,
@@ -343,6 +1150,62 @@ impl TerminalSessionRegistry {
         self.record(session_id)
     }
 
+    pub async fn ssh_latency(
+        self: &Arc<Self>,
+        session_id: String,
+    ) -> Result<TerminalSshLatencyResponse, String> {
+        let entry = self.entry(&session_id)?;
+        let record = entry
+            .record
+            .lock()
+            .map_err(|_| "terminal session lock poisoned".to_string())?
+            .clone();
+        if record.kind.trim() != "ssh" {
+            return Err("terminal session is not an SSH connection".to_string());
+        }
+        if !record.running {
+            return Err("SSH connection is not running".to_string());
+        }
+        let TerminalSessionBackend::Ssh { runtime } = &entry.backend else {
+            return Err("terminal session is not an SSH connection".to_string());
+        };
+        let start = Instant::now();
+        let ping = timeout(Duration::from_secs(3), async {
+            let handle = runtime.handle.lock().await;
+            let Some(handle) = handle.as_ref() else {
+                return Err(russh::Error::Disconnect);
+            };
+            handle.send_ping().await
+        })
+        .await;
+        match ping {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                spawn_ssh_reconnect_runner(
+                    Arc::clone(self),
+                    record.id.clone(),
+                    Arc::clone(runtime),
+                    runtime.current_connection_id(),
+                );
+                return Err(format!("SSH latency check failed: {error}"));
+            }
+            Err(_) => {
+                spawn_ssh_reconnect_runner(
+                    Arc::clone(self),
+                    record.id.clone(),
+                    Arc::clone(runtime),
+                    runtime.current_connection_id(),
+                );
+                return Err("SSH latency check timed out".to_string());
+            }
+        }
+        let elapsed = start.elapsed().as_millis().clamp(1, u128::from(u32::MAX)) as u32;
+        Ok(TerminalSshLatencyResponse {
+            session_id: record.id,
+            latency_ms: elapsed,
+        })
+    }
+
     pub fn input(&self, session_id: String, data: String) -> Result<TerminalSessionRecord, String> {
         if data.is_empty() {
             return self.record(session_id);
@@ -356,12 +1219,22 @@ impl TerminalSessionRegistry {
         if !running {
             return Err("terminal session is not running".to_string());
         }
-        entry
-            .writer
-            .lock()
-            .map_err(|_| "terminal writer lock poisoned".to_string())?
-            .write_all(data.as_bytes())
-            .map_err(|err| format!("failed to write terminal input: {err}"))?;
+        match &entry.backend {
+            TerminalSessionBackend::Local { writer, .. } => {
+                writer
+                    .lock()
+                    .map_err(|_| "terminal writer lock poisoned".to_string())?
+                    .write_all(data.as_bytes())
+                    .map_err(|err| format!("failed to write terminal input: {err}"))?;
+            }
+            TerminalSessionBackend::Ssh { runtime } => {
+                runtime
+                    .input_sender()
+                    .ok_or_else(|| "SSH connection is not connected".to_string())?
+                    .try_send(SshSessionInput::Data(data.into_bytes()))
+                    .map_err(|err| format!("failed to write ssh terminal input: {err}"))?;
+            }
+        }
         self.touch(&entry);
         self.record(session_id)
     }
@@ -375,17 +1248,27 @@ impl TerminalSessionRegistry {
         let entry = self.entry(&session_id)?;
         let cols = cols.clamp(20, 400);
         let rows = rows.clamp(6, 200);
-        entry
-            .master
-            .lock()
-            .map_err(|_| "terminal master lock poisoned".to_string())?
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|err| format!("failed to resize terminal: {err}"))?;
+        match &entry.backend {
+            TerminalSessionBackend::Local { master, .. } => {
+                master
+                    .lock()
+                    .map_err(|_| "terminal master lock poisoned".to_string())?
+                    .resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|err| format!("failed to resize terminal: {err}"))?;
+            }
+            TerminalSessionBackend::Ssh { runtime } => {
+                if let Some(input_tx) = runtime.input_sender() {
+                    input_tx
+                        .try_send(SshSessionInput::Resize(u32::from(cols), u32::from(rows)))
+                        .map_err(|err| format!("failed to resize ssh terminal: {err}"))?;
+                }
+            }
+        }
         {
             let mut record = entry
                 .record
@@ -554,6 +1437,32 @@ impl TerminalSessionRegistry {
         format!("Terminal {}", count + 1)
     }
 
+    fn next_ssh_title(&self, project_path_key: &str, host_name: &str) -> String {
+        let base = host_name.trim();
+        let base = if base.is_empty() { "SSH" } else { base };
+        let count = self
+            .sessions
+            .lock()
+            .ok()
+            .map(|sessions| {
+                sessions
+                    .values()
+                    .filter_map(|entry| entry.record.lock().ok())
+                    .filter(|record| {
+                        record.project_path_key == project_path_key
+                            && record.kind == "ssh"
+                            && record.title.starts_with(base)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        if count == 0 {
+            base.to_string()
+        } else {
+            format!("{base} {}", count + 1)
+        }
+    }
+
     fn entry(&self, session_id: &str) -> Result<Arc<TerminalSessionEntry>, String> {
         let id = session_id.trim();
         if id.is_empty() {
@@ -608,9 +1517,11 @@ impl TerminalSessionRegistry {
             return;
         };
         let mut exit_code = None;
-        if let Ok(mut child) = entry.child.lock() {
-            if let Ok(status) = child.try_wait() {
-                exit_code = status.map(|status| status.exit_code() as i32);
+        if let TerminalSessionBackend::Local { child, .. } = &entry.backend {
+            if let Ok(mut child) = child.lock() {
+                if let Ok(status) = child.try_wait() {
+                    exit_code = status.map(|status| status.exit_code() as i32);
+                }
             }
         }
         {
@@ -626,6 +1537,44 @@ impl TerminalSessionRegistry {
             }
         }
         self.broadcast("exit", &entry, None, None, None);
+    }
+
+    fn mark_ssh_reconnecting(&self, entry: &Arc<TerminalSessionEntry>, attempt: u8) {
+        {
+            let mut record = match entry.record.lock() {
+                Ok(record) => record,
+                Err(_) => return,
+            };
+            record.running = false;
+            record.finished_at = None;
+            record.exit_code = None;
+            record.updated_at = now_ms();
+            if let Some(ssh) = record.ssh.as_mut() {
+                ssh.status = SSH_STATUS_RECONNECTING.to_string();
+                ssh.reconnect_attempt = attempt;
+                ssh.reconnect_max_attempts = SSH_RECONNECT_MAX_ATTEMPTS;
+            }
+        }
+        self.broadcast("reconnecting", entry, None, None, None);
+    }
+
+    fn mark_ssh_disconnected(&self, entry: &Arc<TerminalSessionEntry>) {
+        {
+            let mut record = match entry.record.lock() {
+                Ok(record) => record,
+                Err(_) => return,
+            };
+            record.running = false;
+            record.finished_at = Some(now_ms());
+            record.exit_code = None;
+            record.updated_at = now_ms();
+            if let Some(ssh) = record.ssh.as_mut() {
+                ssh.status = SSH_STATUS_DISCONNECTED.to_string();
+                ssh.reconnect_attempt = SSH_RECONNECT_MAX_ATTEMPTS;
+                ssh.reconnect_max_attempts = SSH_RECONNECT_MAX_ATTEMPTS;
+            }
+        }
+        self.broadcast("exit", entry, None, None, None);
     }
 
     fn broadcast(
@@ -664,6 +1613,382 @@ impl TerminalSessionRegistry {
         for subscriber in subscribers {
             let _ = subscriber.send(event.clone());
         }
+    }
+}
+
+struct LiveAgentSshClient {
+    host: String,
+    port: u16,
+    captured_host_key: Arc<tokio::sync::Mutex<Option<CapturedHostKey>>>,
+}
+
+impl client::Handler for LiveAgentSshClient {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let key_base64 =
+            base64::engine::general_purpose::STANDARD.encode(server_public_key.public_key_bytes());
+        let key = RuntimeSshKnownHostKey {
+            host: self.host.clone(),
+            port: self.port,
+            key_type: server_public_key.algorithm().as_str().to_string(),
+            key_base64,
+            fingerprint_sha256: server_public_key.fingerprint(HashAlg::Sha256).to_string(),
+        };
+        match check_runtime_ssh_known_host(&key) {
+            Ok(RuntimeSshKnownHostStatus::Known) => Ok(true),
+            Ok(status) => {
+                *self.captured_host_key.lock().await = Some(CapturedHostKey { key, status });
+                Ok(false)
+            }
+            Err(error) => {
+                *self.captured_host_key.lock().await = Some(CapturedHostKey {
+                    key,
+                    status: RuntimeSshKnownHostStatus::Changed {
+                        stored_fingerprint: error,
+                    },
+                });
+                Ok(false)
+            }
+        }
+    }
+}
+
+enum ResolvedSshAuth {
+    Password(String),
+    PrivateKey {
+        key: String,
+        passphrase: Option<String>,
+    },
+}
+
+fn ssh_proxy_configured(host: &RuntimeSshHostConfig) -> bool {
+    !host.proxy.url.trim().is_empty()
+        || host.proxy.port > 0
+        || !host.proxy.username.trim().is_empty()
+        || host.proxy.password_configured
+}
+
+fn resolve_ssh_auth_material(host: &RuntimeSshHostConfig) -> Result<ResolvedSshAuth, String> {
+    if host.auth_type == "privateKey" {
+        let key = if !host.private_key.trim().is_empty() {
+            host.private_key.trim().to_string()
+        } else {
+            let path = host.private_key_path.trim();
+            if path.is_empty() {
+                return Err("SSH private key is not configured".to_string());
+            }
+            let expanded = expand_tilde_path(path);
+            fs::read_to_string(&expanded)
+                .map_err(|error| {
+                    format!(
+                        "failed to read SSH private key {}: {error}",
+                        expanded.display()
+                    )
+                })?
+                .trim()
+                .to_string()
+        };
+        if key.is_empty() {
+            return Err("SSH private key is empty".to_string());
+        }
+        let passphrase = host.private_key_passphrase.trim().to_string();
+        Ok(ResolvedSshAuth::PrivateKey {
+            key,
+            passphrase: (!passphrase.is_empty()).then_some(passphrase),
+        })
+    } else {
+        let password = host.password.trim().to_string();
+        if password.is_empty() {
+            return Err("SSH password is not configured".to_string());
+        }
+        Ok(ResolvedSshAuth::Password(password))
+    }
+}
+
+async fn authenticate_ssh_handle(
+    handle: &mut client::Handle<LiveAgentSshClient>,
+    host: &RuntimeSshHostConfig,
+    auth: ResolvedSshAuth,
+) -> Result<SshAuthOutcome, String> {
+    match auth {
+        ResolvedSshAuth::Password(password) => {
+            let result = handle
+                .authenticate_password(host.username.as_str(), password.clone())
+                .await
+                .map_err(|error| format!("SSH password authentication failed: {error}"))?;
+            if result.success() {
+                return Ok(SshAuthOutcome::Authenticated);
+            }
+            if auth_result_can_continue_with_kbi(&result) {
+                let response = handle
+                    .authenticate_keyboard_interactive_start(host.username.as_str(), None::<String>)
+                    .await
+                    .map_err(|error| {
+                        format!("SSH keyboard-interactive authentication failed: {error}")
+                    })?;
+                return continue_keyboard_interactive_auth(handle, response, Some(password)).await;
+            }
+            Err("SSH authentication failed".to_string())
+        }
+        ResolvedSshAuth::PrivateKey { key, passphrase } => {
+            let key_pair = russh::keys::decode_secret_key(&key, passphrase.as_deref())
+                .map_err(|error| format!("Invalid SSH private key: {error}"))?;
+            let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), Some(HashAlg::Sha256));
+            let result = handle
+                .authenticate_publickey(host.username.as_str(), key)
+                .await
+                .map_err(|error| format!("SSH private key authentication failed: {error}"))?;
+            if result.success() {
+                return Ok(SshAuthOutcome::Authenticated);
+            }
+            if auth_result_can_continue_with_kbi(&result) {
+                let response = handle
+                    .authenticate_keyboard_interactive_start(host.username.as_str(), None::<String>)
+                    .await
+                    .map_err(|error| {
+                        format!("SSH keyboard-interactive authentication failed: {error}")
+                    })?;
+                return continue_keyboard_interactive_auth(handle, response, None).await;
+            }
+            Err("SSH authentication failed".to_string())
+        }
+    }
+}
+
+fn auth_result_can_continue_with_kbi(result: &client::AuthResult) -> bool {
+    matches!(
+        result,
+        client::AuthResult::Failure {
+            remaining_methods,
+            ..
+        } if remaining_methods.contains(&MethodKind::KeyboardInteractive)
+    )
+}
+
+fn prompt_looks_like_password(prompt: &str) -> bool {
+    let normalized = prompt.trim().to_ascii_lowercase();
+    normalized.contains("password") || prompt.contains("密码")
+}
+
+fn classify_password_kbi_prompts(
+    prompts: &[client::Prompt],
+    password_prompt_consumed: bool,
+) -> PasswordKbiPromptAction {
+    if prompts.is_empty() {
+        PasswordKbiPromptAction::RespondEmpty
+    } else if !password_prompt_consumed
+        && prompts.len() == 1
+        && !prompts[0].echo
+        && prompt_looks_like_password(&prompts[0].prompt)
+    {
+        PasswordKbiPromptAction::SendPassword
+    } else {
+        PasswordKbiPromptAction::PromptUser
+    }
+}
+
+async fn continue_keyboard_interactive_auth(
+    handle: &mut client::Handle<LiveAgentSshClient>,
+    mut response: client::KeyboardInteractiveAuthResponse,
+    auto_password: Option<String>,
+) -> Result<SshAuthOutcome, String> {
+    let mut password_prompt_consumed = false;
+    for _ in 0..5 {
+        match response {
+            client::KeyboardInteractiveAuthResponse::Success => {
+                return Ok(SshAuthOutcome::Authenticated);
+            }
+            client::KeyboardInteractiveAuthResponse::Failure { .. } => {
+                return Err("SSH keyboard-interactive authentication failed".to_string());
+            }
+            client::KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => match classify_password_kbi_prompts(&prompts, password_prompt_consumed) {
+                PasswordKbiPromptAction::RespondEmpty => {
+                    response = handle
+                        .authenticate_keyboard_interactive_respond(Vec::new())
+                        .await
+                        .map_err(|error| {
+                            format!("SSH keyboard-interactive response failed: {error}")
+                        })?;
+                }
+                PasswordKbiPromptAction::SendPassword if auto_password.is_some() => {
+                    password_prompt_consumed = true;
+                    response = handle
+                        .authenticate_keyboard_interactive_respond(vec![auto_password
+                            .clone()
+                            .unwrap_or_default()])
+                        .await
+                        .map_err(|error| {
+                            format!("SSH keyboard-interactive response failed: {error}")
+                        })?;
+                }
+                PasswordKbiPromptAction::SendPassword | PasswordKbiPromptAction::PromptUser => {
+                    if prompts.len() != 1 {
+                        return Err(
+                            "SSH keyboard-interactive requested multiple prompts, which is not supported in V1."
+                                .to_string(),
+                        );
+                    }
+                    let prompt = prompts
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| "SSH keyboard-interactive prompt is empty".to_string())?;
+                    return Ok(SshAuthOutcome::KeyboardInteractivePrompt(
+                        KeyboardInteractivePromptData {
+                            name,
+                            instructions,
+                            prompt: prompt.prompt,
+                            echo: prompt.echo,
+                        },
+                    ));
+                }
+            },
+        }
+    }
+    Err("SSH keyboard-interactive exceeded maximum prompt rounds".to_string())
+}
+
+fn ssh_keyboard_interactive_message(prompt_data: &KeyboardInteractivePromptData) -> String {
+    let mut parts = Vec::new();
+    if !prompt_data.name.trim().is_empty() {
+        parts.push(prompt_data.name.trim().to_string());
+    }
+    if !prompt_data.instructions.trim().is_empty() {
+        parts.push(prompt_data.instructions.trim().to_string());
+    }
+    if !prompt_data.prompt.trim().is_empty() {
+        parts.push(prompt_data.prompt.trim().to_string());
+    }
+    if parts.is_empty() {
+        "SSH keyboard-interactive authentication requires input.".to_string()
+    } else {
+        parts.join("\n")
+    }
+}
+
+async fn open_ssh_shell_channel(
+    handle: &client::Handle<LiveAgentSshClient>,
+    size: TerminalSize,
+) -> Result<russh::Channel<client::Msg>, String> {
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|error| format!("SSH channel open failed: {error}"))?;
+    channel
+        .request_pty(
+            false,
+            "xterm-256color",
+            u32::from(size.cols),
+            u32::from(size.rows),
+            0,
+            0,
+            &[],
+        )
+        .await
+        .map_err(|error| format!("SSH PTY request failed: {error}"))?;
+    channel
+        .request_shell(false)
+        .await
+        .map_err(|error| format!("SSH shell request failed: {error}"))?;
+    Ok(channel)
+}
+
+async fn run_ssh_session_io(
+    registry: Arc<TerminalSessionRegistry>,
+    session_id: String,
+    runtime: Arc<SshSessionRuntime>,
+    connection_id: usize,
+    channel: russh::Channel<client::Msg>,
+    mut input_rx: tokio::sync::mpsc::Receiver<SshSessionInput>,
+    mut shutdown_rx: tokio::sync::mpsc::Receiver<()>,
+) {
+    let (mut read_half, write_half) = channel.split();
+    let mut writer = write_half.make_writer();
+    let mut decoder = TerminalUtf8Decoder::default();
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                let handle = runtime.handle.lock().await;
+                if let Some(handle) = handle.as_ref() {
+                    let _ = handle.disconnect(russh::Disconnect::ByApplication, "User disconnected", "en").await;
+                }
+                break;
+            }
+            input = input_rx.recv() => {
+                match input {
+                    Some(SshSessionInput::Data(data)) => {
+                        if writer.write_all(&data).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(SshSessionInput::Resize(cols, rows)) => {
+                        let _ = write_half.window_change(cols, rows, 0, 0).await;
+                    }
+                    None => break,
+                }
+            }
+            message = read_half.wait() => {
+                match message {
+                    Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        let text = decoder.push(data.as_ref());
+                        if !text.is_empty() {
+                            registry.append_output(&session_id, text);
+                        }
+                    }
+                    Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let text = decoder.finish();
+    if !text.is_empty() {
+        registry.append_output(&session_id, text);
+    }
+    spawn_ssh_reconnect_runner(registry, session_id, runtime, connection_id);
+}
+
+fn spawn_ssh_reconnect_runner(
+    registry: Arc<TerminalSessionRegistry>,
+    session_id: String,
+    runtime: Arc<SshSessionRuntime>,
+    connection_id: usize,
+) {
+    thread::spawn(move || {
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+        rt.block_on(async move {
+            registry
+                .handle_ssh_unexpected_disconnect(session_id, runtime, connection_id)
+                .await;
+        });
+    });
+}
+
+fn terminal_ssh_create_response_from_snapshot(
+    snapshot: TerminalSnapshotResponse,
+) -> TerminalSshCreateResponse {
+    TerminalSshCreateResponse {
+        session: Some(snapshot.session),
+        output: snapshot.output,
+        truncated: snapshot.truncated,
+        output_start_offset: snapshot.output_start_offset,
+        output_end_offset: snapshot.output_end_offset,
+        ssh_prompt: None,
     }
 }
 
@@ -757,10 +2082,19 @@ fn read_output_chunks_tail(output: &TerminalOutputBuffer, max_bytes: usize) -> T
 }
 
 fn terminate_terminal_entry(entry: &Arc<TerminalSessionEntry>) {
-    let pid = entry.record.lock().ok().and_then(|record| record.pid);
-    terminate_process_tree_best_effort(pid);
-    if let Ok(mut child) = entry.child.lock() {
-        let _ = child.kill();
+    match &entry.backend {
+        TerminalSessionBackend::Local { child, .. } => {
+            let pid = entry.record.lock().ok().and_then(|record| record.pid);
+            terminate_process_tree_best_effort(pid);
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+        }
+        TerminalSessionBackend::Ssh { runtime } => {
+            if let Some(shutdown_tx) = runtime.close() {
+                let _ = shutdown_tx.try_send(());
+            }
+        }
     }
 }
 
@@ -1131,6 +2465,72 @@ mod tests {
         assert_eq!(decoder.push(&[0xe4, 0xb8]), "");
         assert_eq!(decoder.push(&[0xad]), "中");
         assert_eq!(decoder.finish(), "");
+    }
+
+    #[test]
+    fn ssh_auth_result_detects_keyboard_interactive_continuation() {
+        let mut methods = russh::MethodSet::empty();
+        methods.push(MethodKind::KeyboardInteractive);
+        assert!(auth_result_can_continue_with_kbi(
+            &client::AuthResult::Failure {
+                remaining_methods: methods,
+                partial_success: false,
+            }
+        ));
+
+        let mut password_only = russh::MethodSet::empty();
+        password_only.push(MethodKind::Password);
+        assert!(!auth_result_can_continue_with_kbi(
+            &client::AuthResult::Failure {
+                remaining_methods: password_only,
+                partial_success: false,
+            },
+        ));
+        assert!(!auth_result_can_continue_with_kbi(
+            &client::AuthResult::Success
+        ));
+    }
+
+    #[test]
+    fn ssh_password_kbi_prompt_classification_uses_saved_password_once() {
+        let prompts = vec![client::Prompt {
+            prompt: "Password:".to_string(),
+            echo: false,
+        }];
+        assert_eq!(
+            classify_password_kbi_prompts(&prompts, false),
+            PasswordKbiPromptAction::SendPassword
+        );
+        assert_eq!(
+            classify_password_kbi_prompts(&prompts, true),
+            PasswordKbiPromptAction::PromptUser
+        );
+        assert_eq!(
+            classify_password_kbi_prompts(&[], false),
+            PasswordKbiPromptAction::RespondEmpty
+        );
+        assert_eq!(
+            classify_password_kbi_prompts(
+                &[client::Prompt {
+                    prompt: "OTP:".to_string(),
+                    echo: false,
+                }],
+                false,
+            ),
+            PasswordKbiPromptAction::PromptUser
+        );
+    }
+
+    #[test]
+    fn ssh_keyboard_interactive_message_combines_server_fields() {
+        let message = ssh_keyboard_interactive_message(&KeyboardInteractivePromptData {
+            name: "Verification".to_string(),
+            instructions: "Enter code".to_string(),
+            prompt: "OTP:".to_string(),
+            echo: false,
+        });
+
+        assert_eq!(message, "Verification\nEnter code\nOTP:");
     }
 
     #[test]

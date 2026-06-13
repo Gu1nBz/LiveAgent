@@ -48,7 +48,43 @@ func cloneTerminalSession(session *gatewayv1.TerminalSession) *gatewayv1.Termina
 		FinishedAt:     session.GetFinishedAt(),
 		ExitCode:       session.GetExitCode(),
 		Running:        session.GetRunning(),
+		Kind:           session.GetKind(),
+		Ssh:            cloneTerminalSshMetadata(session.GetSsh()),
 	}
+}
+
+func cloneTerminalSshMetadata(ssh *gatewayv1.TerminalSshMetadata) *gatewayv1.TerminalSshMetadata {
+	if ssh == nil {
+		return nil
+	}
+	return &gatewayv1.TerminalSshMetadata{
+		HostId:               ssh.GetHostId(),
+		HostName:             ssh.GetHostName(),
+		Username:             ssh.GetUsername(),
+		Host:                 ssh.GetHost(),
+		Port:                 ssh.GetPort(),
+		AuthType:             ssh.GetAuthType(),
+		Status:               ssh.GetStatus(),
+		ReconnectAttempt:     ssh.GetReconnectAttempt(),
+		ReconnectMaxAttempts: ssh.GetReconnectMaxAttempts(),
+	}
+}
+
+func (m *Manager) TerminalSessionKind(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	m.syncHub.terminalMu.Lock()
+	defer m.syncHub.terminalMu.Unlock()
+	session := m.syncHub.terminalSessions[sessionID]
+	if session == nil {
+		return ""
+	}
+	if strings.TrimSpace(session.GetKind()) == "ssh" {
+		return "ssh"
+	}
+	return "local"
 }
 
 func terminalSessionSortKey(session *gatewayv1.TerminalSession) (string, uint64, string) {
@@ -153,7 +189,7 @@ func (m *Manager) ApplyTerminalResponseSnapshot(
 			delete(m.syncHub.terminalSessions, sessionID)
 			m.syncHub.terminalMu.Unlock()
 		}
-	case "create", "attach", "snapshot", "input", "resize", "rename":
+	case "create", "create_ssh", "answer_ssh_prompt", "attach", "snapshot", "input", "resize", "rename":
 		session := resp.GetSession()
 		sessionID := strings.TrimSpace(session.GetId())
 		if sessionID == "" {

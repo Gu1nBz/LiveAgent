@@ -1,18 +1,55 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocale } from "@/i18n";
 import type { SshHostConfig } from "@/lib/settings";
+import { workspaceProjectPathKey } from "@/lib/settings";
 import { cn } from "@/lib/shared/utils";
-import { ArrowLeft, Check, ChevronDown, Globe, Key, Plus, Server, Settings } from "../icons";
+import type {
+  TerminalClient,
+  TerminalSession,
+  TerminalSnapshot,
+  TerminalSshPrompt,
+} from "@/lib/terminal/types";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Check,
+  ChevronDown,
+  Clock3,
+  Globe,
+  Key,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Server,
+  Settings,
+  Shield,
+  Terminal,
+  Wifi,
+  WifiOff,
+  X,
+} from "../icons";
 import { Button } from "../ui/button";
-import { Textarea } from "../ui/textarea";
+import { useConfirmDialog } from "../ui/confirm-dialog";
 
 type SshTunnelScope = "project" | "all";
 type SshTunnelView = "list" | "settings" | "create";
 
+type SshLatencyState = {
+  latencyMs?: number;
+  loading: boolean;
+  failed: boolean;
+};
+
 type SshTunnelPanelProps = {
+  cwd: string;
   projectPathKey: string;
   hosts: SshHostConfig[];
   associatedHostIds: string[];
+  client: TerminalClient;
+  sessions: TerminalSession[];
+  onSessionSnapshot: (snapshot: TerminalSnapshot) => void;
+  onSessionClosed: (sessionId: string) => void;
+  onOpenSession: (session: TerminalSession) => void;
   onAssociatedHostIdsChange: (hostIds: string[]) => void;
 };
 
@@ -27,14 +64,75 @@ function authLabel(host: Pick<SshHostConfig, "authType">, t: (key: string) => st
     : t("settings.sshAuthPassword");
 }
 
-function hostHasMeta(host: SshHostConfig) {
+function hostHasProxy(host: SshHostConfig) {
   return (
-    (host.authType === "privateKey" &&
-      (host.privateKeyPath.trim().length > 0 || host.privateKeyConfigured === true)) ||
     host.proxy.url.trim().length > 0 ||
     host.proxy.port > 0 ||
+    host.proxy.username.trim().length > 0 ||
     host.proxy.passwordConfigured === true
   );
+}
+
+function hostSecretReady(host: SshHostConfig) {
+  if (host.authType === "privateKey") {
+    return (
+      host.privateKey.trim().length > 0 ||
+      host.privateKeyPath.trim().length > 0 ||
+      host.privateKeyConfigured === true
+    );
+  }
+  return host.password.trim().length > 0 || host.passwordConfigured === true;
+}
+
+function hostStatusMessage(host: SshHostConfig, t: (key: string) => string) {
+  if (hostHasProxy(host)) return t("projectTools.sshTunnelProxyUnsupported");
+  if (!hostSecretReady(host)) return t("projectTools.sshTunnelMissingSecret");
+  return "";
+}
+
+function sessionBelongsToProject(session: TerminalSession, projectPathKey: string) {
+  const wantedProjectKey = workspaceProjectPathKey(projectPathKey);
+  if (!wantedProjectKey) return false;
+  const sessionProjectKey = workspaceProjectPathKey(session.projectPathKey || session.cwd);
+  return sessionProjectKey === wantedProjectKey;
+}
+
+function sessionTitle(session: TerminalSession, fallback: string) {
+  return session.title || session.ssh?.hostName || fallback;
+}
+
+function sessionEndpointLabel(session: TerminalSession) {
+  const ssh = session.ssh;
+  if (!ssh) return session.cwd || session.projectPathKey;
+  const userPrefix = ssh.username.trim() ? `${ssh.username.trim()}@` : "";
+  return `${userPrefix}${ssh.host}:${ssh.port}`;
+}
+
+function sessionProjectLabel(session: TerminalSession) {
+  return session.projectPathKey || session.cwd || "";
+}
+
+function sshSessionStatus(session: TerminalSession) {
+  const status = session.ssh?.status ?? (session.running ? "connected" : "disconnected");
+  if (status === "connected" && !session.running) return "disconnected";
+  return status;
+}
+
+function sshSessionConnected(session: TerminalSession) {
+  return sshSessionStatus(session) === "connected" && session.running;
+}
+
+function sshStatusLabel(session: TerminalSession, t: (key: string) => string) {
+  const status = sshSessionStatus(session);
+  if (status === "reconnecting") {
+    const attempt = Math.max(1, Number(session.ssh?.reconnectAttempt ?? 1));
+    const max = Math.max(attempt, Number(session.ssh?.reconnectMaxAttempts ?? 3));
+    return t("projectTools.sshTunnelReconnecting")
+      .replace("{attempt}", String(attempt))
+      .replace("{max}", String(max));
+  }
+  if (status === "disconnected") return t("projectTools.sshTunnelDisconnected");
+  return t("projectTools.sshTunnelConnected");
 }
 
 function HostMetaTags(props: { host: SshHostConfig }) {
@@ -46,7 +144,10 @@ function HostMetaTags(props: { host: SshHostConfig }) {
   } else if (host.authType === "privateKey" && host.privateKeyConfigured) {
     tags.push(t("settings.sshPrivateKeyConfigured"));
   }
-  if (host.proxy.url.trim().length > 0 || host.proxy.port > 0 || host.proxy.passwordConfigured) {
+  if (host.privateKeyPassphraseConfigured) {
+    tags.push(t("settings.sshPrivateKeyPassphraseConfigured"));
+  }
+  if (hostHasProxy(host)) {
     tags.push(t("settings.sshAdvancedProxy"));
   }
   if (tags.length === 0) return null;
@@ -66,21 +167,127 @@ function HostMetaTags(props: { host: SshHostConfig }) {
 }
 
 export function SshTunnelPanel(props: SshTunnelPanelProps) {
-  const { projectPathKey, hosts, associatedHostIds, onAssociatedHostIdsChange } = props;
+  const {
+    cwd,
+    projectPathKey,
+    hosts,
+    associatedHostIds,
+    client,
+    sessions,
+    onSessionSnapshot,
+    onSessionClosed,
+    onOpenSession,
+    onAssociatedHostIdsChange,
+  } = props;
   const { t } = useLocale();
+  const { confirm: requestCloseSessionConfirm, dialog: closeSessionConfirmDialog } =
+    useConfirmDialog();
   const [scope, setScope] = useState<SshTunnelScope>("project");
   const [view, setView] = useState<SshTunnelView>("list");
   const [createHostId, setCreateHostId] = useState("");
-  const [createSftpEnabled, setCreateSftpEnabled] = useState(false);
-  const [createNote, setCreateNote] = useState("");
+  const [createTitle, setCreateTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [closingSessionId, setClosingSessionId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState<TerminalSshPrompt | null>(null);
+  const [promptAnswer, setPromptAnswer] = useState("");
+  const [answeringPrompt, setAnsweringPrompt] = useState(false);
+  const [latencyBySessionId, setLatencyBySessionId] = useState<Record<string, SshLatencyState>>(
+    {},
+  );
+  const latencyRequestsRef = useRef<Set<string>>(new Set());
   const associatedSet = useMemo(() => new Set(associatedHostIds), [associatedHostIds]);
   const associatedHosts = useMemo(
     () => hosts.filter((host) => associatedSet.has(host.id)),
     [associatedSet, hosts],
   );
-  const selectedCreateHostId = associatedSet.has(createHostId)
+  const sshSessions = useMemo(
+    () => sessions.filter((session) => session.kind === "ssh" && session.ssh),
+    [sessions],
+  );
+  const projectSshSessions = useMemo(
+    () => sshSessions.filter((session) => sessionBelongsToProject(session, projectPathKey)),
+    [projectPathKey, sshSessions],
+  );
+  const visibleSessions = scope === "project" ? projectSshSessions : sshSessions;
+  const canCreateInScope = scope === "project";
+  const createHosts = canCreateInScope ? associatedHosts : [];
+  const selectedCreateHostId = createHosts.some((host) => host.id === createHostId)
     ? createHostId
-    : (associatedHosts[0]?.id ?? "");
+    : (createHosts[0]?.id ?? "");
+  const selectedCreateHost = createHosts.find((host) => host.id === selectedCreateHostId) ?? null;
+  const selectedHostMessage = selectedCreateHost ? hostStatusMessage(selectedCreateHost, t) : "";
+  const canCreate = Boolean(
+    canCreateInScope && selectedCreateHost && !selectedHostMessage && !creating,
+  );
+
+  useEffect(() => {
+    if (canCreateInScope || view !== "create") return;
+    setView("list");
+  }, [canCreateInScope, view]);
+
+  const refreshSessionLatency = useCallback(
+    (session: TerminalSession) => {
+      if (!sshSessionConnected(session) || session.kind !== "ssh") return;
+      if (latencyRequestsRef.current.has(session.id)) return;
+      latencyRequestsRef.current.add(session.id);
+      setLatencyBySessionId((current) => ({
+        ...current,
+        [session.id]: {
+          latencyMs: current[session.id]?.latencyMs,
+          loading: true,
+          failed: false,
+        },
+      }));
+      void client
+        .sshLatency(session.id, session.projectPathKey)
+        .then((latency) => {
+          setLatencyBySessionId((current) => ({
+            ...current,
+            [session.id]: {
+              latencyMs: latency.latencyMs,
+              loading: false,
+              failed: false,
+            },
+          }));
+        })
+        .catch(() => {
+          setLatencyBySessionId((current) => ({
+            ...current,
+            [session.id]: {
+              loading: false,
+              failed: true,
+            },
+          }));
+        })
+        .finally(() => {
+          latencyRequestsRef.current.delete(session.id);
+        });
+    },
+    [client],
+  );
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleSessions.map((session) => session.id));
+    setLatencyBySessionId((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([sessionId]) => visibleIds.has(sessionId)),
+      );
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [visibleSessions]);
+
+  useEffect(() => {
+    const connectedSshSessions = visibleSessions.filter(
+      (session) => sshSessionConnected(session) && session.kind === "ssh",
+    );
+    if (connectedSshSessions.length === 0) return;
+    connectedSshSessions.forEach(refreshSessionLatency);
+    const timer = window.setInterval(() => {
+      connectedSshSessions.forEach(refreshSessionLatency);
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [refreshSessionLatency, visibleSessions]);
 
   const toggleHost = (hostId: string) => {
     const current = associatedHostIds.filter((id) => hosts.some((host) => host.id === id));
@@ -90,11 +297,109 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
     onAssociatedHostIdsChange(next);
   };
 
+  const handleCreate = useCallback(() => {
+    if (!selectedCreateHost || !canCreate) return;
+    setCreating(true);
+    setError(null);
+    void client
+      .createSsh({
+        cwd,
+        projectPathKey,
+        hostId: selectedCreateHost.id,
+        title: createTitle.trim() || undefined,
+      })
+      .then((result) => {
+        if (result.prompt) {
+          setPrompt(result.prompt);
+          setPromptAnswer("");
+          setView("list");
+          return;
+        }
+        if (result.snapshot) {
+          onSessionSnapshot(result.snapshot);
+          setCreateTitle("");
+          setView("list");
+        }
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setCreating(false));
+  }, [
+    canCreate,
+    client,
+    createTitle,
+    cwd,
+    onSessionSnapshot,
+    projectPathKey,
+    selectedCreateHost,
+  ]);
+
+  const handleSubmitPrompt = useCallback(() => {
+    if (!prompt || answeringPrompt) return;
+    const hostKeyPrompt = prompt.kind === "hostKey";
+    if (!hostKeyPrompt && !promptAnswer.trim()) return;
+    setAnsweringPrompt(true);
+    setError(null);
+    void client
+      .answerSshPrompt({
+        promptId: prompt.id,
+        answer: hostKeyPrompt ? undefined : promptAnswer,
+        trustHostKey: hostKeyPrompt,
+      })
+      .then((result) => {
+        if (result.prompt) {
+          setPrompt(result.prompt);
+          setPromptAnswer("");
+          return;
+        }
+        setPrompt(null);
+        setPromptAnswer("");
+        if (result.snapshot) {
+          onSessionSnapshot(result.snapshot);
+          setView("list");
+        }
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setAnsweringPrompt(false));
+  }, [answeringPrompt, client, onSessionSnapshot, prompt, promptAnswer]);
+
+  const handleCancelPrompt = useCallback(() => {
+    const promptId = prompt?.id;
+    setPrompt(null);
+    setPromptAnswer("");
+    if (!promptId) return;
+    void client.cancelSshPrompt(promptId).catch(() => undefined);
+  }, [client, prompt]);
+
+  const handleCloseSession = useCallback(
+    async (session: TerminalSession) => {
+      if (closingSessionId === session.id) return;
+      const title = sessionTitle(session, t("projectTools.sshTunnelTitle"));
+      const confirmed = await requestCloseSessionConfirm({
+        title: t("projectTools.confirmCloseSshSession"),
+        subtitle: t("projectTools.closeSshSessionConfirm").replace("{title}", title),
+        detail: sessionEndpointLabel(session),
+        confirmLabel: t("projectTools.closeSshSessionContinue"),
+        cancelLabel: t("projectTools.closeSshSessionCancel"),
+        closeLabel: t("projectTools.closeSshSessionClose"),
+        tone: "destructive",
+      });
+      if (!confirmed) return;
+      setClosingSessionId(session.id);
+      setError(null);
+      void client
+        .close(session.id, session.projectPathKey)
+        .then(() => onSessionClosed(session.id))
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+        .finally(() => setClosingSessionId((current) => (current === session.id ? "" : current)));
+    },
+    [client, closingSessionId, onSessionClosed, requestCloseSessionConfirm, t],
+  );
+
   const listActive = view === "list";
   const settingsActive = view === "settings";
   const createActive = view === "create";
   const listPageClassName = cn(
-    "absolute inset-0 flex min-h-0 flex-col bg-gradient-to-b from-muted/40 via-muted/15 to-background transition-[opacity,transform] duration-200 ease-out motion-reduce:transform-none motion-reduce:transition-none",
+    "absolute inset-0 flex min-h-0 flex-col bg-background transition-[opacity,transform] duration-200 ease-out motion-reduce:transform-none motion-reduce:transition-none",
     listActive
       ? "z-10 translate-x-0 opacity-100"
       : "pointer-events-none z-0 -translate-x-4 opacity-0",
@@ -117,10 +422,36 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
       : t("projectTools.sshTunnelAllEmpty");
   const emptyHint =
     scope === "project"
-      ? associatedHosts.length > 0
-        ? t("projectTools.sshTunnelProjectEmptyWithHosts")
-        : t("projectTools.sshTunnelProjectEmptyHint")
+      ? t("projectTools.sshTunnelProjectEmptyHint")
       : t("projectTools.sshTunnelAllEmptyHint");
+  const hasCreateHosts = createHosts.length > 0;
+  const visibleSessionCount = visibleSessions.length;
+  const connectedSessionCount = visibleSessions.filter(sshSessionConnected).length;
+  const statusText =
+    visibleSessionCount > 0
+      ? t("projectTools.sshTunnelConnectionCount")
+          .replace("{count}", String(visibleSessionCount))
+          .replace("{connected}", String(connectedSessionCount))
+      : scope === "all"
+        ? t("projectTools.sshTunnelAllEmpty")
+        : projectPathKey
+          ? t("projectTools.sshTunnelProjectEmpty")
+          : t("projectTools.sshTunnelNoProject");
+  const hostKeyPrompt = prompt?.kind === "hostKey";
+  const promptSubmitDisabled =
+    answeringPrompt || Boolean(prompt && !hostKeyPrompt && !promptAnswer.trim());
+  const latencyText = (session: TerminalSession) => {
+    const state = latencyBySessionId[session.id];
+    if (state?.failed) return t("projectTools.sshTunnelLatencyUnknown");
+    if (state?.latencyMs) {
+      return t("projectTools.sshTunnelLatencyValue").replace(
+        "{ms}",
+        String(state.latencyMs),
+      );
+    }
+    if (state?.loading) return t("projectTools.sshTunnelLatencyChecking");
+    return t("projectTools.sshTunnelLatencyUnknown");
+  };
 
   return (
     <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
@@ -174,7 +505,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                     key={host.id}
                     type="button"
                     className={cn(
-                      "group flex w-full items-start gap-3 rounded-xl border border-border/60 bg-card px-3 py-3 text-left transition-all hover:border-emerald-500/40 hover:bg-muted/40",
+                      "group flex w-full items-start gap-3 rounded-lg border border-border/60 bg-card px-3 py-3 text-left transition-all hover:border-emerald-500/40 hover:bg-muted/40",
                       selected && "border-emerald-500/50 bg-emerald-500/5",
                     )}
                     aria-pressed={selected}
@@ -195,7 +526,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                       <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
                         {endpointLabel(host)}
                       </div>
-                      {hostHasMeta(host) ? <HostMetaTags host={host} /> : null}
+                      <HostMetaTags host={host} />
                     </div>
                     <span
                       className={cn(
@@ -238,7 +569,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
           </div>
         </div>
 
-        {hosts.length === 0 || associatedHosts.length === 0 ? (
+        {createHosts.length === 0 ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
               <Key className="h-6 w-6" />
@@ -259,7 +590,10 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
         ) : (
           <form
             className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
-            onSubmit={(event) => event.preventDefault()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleCreate();
+            }}
           >
             <div className="space-y-3">
               <label className="block space-y-1.5">
@@ -274,11 +608,11 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                     <Server className="h-4 w-4" />
                   </span>
                   <select
-                    className="h-10 w-full appearance-none rounded-xl border border-border/70 bg-card/80 pl-10 pr-9 text-sm font-medium text-foreground shadow-[0_1px_2px_hsl(0_0%_0%_/_0.04)] outline-none transition-colors hover:border-emerald-500/40 focus-visible:border-emerald-500/50 focus-visible:ring-1 focus-visible:ring-emerald-500/20"
+                    className="h-10 w-full appearance-none rounded-lg border border-border/70 bg-card/80 pl-10 pr-9 text-sm font-medium text-foreground shadow-[0_1px_2px_hsl(0_0%_0%_/_0.04)] outline-none transition-colors hover:border-emerald-500/40 focus-visible:border-emerald-500/50 focus-visible:ring-1 focus-visible:ring-emerald-500/20"
                     value={selectedCreateHostId}
                     onChange={(event) => setCreateHostId(event.currentTarget.value)}
                   >
-                    {associatedHosts.map((host) => (
+                    {createHosts.map((host) => (
                       <option key={host.id} value={host.id}>
                         {host.name} - {endpointLabel(host)}
                       </option>
@@ -291,29 +625,48 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                 </div>
               </label>
 
-              <label className="flex min-h-10 items-center gap-3 rounded-xl border border-border/70 bg-card/80 px-3 py-2.5 shadow-[0_1px_2px_hsl(0_0%_0%_/_0.04)] transition-colors hover:border-emerald-500/40">
-                <input
-                  type="checkbox"
-                  checked={createSftpEnabled}
-                  onChange={(event) => setCreateSftpEnabled(event.currentTarget.checked)}
-                  className="h-4 w-4 shrink-0 rounded border-border text-emerald-500 accent-emerald-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/40"
-                />
-                <span className="min-w-0 flex-1 text-xs font-medium text-foreground">
-                  {t("projectTools.sshTunnelSftpEnabled")}
-                </span>
-              </label>
-
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-foreground">
-                  {t("projectTools.sshTunnelNote")}
+                  {t("projectTools.sshTunnelTabTitle")}
                 </span>
-                <Textarea
-                  value={createNote}
-                  onChange={(event) => setCreateNote(event.currentTarget.value)}
-                  className="min-h-20 rounded-lg border-border/70 bg-background/80 text-xs focus-visible:border-emerald-500/50 focus-visible:ring-1 focus-visible:ring-emerald-500/20"
-                  placeholder={t("projectTools.sshTunnelNotePlaceholder")}
+                <input
+                  value={createTitle}
+                  onChange={(event) => setCreateTitle(event.currentTarget.value)}
+                  className="h-10 w-full rounded-lg border border-border/70 bg-background/80 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus-visible:border-emerald-500/50 focus-visible:ring-1 focus-visible:ring-emerald-500/20"
+                  placeholder={selectedCreateHost?.name || t("projectTools.sshTunnelTabTitlePlaceholder")}
                 />
               </label>
+
+              {selectedCreateHost ? (
+                <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Server className="h-4 w-4 shrink-0 text-emerald-500" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-foreground">
+                        {selectedCreateHost.name}
+                      </div>
+                      <div className="truncate font-mono text-[11px] text-muted-foreground">
+                        {endpointLabel(selectedCreateHost)}
+                      </div>
+                    </div>
+                    <span className="shrink-0 rounded-md bg-background/70 px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
+                      {authLabel(selectedCreateHost, t)}
+                    </span>
+                  </div>
+                  {selectedHostMessage ? (
+                    <div className="mt-2 flex gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-[11px] leading-relaxed text-destructive">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>{selectedHostMessage}</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {error ? (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {error}
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2 border-t border-border/60 pt-3">
@@ -326,14 +679,11 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
               >
                 {t("projectTools.sshTunnelCreateCancel")}
               </Button>
-              <Button
-                type="submit"
-                size="sm"
-                className="h-8 rounded-lg px-3 text-xs"
-                disabled
-                title={t("projectTools.sshTunnelCreateUnavailable")}
-              >
-                {t("projectTools.sshTunnelCreate")}
+              <Button type="submit" size="sm" className="h-8 rounded-lg px-3 text-xs" disabled={!canCreate}>
+                {creating ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                {creating
+                  ? t("projectTools.sshTunnelConnecting")
+                  : t("projectTools.sshTunnelConnect")}
               </Button>
             </div>
           </form>
@@ -341,9 +691,9 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
       </div>
 
       <div className={listPageClassName} aria-hidden={!listActive} inert={!listActive}>
-        <div className="shrink-0 border-b border-border/60 bg-background/70 px-4 pb-3 pt-3.5 backdrop-blur-xl">
+        <div className="shrink-0 border-b border-border/60 bg-background/80 px-4 pb-3 pt-3.5 backdrop-blur-xl">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border/60 bg-background/80 text-foreground/70 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.6),0_1px_2px_hsl(0_0%_0%_/_0.05)] dark:shadow-none">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-background/80 text-foreground/70 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.6),0_1px_2px_hsl(0_0%_0%_/_0.05)] dark:shadow-none">
               <Key className="h-4 w-4" />
             </div>
             <div className="min-w-0 flex-1">
@@ -351,23 +701,20 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                 {t("projectTools.sshTunnelTitle")}
               </div>
               <div className="truncate text-xs text-muted-foreground">
-                {projectPathKey
-                  ? t("projectTools.sshTunnelConfiguredHosts").replace(
-                      "{count}",
-                      String(associatedHosts.length),
-                    )
-                  : t("projectTools.sshTunnelNoProject")}
+                {statusText}
               </div>
             </div>
-            <button
-              type="button"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:border-border/60 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              title={t("projectTools.newSshTunnel")}
-              aria-label={t("projectTools.newSshTunnel")}
-              onClick={() => setView("create")}
-            >
-              <Plus className="h-4 w-4" />
-            </button>
+            {canCreateInScope ? (
+              <button
+                type="button"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:border-border/60 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                title={t("projectTools.newSshTunnel")}
+                aria-label={t("projectTools.newSshTunnel")}
+                onClick={() => setView("create")}
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            ) : null}
             {scope === "project" ? (
               <button
                 type="button"
@@ -422,39 +769,251 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-          <div className="flex flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-10 text-center">
-            <div className="mb-1.5 flex h-12 w-12 items-center justify-center rounded-2xl border border-border/50 bg-background/80 text-muted-foreground/70 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.6),0_1px_3px_hsl(0_0%_0%_/_0.05)] dark:shadow-none">
-              <Key className="h-5 w-5" />
+          {error ? (
+            <div className="mb-3 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
             </div>
-            <div className="text-xs font-medium text-foreground/80">{emptyTitle}</div>
-            <div className="max-w-[16rem] text-[11px] leading-relaxed text-muted-foreground">
-              {emptyHint}
+          ) : null}
+
+          {visibleSessionCount === 0 ? (
+            <div className="flex min-h-full items-center justify-center">
+              <div className="flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border/70 bg-background/40 px-4 py-8 text-center">
+                <div className="mb-1.5 flex h-12 w-12 items-center justify-center rounded-xl border border-border/50 bg-background/80 text-muted-foreground/70 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.6),0_1px_3px_hsl(0_0%_0%_/_0.05)] dark:shadow-none">
+                  <Key className="h-5 w-5" />
+                </div>
+                <div className="text-xs font-medium text-foreground/80">{emptyTitle}</div>
+                <div className="max-w-[16rem] text-[11px] leading-relaxed text-muted-foreground">
+                  {emptyHint}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+                  {canCreateInScope ? (
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      className="h-7 rounded-lg px-2.5 text-xs"
+                      onClick={() => setView("create")}
+                      disabled={!hasCreateHosts}
+                    >
+                      {t("projectTools.newSshTunnel")}
+                    </Button>
+                  ) : null}
+                  {scope === "project" && associatedHosts.length === 0 ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 rounded-lg bg-background/70 px-2.5 text-xs"
+                      onClick={() => setView("settings")}
+                    >
+                      {t("projectTools.sshTunnelAssociateHosts")}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
             </div>
-            <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
-              <Button
-                type="button"
-                variant="default"
-                size="sm"
-                className="h-7 rounded-lg px-2.5 text-xs"
-                onClick={() => setView("create")}
-              >
-                {t("projectTools.newSshTunnel")}
-              </Button>
-              {scope === "project" && associatedHosts.length === 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 rounded-lg bg-background/70 px-2.5 text-xs"
-                  onClick={() => setView("settings")}
-                >
-                  {t("projectTools.sshTunnelAssociateHosts")}
-                </Button>
-              ) : null}
+          ) : (
+            <div className="space-y-2">
+              {visibleSessions.map((session) => {
+                const title = sessionTitle(session, t("projectTools.sshTunnelTitle"));
+                const endpoint = sessionEndpointLabel(session);
+                const projectLabel = sessionProjectLabel(session);
+                const closing = closingSessionId === session.id;
+                const sshStatus = sshSessionStatus(session);
+                const connected = sshSessionConnected(session);
+                return (
+                  <article
+                    key={session.id}
+                    className="rounded-lg border border-border/60 bg-card px-3 py-3 shadow-[0_1px_2px_hsl(0_0%_0%_/_0.04)]"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={cn(
+                          "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                          sshStatus === "disconnected"
+                            ? "bg-destructive/10 text-destructive"
+                            : sshStatus === "reconnecting"
+                              ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                              : "bg-emerald-500/10 text-emerald-500",
+                        )}
+                      >
+                        <Server className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-sm font-medium text-foreground">
+                            {title}
+                          </span>
+                          <span
+                            className={cn(
+                              "inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-medium",
+                              sshStatus === "disconnected"
+                                ? "bg-destructive/10 text-destructive"
+                                : sshStatus === "reconnecting"
+                                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                  : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+                            )}
+                          >
+                            {sshStatus === "disconnected" ? (
+                              <WifiOff className="h-3 w-3" />
+                            ) : sshStatus === "reconnecting" ? (
+                              <RefreshCw className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Wifi className="h-3 w-3" />
+                            )}
+                            {sshStatusLabel(session, t)}
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                          {endpoint}
+                        </div>
+                        {scope === "all" && projectLabel ? (
+                          <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                            {projectLabel}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex items-end justify-between gap-3">
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
+                          {latencyBySessionId[session.id]?.loading &&
+                          !latencyBySessionId[session.id]?.latencyMs ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Clock3 className="h-3 w-3" />
+                          )}
+                          {latencyText(session)}
+                        </span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-background/70 text-muted-foreground transition-colors hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:text-emerald-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 dark:hover:text-emerald-400"
+                          title={t("projectTools.sshTunnelOpenBash")}
+                          aria-label={t("projectTools.sshTunnelOpenBash")}
+                          disabled={!connected}
+                          onClick={() => onOpenSession(session)}
+                        >
+                          <Terminal className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-background/70 text-muted-foreground transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                          title={t("projectTools.sshTunnelCloseSession")}
+                          aria-label={t("projectTools.sshTunnelCloseSession")}
+                          disabled={closing}
+                          onClick={() => handleCloseSession(session)}
+                        >
+                          {closing ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <X className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
-          </div>
+          )}
         </div>
       </div>
+
+      {prompt ? (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <form
+            className="w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-xl"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleSubmitPrompt();
+            }}
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                <Shield className="h-4.5 w-4.5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-foreground">
+                  {hostKeyPrompt
+                    ? t("projectTools.sshTunnelPromptTitle")
+                    : t("projectTools.sshTunnelAuthPromptTitle")}
+                </div>
+                <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {prompt.message}
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 space-y-2 rounded-lg bg-muted/40 px-3 py-2 text-xs">
+              <div className="flex gap-2">
+                <span className="shrink-0 text-muted-foreground">
+                  {t("projectTools.sshTunnelHost")}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                  {prompt.host}:{prompt.port}
+                </span>
+              </div>
+              {prompt.keyType ? (
+                <div className="flex gap-2">
+                  <span className="shrink-0 text-muted-foreground">
+                    {t("projectTools.sshTunnelKeyType")}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                    {prompt.keyType}
+                  </span>
+                </div>
+              ) : null}
+              {prompt.fingerprintSha256 ? (
+                <div className="flex gap-2">
+                  <span className="shrink-0 text-muted-foreground">
+                    {t("projectTools.sshTunnelFingerprint")}
+                  </span>
+                  <span className="min-w-0 flex-1 break-all font-mono text-foreground">
+                    {prompt.fingerprintSha256}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+            {!hostKeyPrompt ? (
+              <input
+                value={promptAnswer}
+                onChange={(event) => setPromptAnswer(event.currentTarget.value)}
+                className="mt-3 h-10 w-full rounded-lg border border-border/70 bg-background/80 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus-visible:border-emerald-500/50 focus-visible:ring-1 focus-visible:ring-emerald-500/20"
+                type={prompt.answerEcho ? "text" : "password"}
+                autoFocus
+              />
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 rounded-lg px-3 text-xs"
+                onClick={handleCancelPrompt}
+                disabled={answeringPrompt}
+              >
+                {hostKeyPrompt
+                  ? t("projectTools.sshTunnelRejectHost")
+                  : t("projectTools.sshTunnelPromptCancel")}
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                className="h-8 rounded-lg px-3 text-xs"
+                disabled={promptSubmitDisabled}
+              >
+                {answeringPrompt ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                {hostKeyPrompt
+                  ? t("projectTools.sshTunnelTrustHost")
+                  : t("projectTools.sshTunnelPromptSubmit")}
+              </Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+      {closeSessionConfirmDialog}
     </div>
   );
 }

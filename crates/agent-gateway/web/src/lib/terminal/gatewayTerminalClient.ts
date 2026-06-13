@@ -12,6 +12,18 @@ export function createGatewayTerminalClient(api: GatewayWebSocketClientLike): Te
     create(params) {
       return api.createTerminal(params);
     },
+    createSsh(params) {
+      return api.createSshTerminal(params);
+    },
+    answerSshPrompt(params) {
+      return api.answerSshTerminalPrompt(params);
+    },
+    async cancelSshPrompt(promptId) {
+      await api.cancelSshTerminalPrompt(promptId);
+    },
+    sshLatency(sessionId, projectPathKey) {
+      return api.sshTerminalLatency(sessionId, projectPathKey);
+    },
     snapshot(sessionId, maxBytes, projectPathKey) {
       return api.snapshotTerminal(sessionId, maxBytes, projectPathKey);
     },

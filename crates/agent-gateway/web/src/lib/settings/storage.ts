@@ -81,9 +81,6 @@ function readLocalUiSettings(): {
     const chatSidebar = (
       obj.chatSidebar && typeof obj.chatSidebar === "object" ? obj.chatSidebar : {}
     ) as Record<string, unknown>;
-    const legacyTerminalPanel = (
-      obj.terminalPanel && typeof obj.terminalPanel === "object" ? obj.terminalPanel : {}
-    ) as Record<string, unknown>;
     const projectToolsPanel = (
       obj.projectToolsPanel && typeof obj.projectToolsPanel === "object"
         ? obj.projectToolsPanel
@@ -92,10 +89,7 @@ function readLocalUiSettings(): {
     const projectToolsPanelWidth =
       typeof projectToolsPanel.width === "number" || typeof projectToolsPanel.width === "string"
         ? Number(projectToolsPanel.width)
-        : typeof legacyTerminalPanel.width === "number" ||
-            typeof legacyTerminalPanel.width === "string"
-          ? Number(legacyTerminalPanel.width)
-          : 420;
+        : 420;
     const projectToolsPanelActiveTab = normalizeProjectToolsPanelActiveTab(
       projectToolsPanel.activeTab,
     );

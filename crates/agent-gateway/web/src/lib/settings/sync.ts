@@ -15,6 +15,7 @@ export type GatewaySshSecretUpdates = Record<
   {
     password?: string;
     privateKey?: string;
+    privateKeyPassphrase?: string;
     proxyPassword?: string;
   }
 >;
@@ -34,7 +35,10 @@ export type GatewaySettingsSyncPayload = {
   ssh: AppSettings["ssh"];
   hooks: AppSettings["hooks"];
   cron: AppSettings["cron"];
-  remote?: Pick<AppSettings["remote"], "enableWebTerminal" | "enableWebGit" | "enableWebTunnels">;
+  remote?: Pick<
+    AppSettings["remote"],
+    "enableWebTerminal" | "enableWebSshTerminal" | "enableWebGit" | "enableWebTunnels"
+  >;
   memory: AppSettings["memory"];
   customSettings: GatewaySettingsSyncCustomSettings;
   skills: AppSettings["skills"];
@@ -98,6 +102,10 @@ function redactSshSettingsForWebStorage(ssh: AppSettings["ssh"]): AppSettings["s
         host.privateKey.trim().length > 0 ||
         host.privateKeyPath.trim().length > 0 ||
         host.privateKeyConfigured === true,
+      privateKeyPassphrase: "",
+      privateKeyPassphraseConfigured:
+        host.privateKeyPassphrase.trim().length > 0 ||
+        host.privateKeyPassphraseConfigured === true,
       proxy: {
         ...host.proxy,
         password: "",
@@ -128,10 +136,12 @@ function collectSshSecretUpdates(ssh: AppSettings["ssh"]): GatewaySshSecretUpdat
     if (!id) continue;
     const password = host.password.trim();
     const privateKey = host.privateKey.trim();
+    const privateKeyPassphrase = host.privateKeyPassphrase.trim();
     const proxyPassword = host.proxy.password.trim();
     const update: GatewaySshSecretUpdates[string] = {};
     if (password) update.password = password;
     if (privateKey) update.privateKey = privateKey;
+    if (privateKeyPassphrase) update.privateKeyPassphrase = privateKeyPassphrase;
     if (proxyPassword) update.proxyPassword = proxyPassword;
     if (Object.keys(update).length > 0) {
       updates[id] = update;
@@ -282,11 +292,16 @@ function normalizeSshSecretUpdates(value: unknown): GatewaySshSecretUpdates {
     const password = typeof updateSource.password === "string" ? updateSource.password.trim() : "";
     const privateKey =
       typeof updateSource.privateKey === "string" ? updateSource.privateKey.trim() : "";
+    const privateKeyPassphrase =
+      typeof updateSource.privateKeyPassphrase === "string"
+        ? updateSource.privateKeyPassphrase.trim()
+        : "";
     const proxyPassword =
       typeof updateSource.proxyPassword === "string" ? updateSource.proxyPassword.trim() : "";
     const update: GatewaySshSecretUpdates[string] = {};
     if (password) update.password = password;
     if (privateKey) update.privateKey = privateKey;
+    if (privateKeyPassphrase) update.privateKeyPassphrase = privateKeyPassphrase;
     if (proxyPassword) update.proxyPassword = proxyPassword;
     if (Object.keys(update).length > 0) {
       updates[normalizedId] = update;
@@ -335,6 +350,7 @@ function mergeSyncedRemoteSettings(
   const source = asObject(incoming);
   if (
     !Object.prototype.hasOwnProperty.call(source, "enableWebTerminal") &&
+    !Object.prototype.hasOwnProperty.call(source, "enableWebSshTerminal") &&
     !Object.prototype.hasOwnProperty.call(source, "enableWebGit") &&
     !Object.prototype.hasOwnProperty.call(source, "enableWebTunnels")
   ) {
@@ -345,6 +361,9 @@ function mergeSyncedRemoteSettings(
     enableWebTerminal: Object.prototype.hasOwnProperty.call(source, "enableWebTerminal")
       ? source.enableWebTerminal === true
       : current.enableWebTerminal,
+    enableWebSshTerminal: Object.prototype.hasOwnProperty.call(source, "enableWebSshTerminal")
+      ? source.enableWebSshTerminal === true
+      : current.enableWebSshTerminal,
     enableWebGit: Object.prototype.hasOwnProperty.call(source, "enableWebGit")
       ? source.enableWebGit === true
       : current.enableWebGit,
@@ -383,6 +402,10 @@ function mergeSyncedSshSettings(
       const password = (update?.password ?? host.password.trim()) || currentHost?.password || "";
       const privateKey =
         (update?.privateKey ?? host.privateKey.trim()) || currentHost?.privateKey || "";
+      const privateKeyPassphrase =
+        (update?.privateKeyPassphrase ?? host.privateKeyPassphrase.trim()) ||
+        currentHost?.privateKeyPassphrase ||
+        "";
       const proxyPassword =
         (update?.proxyPassword ?? host.proxy.password.trim()) || currentHost?.proxy.password || "";
       return {
@@ -398,6 +421,11 @@ function mergeSyncedSshSettings(
           host.privateKeyPath.trim().length > 0 ||
           host.privateKeyConfigured === true ||
           currentHost?.privateKeyConfigured === true,
+        privateKeyPassphrase,
+        privateKeyPassphraseConfigured:
+          privateKeyPassphrase.length > 0 ||
+          host.privateKeyPassphraseConfigured === true ||
+          currentHost?.privateKeyPassphraseConfigured === true,
         proxy: {
           ...host.proxy,
           password: proxyPassword,
@@ -512,6 +540,7 @@ export function buildGatewaySettingsSyncPayload(
     cron: settings.cron,
     remote: {
       enableWebTerminal: settings.remote.enableWebTerminal,
+      enableWebSshTerminal: settings.remote.enableWebSshTerminal,
       enableWebGit: settings.remote.enableWebGit,
       enableWebTunnels: settings.remote.enableWebTunnels,
     },

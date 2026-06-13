@@ -240,6 +240,8 @@ export async function scanSshImportCandidates(
       privateKey,
       privateKeyPath: identityPath,
       privateKeyConfigured: privateKey.length > 0 || identityPath.length > 0,
+      privateKeyPassphrase: "",
+      privateKeyPassphraseConfigured: false,
       proxy: {
         type: "socks5",
         url: "",

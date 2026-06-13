@@ -7,6 +7,10 @@ import type {
   TerminalSession,
   TerminalShellOptions,
   TerminalSnapshot,
+  TerminalSshCreateResult,
+  TerminalSshLatency,
+  TerminalSshMetadata,
+  TerminalSshPrompt,
 } from "@/lib/terminal/types";
 
 import type {
@@ -74,6 +78,10 @@ type SkillListResponse = {
   rootDir: string;
   paths: string[];
   truncated: boolean;
+};
+
+export type SshKnownHostResetResult = {
+  deleted: number;
 };
 
 type MentionListResponse = {
@@ -248,6 +256,24 @@ type RawTerminalSession = {
   exitCode?: number | null;
   exit_code?: number | null;
   running?: boolean;
+  kind?: string;
+  ssh?: RawTerminalSshMetadata | null;
+};
+
+type RawTerminalSshMetadata = Partial<TerminalSshMetadata> & {
+  host_id?: string;
+  host_name?: string;
+  auth_type?: string;
+  reconnect_attempt?: number;
+  reconnect_max_attempts?: number;
+};
+
+type RawTerminalSshPrompt = Partial<TerminalSshPrompt> & {
+  host_id?: string;
+  host_name?: string;
+  fingerprint_sha256?: string;
+  key_type?: string;
+  answer_echo?: boolean;
 };
 
 type RawTerminalResponse = {
@@ -265,6 +291,10 @@ type RawTerminalResponse = {
   shell_options?: Array<{ id?: string; label?: string; command?: string }>;
   defaultShell?: string;
   default_shell?: string;
+  sshPrompt?: RawTerminalSshPrompt | null;
+  ssh_prompt?: RawTerminalSshPrompt | null;
+  latencyMs?: number;
+  latency_ms?: number;
 };
 
 type RawTerminalEvent = {
@@ -479,13 +509,16 @@ function normalizePositiveInteger(value: number, fallback: number) {
 }
 
 function normalizeTerminalSession(input: RawTerminalSession): TerminalSession {
+  const kind = input.kind === "ssh" ? "ssh" : "local";
   return {
     id: input.id ?? "",
     projectPathKey: input.projectPathKey ?? input.project_path_key ?? "",
     cwd: input.cwd ?? "",
     shell: input.shell ?? "",
     title: input.title ?? "Terminal",
-    pid: input.pid ?? null,
+    kind,
+    ssh: input.ssh ? normalizeTerminalSshMetadata(input.ssh) : null,
+    pid: kind === "ssh" ? null : (input.pid ?? null),
     cols: Number(input.cols ?? 80),
     rows: Number(input.rows ?? 24),
     createdAt: Number(input.createdAt ?? input.created_at ?? 0),
@@ -493,6 +526,40 @@ function normalizeTerminalSession(input: RawTerminalSession): TerminalSession {
     finishedAt: input.finishedAt ?? input.finished_at ?? null,
     exitCode: input.exitCode ?? input.exit_code ?? null,
     running: input.running === true,
+  };
+}
+
+function normalizeTerminalSshMetadata(input: RawTerminalSshMetadata): TerminalSshMetadata {
+  return {
+    hostId: input.hostId ?? input.host_id ?? "",
+    hostName: input.hostName ?? input.host_name ?? "",
+    username: input.username ?? "",
+    host: input.host ?? "",
+    port: Number(input.port ?? 22),
+    authType: input.authType ?? input.auth_type ?? "",
+    status: input.status ?? "connected",
+    reconnectAttempt: Number(input.reconnectAttempt ?? input.reconnect_attempt ?? 0),
+    reconnectMaxAttempts: Number(input.reconnectMaxAttempts ?? input.reconnect_max_attempts ?? 3),
+  };
+}
+
+function normalizeTerminalSshPrompt(
+  input: RawTerminalSshPrompt | null | undefined,
+): TerminalSshPrompt | undefined {
+  if (!input) return undefined;
+  const id = input.id?.trim() ?? "";
+  if (!id) return undefined;
+  return {
+    id,
+    kind: input.kind ?? "hostKey",
+    hostId: input.hostId ?? input.host_id ?? "",
+    hostName: input.hostName ?? input.host_name ?? "",
+    host: input.host ?? "",
+    port: Number(input.port ?? 22),
+    message: input.message ?? "",
+    fingerprintSha256: input.fingerprintSha256 ?? input.fingerprint_sha256 ?? undefined,
+    keyType: input.keyType ?? input.key_type ?? undefined,
+    answerEcho: input.answerEcho ?? input.answer_echo ?? false,
   };
 }
 
@@ -510,6 +577,24 @@ function normalizeTerminalSnapshot(input: RawTerminalResponse): TerminalSnapshot
     truncated: input.truncated === true,
     outputStartOffset,
     outputEndOffset,
+  };
+}
+
+function normalizeTerminalSshCreateResult(input: RawTerminalResponse): TerminalSshCreateResult {
+  return {
+    snapshot: input.session ? normalizeTerminalSnapshot(input) : undefined,
+    prompt: normalizeTerminalSshPrompt(input.sshPrompt ?? input.ssh_prompt),
+  };
+}
+
+function normalizeTerminalSshLatency(input: RawTerminalResponse): TerminalSshLatency {
+  const latencyMs = Number(input.latencyMs ?? input.latency_ms ?? 0);
+  if (!Number.isFinite(latencyMs) || latencyMs <= 0) {
+    throw new Error("SSH latency response did not include latency");
+  }
+  return {
+    sessionId: input.session?.id ?? "",
+    latencyMs: Math.round(latencyMs),
   };
 }
 
@@ -543,6 +628,45 @@ function normalizeTerminalEvent(input: RawTerminalEvent): TerminalEvent | null {
     outputStartOffset,
     outputEndOffset,
   };
+}
+
+function applyTerminalSnapshotEvent(
+  snapshot: Map<string, TerminalSession>,
+  event: TerminalEvent,
+) {
+  if (event.kind === "output") return;
+
+  const sessionId = (event.sessionId || event.session?.id || "").trim();
+  if (event.kind === "closed") {
+    if (sessionId) {
+      snapshot.delete(sessionId);
+    }
+    return;
+  }
+
+  const session = event.session;
+  if (session?.id) {
+    snapshot.set(session.id, session);
+  }
+}
+
+function replayTerminalSnapshot(
+  snapshot: Map<string, TerminalSession>,
+  listener: TerminalListener,
+) {
+  const sessions = [...snapshot.values()].sort((a, b) => {
+    const leftProject = (a.projectPathKey || a.cwd || "").trim();
+    const rightProject = (b.projectPathKey || b.cwd || "").trim();
+    return leftProject.localeCompare(rightProject) || a.createdAt - b.createdAt;
+  });
+  for (const session of sessions) {
+    listener({
+      kind: "created",
+      sessionId: session.id,
+      projectPathKey: session.projectPathKey,
+      session,
+    });
+  }
 }
 
 function normalizeTunnelStatus(input: unknown): TunnelSummary["status"] {
@@ -642,6 +766,7 @@ export class GatewayWebSocketClient {
   private conversationListeners = new Set<ConversationListener>();
   private settingsListeners = new Set<SettingsListener>();
   private terminalListeners = new Set<TerminalListener>();
+  private terminalSessionSnapshot = new Map<string, TerminalSession>();
   private statusPollTimer: number | null = null;
   private lastStatus: AgentStatus | null = null;
   private lastStatusError: string | null = null;
@@ -739,6 +864,7 @@ export class GatewayWebSocketClient {
 
   subscribeTerminal(listener: TerminalListener): () => void {
     this.terminalListeners.add(listener);
+    replayTerminalSnapshot(this.terminalSessionSnapshot, listener);
     return () => {
       this.terminalListeners.delete(listener);
     };
@@ -1001,6 +1127,59 @@ export class GatewayWebSocketClient {
     );
   }
 
+  async createSshTerminal(params: {
+    cwd: string;
+    projectPathKey: string;
+    hostId: string;
+    title?: string;
+    cols?: number;
+    rows?: number;
+  }): Promise<TerminalSshCreateResult> {
+    return normalizeTerminalSshCreateResult(
+      await this.request<RawTerminalResponse>("terminal.create_ssh", {
+        cwd: params.cwd,
+        project_path_key: params.projectPathKey,
+        ssh_host_id: params.hostId,
+        title: params.title,
+        cols: params.cols,
+        rows: params.rows,
+      }),
+    );
+  }
+
+  async answerSshTerminalPrompt(params: {
+    promptId: string;
+    answer?: string;
+    trustHostKey?: boolean;
+  }): Promise<TerminalSshCreateResult> {
+    return normalizeTerminalSshCreateResult(
+      await this.request<RawTerminalResponse>("terminal.answer_ssh_prompt", {
+        prompt_id: params.promptId,
+        prompt_answer: params.answer,
+        trust_host_key: params.trustHostKey,
+      }),
+    );
+  }
+
+  async cancelSshTerminalPrompt(promptId: string): Promise<void> {
+    await this.request("terminal.cancel_ssh_prompt", {
+      prompt_id: promptId,
+    });
+  }
+
+  async sshTerminalLatency(
+    sessionId: string,
+    projectPathKey?: string,
+  ): Promise<TerminalSshLatency> {
+    const latency = normalizeTerminalSshLatency(
+      await this.request<RawTerminalResponse>("terminal.ssh_latency", {
+        session_id: sessionId,
+        project_path_key: projectPathKey,
+      }),
+    );
+    return { ...latency, sessionId };
+  }
+
   async snapshotTerminal(
     sessionId: string,
     maxBytes?: number,
@@ -1231,6 +1410,13 @@ export class GatewayWebSocketClient {
 
   async updateSettings(payload: GatewaySettingsSyncPayload): Promise<void> {
     await this.request("settings.update", payload);
+  }
+
+  async resetSshKnownHost(params: { host: string; port: number }): Promise<SshKnownHostResetResult> {
+    return this.request<SshKnownHostResetResult>("settings.ssh_known_host.reset", {
+      host: params.host,
+      port: params.port,
+    });
   }
 
   async listSkillFiles(): Promise<SkillListResponse> {
@@ -1566,6 +1752,9 @@ export class GatewayWebSocketClient {
   private emitStatus(status: AgentStatus | null, error: string | null) {
     this.lastStatus = status;
     this.lastStatusError = error;
+    if (status?.online === false) {
+      this.terminalSessionSnapshot.clear();
+    }
     for (const listener of this.statusListeners) {
       listener(status, error);
     }
@@ -1590,6 +1779,7 @@ export class GatewayWebSocketClient {
   }
 
   private emitTerminal(event: TerminalEvent) {
+    applyTerminalSnapshotEvent(this.terminalSessionSnapshot, event);
     for (const listener of this.terminalListeners) {
       listener(event);
     }
@@ -2152,6 +2342,21 @@ export type GatewayWebSocketClientLike = {
     cols?: number;
     rows?: number;
   }): Promise<TerminalSnapshot>;
+  createSshTerminal(params: {
+    cwd: string;
+    projectPathKey: string;
+    hostId: string;
+    title?: string;
+    cols?: number;
+    rows?: number;
+  }): Promise<TerminalSshCreateResult>;
+  answerSshTerminalPrompt(params: {
+    promptId: string;
+    answer?: string;
+    trustHostKey?: boolean;
+  }): Promise<TerminalSshCreateResult>;
+  cancelSshTerminalPrompt(promptId: string): Promise<void>;
+  sshTerminalLatency(sessionId: string, projectPathKey?: string): Promise<TerminalSshLatency>;
   snapshotTerminal(
     sessionId: string,
     maxBytes?: number,
@@ -2197,6 +2402,7 @@ export type GatewayWebSocketClientLike = {
   listProviders(): Promise<GatewayProviderSummary[]>;
   getSettings(): Promise<GatewaySettingsSyncPayload>;
   updateSettings(payload: GatewaySettingsSyncPayload): Promise<void>;
+  resetSshKnownHost(params: { host: string; port: number }): Promise<SshKnownHostResetResult>;
   listSkillFiles(): Promise<SkillListResponse>;
   manageSkill<T = unknown>(payload: SkillManagePayload): Promise<T>;
   listMentionFiles(
@@ -2376,6 +2582,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
   private conversationListeners = new Set<ConversationListener>();
   private settingsListeners = new Set<SettingsListener>();
   private terminalListeners = new Set<TerminalListener>();
+  private terminalSessionSnapshot = new Map<string, TerminalSession>();
   private lastStatus: AgentStatus | null = null;
   private lastStatusError: string | null = null;
   private readonly workerWakeup = (event?: Event) => {
@@ -2468,6 +2675,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
 
   subscribeTerminal(listener: TerminalListener): () => void {
     this.terminalListeners.add(listener);
+    replayTerminalSnapshot(this.terminalSessionSnapshot, listener);
     return () => {
       this.terminalListeners.delete(listener);
     };
@@ -2672,6 +2880,59 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
         rows: params.rows,
       }),
     );
+  }
+
+  async createSshTerminal(params: {
+    cwd: string;
+    projectPathKey: string;
+    hostId: string;
+    title?: string;
+    cols?: number;
+    rows?: number;
+  }): Promise<TerminalSshCreateResult> {
+    return normalizeTerminalSshCreateResult(
+      await this.request<RawTerminalResponse>("terminal.create_ssh", {
+        cwd: params.cwd,
+        project_path_key: params.projectPathKey,
+        ssh_host_id: params.hostId,
+        title: params.title,
+        cols: params.cols,
+        rows: params.rows,
+      }),
+    );
+  }
+
+  async answerSshTerminalPrompt(params: {
+    promptId: string;
+    answer?: string;
+    trustHostKey?: boolean;
+  }): Promise<TerminalSshCreateResult> {
+    return normalizeTerminalSshCreateResult(
+      await this.request<RawTerminalResponse>("terminal.answer_ssh_prompt", {
+        prompt_id: params.promptId,
+        prompt_answer: params.answer,
+        trust_host_key: params.trustHostKey,
+      }),
+    );
+  }
+
+  async cancelSshTerminalPrompt(promptId: string): Promise<void> {
+    await this.request("terminal.cancel_ssh_prompt", {
+      prompt_id: promptId,
+    });
+  }
+
+  async sshTerminalLatency(
+    sessionId: string,
+    projectPathKey?: string,
+  ): Promise<TerminalSshLatency> {
+    const latency = normalizeTerminalSshLatency(
+      await this.request<RawTerminalResponse>("terminal.ssh_latency", {
+        session_id: sessionId,
+        project_path_key: projectPathKey,
+      }),
+    );
+    return { ...latency, sessionId };
   }
 
   async snapshotTerminal(
@@ -2902,6 +3163,13 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
 
   async updateSettings(payload: GatewaySettingsSyncPayload): Promise<void> {
     await this.request("settings.update", payload);
+  }
+
+  async resetSshKnownHost(params: { host: string; port: number }): Promise<SshKnownHostResetResult> {
+    return this.request<SshKnownHostResetResult>("settings.ssh_known_host.reset", {
+      host: params.host,
+      port: params.port,
+    });
   }
 
   async listSkillFiles(): Promise<SkillListResponse> {
@@ -3341,6 +3609,9 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
   private emitStatus(status: AgentStatus | null, error: string | null) {
     this.lastStatus = status;
     this.lastStatusError = error;
+    if (status?.online === false) {
+      this.terminalSessionSnapshot.clear();
+    }
     for (const listener of this.statusListeners) {
       listener(status, error);
     }
@@ -3365,6 +3636,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
   }
 
   private emitTerminal(event: TerminalEvent) {
+    applyTerminalSnapshotEvent(this.terminalSessionSnapshot, event);
     for (const listener of this.terminalListeners) {
       listener(event);
     }

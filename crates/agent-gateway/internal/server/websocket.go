@@ -59,6 +59,15 @@ type websocketTerminalRequestPayload struct {
 	Cols           *int   `json:"cols"`
 	Rows           *int   `json:"rows"`
 	MaxBytes       *int   `json:"max_bytes"`
+	SshHostID      string `json:"ssh_host_id"`
+	PromptID       string `json:"prompt_id"`
+	PromptAnswer   string `json:"prompt_answer"`
+	TrustHostKey   bool   `json:"trust_host_key"`
+}
+
+type websocketSshKnownHostResetPayload struct {
+	Host string `json:"host"`
+	Port *int   `json:"port"`
 }
 
 type websocketGitRequestPayload struct {
@@ -337,9 +346,6 @@ func (c *websocketConnection) startTerminalEventForwarder() {
 				if !ok {
 					return
 				}
-				if !c.sm.WebTerminalEnabled() {
-					continue
-				}
 				if !c.shouldForwardTerminalEvent(event) {
 					continue
 				}
@@ -353,10 +359,13 @@ func (c *websocketConnection) startTerminalEventForwarder() {
 }
 
 func (c *websocketConnection) replayTerminalSessionSnapshot() {
-	if !c.sm.WebTerminalEnabled() {
+	if !c.terminalFeaturesEnabled() {
 		return
 	}
 	for _, terminalSession := range c.sm.TerminalSessionSnapshot("") {
+		if !c.terminalSessionAllowed(terminalSession) {
+			continue
+		}
 		if err := c.writeTerminalEvent(websocketTerminalEventPayload(&gatewayv1.TerminalEvent{
 			Kind:           "created",
 			SessionId:      terminalSession.GetId(),
@@ -382,7 +391,7 @@ func (c *websocketConnection) forgetTerminalInterest(sessionID string, projectPa
 }
 
 func (c *websocketConnection) shouldForwardTerminalEvent(event *gatewayv1.TerminalEvent) bool {
-	return c.terminalInterest.shouldForward(event)
+	return c.terminalEventAllowed(event) && c.terminalInterest.shouldForward(event)
 }
 
 func (c *websocketConnection) startWebSocketHeartbeat() {

@@ -34,6 +34,7 @@ import type {
   TunnelUpdateInput,
 } from "../components/project-tools/LocalTunnelPanel";
 import type { WorkspaceCodeEditorOpenRequest } from "../components/workspace-editor/WorkspaceCodeEditorOverlay";
+import type { WorkspaceSshTerminalOpenRequest } from "../components/workspace-editor/WorkspaceSshTerminalOverlay";
 import type { WorkspaceImagePreviewOpenRequest } from "../components/workspace-editor/WorkspaceImagePreviewOverlay";
 import { isWorkspaceImagePath } from "../components/workspace-editor/workspaceImagePreview";
 import { Button } from "../components/ui/button";
@@ -221,6 +222,13 @@ const WorkspaceImagePreviewOverlay = lazy(async () => {
   const module = await import("../components/workspace-editor/WorkspaceImagePreviewOverlay");
   return {
     default: module.WorkspaceImagePreviewOverlay,
+  };
+});
+
+const WorkspaceSshTerminalOverlay = lazy(async () => {
+  const module = await import("../components/workspace-editor/WorkspaceSshTerminalOverlay");
+  return {
+    default: module.WorkspaceSshTerminalOverlay,
   };
 });
 
@@ -667,7 +675,12 @@ export function ChatPage(props: ChatPageProps) {
   const [workspaceImagePreviewOpenRequest, setWorkspaceImagePreviewOpenRequest] =
     useState<WorkspaceImagePreviewOpenRequest | null>(null);
   const workspaceImagePreviewRequestIdRef = useRef(0);
-  const [projectTerminalSessions, setProjectTerminalSessions] = useState<TerminalSession[]>([]);
+  const [workspaceSshTerminalMounted, setWorkspaceSshTerminalMounted] = useState(false);
+  const [workspaceSshTerminalOpen, setWorkspaceSshTerminalOpen] = useState(false);
+  const [workspaceSshTerminalOpenRequest, setWorkspaceSshTerminalOpenRequest] =
+    useState<WorkspaceSshTerminalOpenRequest | null>(null);
+  const workspaceSshTerminalRequestIdRef = useRef(0);
+  const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
   const [remoteRuntimeStatus, setRemoteRuntimeStatus] = useState<GatewayRuntimeStatus>(() =>
     buildFallbackGatewayStatus(settings.remote),
   );
@@ -1449,6 +1462,15 @@ export function ChatPage(props: ChatPageProps) {
   const terminalProjectPathKey = terminalProjectPath
     ? workspaceProjectPathKey(terminalProjectPath)
     : "";
+  const projectTerminalSessions = useMemo(
+    () =>
+      terminalProjectPathKey
+        ? terminalSessions.filter((session) =>
+            terminalSessionBelongsToProject(session, terminalProjectPathKey),
+          )
+        : [],
+    [terminalProjectPathKey, terminalSessions],
+  );
   const projectToolsFileTreeOpen = isProjectToolsFileTreeOpen(
     settings.customSettings,
     terminalProjectPathKey,
@@ -1473,6 +1495,22 @@ export function ChatPage(props: ChatPageProps) {
     : !remoteRuntimeStatus.online
       ? t("projectTools.tunnelRemoteOffline")
       : undefined;
+  const hideWorkspaceSshTerminalOverlay = useCallback(() => {
+    setWorkspaceSshTerminalOpen(false);
+  }, []);
+  const openWorkspaceSshTerminalRequest = useCallback(
+    (request: WorkspaceSshTerminalOpenRequest) => {
+      setWorkspaceImagePreviewOpen(false);
+      setWorkspaceEditorOpen(false);
+      setWorkspaceSshTerminalMounted(true);
+      setWorkspaceSshTerminalOpen(true);
+      setWorkspaceSshTerminalOpenRequest(request);
+    },
+    [],
+  );
+  const requestWorkspaceEditorClose = useCallback(() => {
+    setWorkspaceEditorCloseRequestId((current) => current + 1);
+  }, []);
   const handleOpenWorkspaceFile = useCallback(
     (path: string) => {
       if (!terminalProjectPath || !terminalProjectPathKey) return;
@@ -1488,6 +1526,7 @@ export function ChatPage(props: ChatPageProps) {
         });
         return;
       }
+      hideWorkspaceSshTerminalOverlay();
       setWorkspaceImagePreviewOpen(false);
       workspaceEditorRequestIdRef.current += 1;
       setWorkspaceEditorCleanupPending(false);
@@ -1500,11 +1539,20 @@ export function ChatPage(props: ChatPageProps) {
         path,
       });
     },
-    [terminalProjectPath, terminalProjectPathKey],
+    [hideWorkspaceSshTerminalOverlay, terminalProjectPath, terminalProjectPathKey],
   );
-  const requestWorkspaceEditorClose = useCallback(() => {
-    setWorkspaceEditorCloseRequestId((current) => current + 1);
-  }, []);
+  const handleOpenSshTerminal = useCallback(
+    (session: TerminalSession) => {
+      if (session.kind !== "ssh") return;
+      workspaceSshTerminalRequestIdRef.current += 1;
+      const openRequest = {
+        id: workspaceSshTerminalRequestIdRef.current,
+        sessionId: session.id,
+      };
+      openWorkspaceSshTerminalRequest(openRequest);
+    },
+    [openWorkspaceSshTerminalRequest],
+  );
   const requestWorkspaceImagePreviewClose = useCallback(() => {
     setWorkspaceImagePreviewOpen(false);
   }, []);
@@ -1537,20 +1585,20 @@ export function ChatPage(props: ChatPageProps) {
   ]);
   useEffect(() => {
     if (!terminalProjectPathKey) {
-      setProjectTerminalSessions([]);
+      setTerminalSessions([]);
       return;
     }
     let cancelled = false;
     void tauriTerminalClient
-      .list(terminalProjectPathKey)
+      .list()
       .then((sessions) => {
         if (!cancelled) {
-          setProjectTerminalSessions(sortTerminalSessions(sessions));
+          setTerminalSessions(sortTerminalSessions(sessions));
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setProjectTerminalSessions([]);
+          setTerminalSessions([]);
         }
       });
     return () => {
@@ -1560,9 +1608,8 @@ export function ChatPage(props: ChatPageProps) {
   useEffect(() => {
     if (!terminalProjectPathKey) return;
     return tauriTerminalClient.subscribe((event) => {
-      if (!terminalSessionBelongsToProject(event.session, terminalProjectPathKey)) return;
       if (event.kind === "output") return;
-      setProjectTerminalSessions((current) => applyTerminalEventToSessions(current, event));
+      setTerminalSessions((current) => applyTerminalEventToSessions(current, event));
     });
   }, [terminalProjectPathKey]);
   useEffect(() => {
@@ -2117,13 +2164,15 @@ export function ChatPage(props: ChatPageProps) {
           }
           if (terminalSessions.length > 0) {
             await tauriTerminalClient.closeProject(pathKey);
-            setProjectTerminalSessions((current) =>
+            setTerminalSessions((current) =>
               current.filter((session) => !terminalSessionBelongsToProject(session, pathKey)),
             );
           }
           if (pathKey && terminalProjectPathKey === pathKey) {
             setProjectToolsPanelOpen(false);
-            setProjectTerminalSessions([]);
+            setTerminalSessions((current) =>
+              current.filter((session) => !terminalSessionBelongsToProject(session, pathKey)),
+            );
           }
 
           const visibleConversationId = currentConversationIdRef.current;
@@ -4606,13 +4655,34 @@ export function ChatPage(props: ChatPageProps) {
             />
           </Suspense>
         ) : null}
+        {workspaceSshTerminalMounted ? (
+          <Suspense
+            fallback={
+              <div className="absolute inset-0 z-50 flex min-h-0 flex-col border-r border-border bg-background text-sm text-muted-foreground shadow-2xl">
+                <MacOsTitleBarSpacer className="bg-muted/45" />
+                <div className="flex min-h-0 flex-1 items-center justify-center">
+                  {t("workspaceSshTerminal.loading")}
+                </div>
+              </div>
+            }
+          >
+            <WorkspaceSshTerminalOverlay
+              openRequest={workspaceSshTerminalOpenRequest}
+              sessions={terminalSessions}
+              client={tauriTerminalClient}
+              theme={settings.theme}
+              isOpen={workspaceSshTerminalOpen}
+              onHide={() => setWorkspaceSshTerminalOpen(false)}
+            />
+          </Suspense>
+        ) : null}
       </div>
       <ProjectToolsPanel
         isOpen={activeView === "chat" && projectToolsPanelOpen}
         collapseImmediately={activeView !== "chat"}
         projectPathKey={terminalProjectPathKey}
         cwd={terminalProjectPath}
-        sessions={projectTerminalSessions}
+        sessions={terminalSessions}
         width={settings.customSettings.projectToolsPanel.width}
         theme={settings.theme}
         disabledMessage={terminalDisabledMessage}
@@ -4680,7 +4750,8 @@ export function ChatPage(props: ChatPageProps) {
         onSshProjectHostIdsChange={(hostIds) =>
           setSettings((prev) => updateSshProjectHostIds(prev, terminalProjectPathKey, hostIds))
         }
-        onSessionsChange={setProjectTerminalSessions}
+        onOpenSshSession={handleOpenSshTerminal}
+        onSessionsChange={(sessions) => setTerminalSessions(sortTerminalSessions(sessions))}
         onInsertFileMention={(path, kind) => {
           composerRef.current?.insertFileMention(path, kind);
           composerRef.current?.focus();

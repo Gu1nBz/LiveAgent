@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ProjectToolsPanel } from "@/components/project-tools/ProjectToolsPanel";
 import type { WorkspaceCodeEditorOpenRequest } from "@/components/workspace-editor/WorkspaceCodeEditorOverlay";
+import type { WorkspaceSshTerminalOpenRequest } from "@/components/workspace-editor/WorkspaceSshTerminalOverlay";
 import type { WorkspaceImagePreviewOpenRequest } from "@/components/workspace-editor/WorkspaceImagePreviewOverlay";
 import { isWorkspaceImagePath } from "@/components/workspace-editor/workspaceImagePreview";
 import { LocaleContext, t as translate } from "@/i18n";
@@ -233,6 +234,13 @@ const WorkspaceImagePreviewOverlay = lazy(async () => {
   const module = await import("@/components/workspace-editor/WorkspaceImagePreviewOverlay");
   return {
     default: module.WorkspaceImagePreviewOverlay,
+  };
+});
+
+const WorkspaceSshTerminalOverlay = lazy(async () => {
+  const module = await import("@/components/workspace-editor/WorkspaceSshTerminalOverlay");
+  return {
+    default: module.WorkspaceSshTerminalOverlay,
   };
 });
 
@@ -919,6 +927,11 @@ export default function App() {
   const [workspaceImagePreviewOpenRequest, setWorkspaceImagePreviewOpenRequest] =
     useState<WorkspaceImagePreviewOpenRequest | null>(null);
   const workspaceImagePreviewRequestIdRef = useRef(0);
+  const [workspaceSshTerminalMounted, setWorkspaceSshTerminalMounted] = useState(false);
+  const [workspaceSshTerminalOpen, setWorkspaceSshTerminalOpen] = useState(false);
+  const [workspaceSshTerminalOpenRequest, setWorkspaceSshTerminalOpenRequest] =
+    useState<WorkspaceSshTerminalOpenRequest | null>(null);
+  const workspaceSshTerminalRequestIdRef = useRef(0);
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
   const { confirm: requestConfirmDialog, dialog: confirmDialog } = useConfirmDialog();
   const terminalSessionsVersionRef = useRef(0);
@@ -4755,7 +4768,11 @@ export default function App() {
               current.filter((session) => !terminalSessionBelongsToProject(session, pathKey)),
             );
           };
-          if (terminalClient && settings.remote.enableWebTerminal && pathKey) {
+          if (
+            terminalClient &&
+            (settings.remote.enableWebTerminal || settings.remote.enableWebSshTerminal) &&
+            pathKey
+          ) {
             terminalSessionsToClose = await terminalClient.list(pathKey);
             const runningTerminalCount = terminalSessionsToClose.filter(
               (session) => session.running,
@@ -4884,6 +4901,7 @@ export default function App() {
       refreshHistoryWorkdirs,
       removeWorkspaceProjectFromSettings,
       requestConfirmDialog,
+      settings.remote.enableWebSshTerminal,
       settings.remote.enableWebTerminal,
       settings.locale,
       settings.system,
@@ -5901,6 +5919,8 @@ export default function App() {
     (!settings.remote.enableWebTerminal
       ? "Enable WebUI Terminal in desktop Remote settings."
       : undefined);
+  const webTerminalSessionsEnabled =
+    settings.remote.enableWebTerminal || settings.remote.enableWebSshTerminal;
   const gitDisabledMessage = !settings.remote.enableWebGit
     ? "WebUI Git is disabled in desktop Remote settings."
     : undefined;
@@ -5913,6 +5933,22 @@ export default function App() {
       : status?.online !== true
         ? translate("projectTools.tunnelRemoteOffline", settings.locale)
         : undefined;
+  const hideWorkspaceSshTerminalOverlay = useCallback(() => {
+    setWorkspaceSshTerminalOpen(false);
+  }, []);
+  const openWorkspaceSshTerminalRequest = useCallback(
+    (request: WorkspaceSshTerminalOpenRequest) => {
+      setWorkspaceImagePreviewOpen(false);
+      setWorkspaceEditorOpen(false);
+      setWorkspaceSshTerminalMounted(true);
+      setWorkspaceSshTerminalOpen(true);
+      setWorkspaceSshTerminalOpenRequest(request);
+    },
+    [],
+  );
+  const requestWorkspaceEditorClose = useCallback(() => {
+    setWorkspaceEditorCloseRequestId((current) => current + 1);
+  }, []);
   const handleOpenWorkspaceFile = useCallback(
     (path: string) => {
       if (!terminalProjectPath || !terminalProjectPathKey) return;
@@ -5928,6 +5964,7 @@ export default function App() {
         });
         return;
       }
+      hideWorkspaceSshTerminalOverlay();
       setWorkspaceImagePreviewOpen(false);
       workspaceEditorRequestIdRef.current += 1;
       setWorkspaceEditorCleanupPending(false);
@@ -5940,12 +5977,20 @@ export default function App() {
         path,
       });
     },
-    [terminalProjectPath, terminalProjectPathKey],
+    [hideWorkspaceSshTerminalOverlay, terminalProjectPath, terminalProjectPathKey],
   );
-
-  const requestWorkspaceEditorClose = useCallback(() => {
-    setWorkspaceEditorCloseRequestId((current) => current + 1);
-  }, []);
+  const handleOpenSshTerminal = useCallback(
+    (session: TerminalSession) => {
+      if (session.kind !== "ssh") return;
+      workspaceSshTerminalRequestIdRef.current += 1;
+      const openRequest = {
+        id: workspaceSshTerminalRequestIdRef.current,
+        sessionId: session.id,
+      };
+      openWorkspaceSshTerminalRequest(openRequest);
+    },
+    [openWorkspaceSshTerminalRequest],
+  );
   const requestWorkspaceImagePreviewClose = useCallback(() => {
     setWorkspaceImagePreviewOpen(false);
   }, []);
@@ -5988,11 +6033,9 @@ export default function App() {
   const handleProjectTerminalSessionsChange = useCallback(
     (sessions: TerminalSession[]) => {
       terminalSessionsVersionRef.current += 1;
-      setTerminalSessions((current) =>
-        replaceTerminalSessionsForProject(current, terminalProjectPathKey, sessions),
-      );
+      setTerminalSessions(sortTerminalSessions(sessions));
     },
-    [terminalProjectPathKey],
+    [],
   );
 
   useEffect(() => {
@@ -6004,7 +6047,7 @@ export default function App() {
     if (!settingsSyncReady) {
       return;
     }
-    if (!isAgentMode || !settings.remote.enableWebTerminal || status?.online === false) {
+    if (!isAgentMode || !webTerminalSessionsEnabled || status?.online === false) {
       terminalSessionsVersionRef.current += 1;
       setTerminalSessions([]);
       return;
@@ -6036,11 +6079,11 @@ export default function App() {
     };
   }, [
     isAgentMode,
-    settings.remote.enableWebTerminal,
     settingsSyncReady,
     status?.online,
     status?.session_id,
     terminalClient,
+    webTerminalSessionsEnabled,
   ]);
 
   useEffect(() => {
@@ -6051,6 +6094,44 @@ export default function App() {
       setTerminalSessions((current) => applyTerminalEventToSessions(current, event));
     });
   }, [terminalClient]);
+
+  useEffect(() => {
+    if (!terminalClient) return;
+    if (!settingsSyncReady) return;
+    if (!isAgentMode || !webTerminalSessionsEnabled || status?.online !== true) return;
+    if (!projectToolsSshTunnelOpen || !terminalProjectPathKey) return;
+
+    let cancelled = false;
+    let refreshSeq = 0;
+    const refreshProjectTerminalSessions = () => {
+      const seq = ++refreshSeq;
+      void terminalClient
+        .list(terminalProjectPathKey)
+        .then((sessions) => {
+          if (cancelled || seq !== refreshSeq) return;
+          terminalSessionsVersionRef.current += 1;
+          setTerminalSessions((current) =>
+            replaceTerminalSessionsForProject(current, terminalProjectPathKey, sessions),
+          );
+        })
+        .catch(() => undefined);
+    };
+
+    refreshProjectTerminalSessions();
+    const timer = window.setInterval(refreshProjectTerminalSessions, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    isAgentMode,
+    projectToolsSshTunnelOpen,
+    settingsSyncReady,
+    status?.online,
+    terminalClient,
+    terminalProjectPathKey,
+    webTerminalSessionsEnabled,
+  ]);
 
   useEffect(() => {
     if (activeView !== "chat") {
@@ -7032,6 +7113,24 @@ export default function App() {
               />
             </Suspense>
           ) : null}
+          {workspaceSshTerminalMounted && terminalClient ? (
+            <Suspense
+              fallback={
+                <div className="workspace-ssh-terminal-overlay absolute inset-0 z-40 flex items-center justify-center border-r border-border bg-background text-sm text-muted-foreground shadow-2xl">
+                  {translate("workspaceSshTerminal.loading", settings.locale)}
+                </div>
+              }
+            >
+              <WorkspaceSshTerminalOverlay
+                openRequest={workspaceSshTerminalOpenRequest}
+                sessions={terminalSessions}
+                client={terminalClient}
+                theme={settings.theme}
+                isOpen={workspaceSshTerminalOpen}
+                onHide={() => setWorkspaceSshTerminalOpen(false)}
+              />
+            </Suspense>
+          ) : null}
         </div>
 
         {terminalClient ? (
@@ -7040,7 +7139,7 @@ export default function App() {
             collapseImmediately={activeView !== "chat"}
             projectPathKey={terminalProjectPathKey}
             cwd={terminalProjectPath}
-            sessions={projectTerminalSessions}
+            sessions={terminalSessions}
             width={settings.customSettings.projectToolsPanel.width}
             theme={settings.theme}
             disabledMessage={projectToolsDisabledMessage}
@@ -7117,6 +7216,7 @@ export default function App() {
             onSshProjectHostIdsChange={(hostIds) =>
               setSettings((prev) => updateSshProjectHostIds(prev, terminalProjectPathKey, hostIds))
             }
+            onOpenSshSession={handleOpenSshTerminal}
             onSessionsChange={handleProjectTerminalSessionsChange}
             onInsertFileMention={(path, kind) => {
               composerRef.current?.insertFileMention(path, kind);

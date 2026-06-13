@@ -7,6 +7,10 @@ import type {
   TerminalShellOption,
   TerminalShellOptions,
   TerminalSnapshot,
+  TerminalSshCreateResult,
+  TerminalSshLatency,
+  TerminalSshMetadata,
+  TerminalSshPrompt,
 } from "./types";
 
 type TerminalEventListener = (event: TerminalEvent) => void;
@@ -32,6 +36,24 @@ type RawTerminalSession = Partial<TerminalSession> & {
   updated_at?: number;
   finished_at?: number | null;
   exit_code?: number | null;
+  kind?: string;
+  ssh?: RawTerminalSshMetadata | null;
+};
+
+type RawTerminalSshMetadata = Partial<TerminalSshMetadata> & {
+  host_id?: string;
+  host_name?: string;
+  auth_type?: string;
+  reconnect_attempt?: number;
+  reconnect_max_attempts?: number;
+};
+
+type RawTerminalSshPrompt = Partial<TerminalSshPrompt> & {
+  host_id?: string;
+  host_name?: string;
+  fingerprint_sha256?: string;
+  key_type?: string;
+  answer_echo?: boolean;
 };
 
 type RawTerminalSnapshot = {
@@ -42,6 +64,13 @@ type RawTerminalSnapshot = {
   output_start_offset?: number;
   outputEndOffset?: number;
   output_end_offset?: number;
+  sshPrompt?: RawTerminalSshPrompt | null;
+  ssh_prompt?: RawTerminalSshPrompt | null;
+};
+
+type RawTerminalSshLatency = Partial<TerminalSshLatency> & {
+  session_id?: string;
+  latency_ms?: number;
 };
 
 type RawTerminalListResponse = {
@@ -72,13 +101,16 @@ type RawTerminalEvent = {
 
 function normalizeSession(input: RawTerminalSession): TerminalSession {
   const projectPathKey = input.projectPathKey ?? input.project_path_key ?? "";
+  const kind = input.kind === "ssh" ? "ssh" : "local";
   return {
     id: input.id ?? "",
     projectPathKey,
     cwd: input.cwd ?? "",
     shell: input.shell ?? "",
     title: input.title ?? "Terminal",
-    pid: input.pid ?? null,
+    kind,
+    ssh: input.ssh ? normalizeSshMetadata(input.ssh) : null,
+    pid: kind === "ssh" ? null : (input.pid ?? null),
     cols: Number(input.cols ?? 80),
     rows: Number(input.rows ?? 24),
     createdAt: Number(input.createdAt ?? input.created_at ?? 0),
@@ -86,6 +118,38 @@ function normalizeSession(input: RawTerminalSession): TerminalSession {
     finishedAt: input.finishedAt ?? input.finished_at ?? null,
     exitCode: input.exitCode ?? input.exit_code ?? null,
     running: input.running === true,
+  };
+}
+
+function normalizeSshMetadata(input: RawTerminalSshMetadata): TerminalSshMetadata {
+  return {
+    hostId: input.hostId ?? input.host_id ?? "",
+    hostName: input.hostName ?? input.host_name ?? "",
+    username: input.username ?? "",
+    host: input.host ?? "",
+    port: Number(input.port ?? 22),
+    authType: input.authType ?? input.auth_type ?? "",
+    status: input.status ?? "connected",
+    reconnectAttempt: Number(input.reconnectAttempt ?? input.reconnect_attempt ?? 0),
+    reconnectMaxAttempts: Number(input.reconnectMaxAttempts ?? input.reconnect_max_attempts ?? 3),
+  };
+}
+
+function normalizeSshPrompt(input: RawTerminalSshPrompt | null | undefined): TerminalSshPrompt | undefined {
+  if (!input) return undefined;
+  const id = input.id?.trim() ?? "";
+  if (!id) return undefined;
+  return {
+    id,
+    kind: input.kind ?? "hostKey",
+    hostId: input.hostId ?? input.host_id ?? "",
+    hostName: input.hostName ?? input.host_name ?? "",
+    host: input.host ?? "",
+    port: Number(input.port ?? 22),
+    message: input.message ?? "",
+    fingerprintSha256: input.fingerprintSha256 ?? input.fingerprint_sha256 ?? undefined,
+    keyType: input.keyType ?? input.key_type ?? undefined,
+    answerEcho: input.answerEcho ?? input.answer_echo ?? false,
   };
 }
 
@@ -103,6 +167,25 @@ function normalizeSnapshot(input: RawTerminalSnapshot): TerminalSnapshot {
     truncated: input.truncated === true,
     outputStartOffset,
     outputEndOffset,
+  };
+}
+
+function normalizeSshCreateResult(input: RawTerminalSnapshot): TerminalSshCreateResult {
+  const prompt = normalizeSshPrompt(input.sshPrompt ?? input.ssh_prompt);
+  return {
+    snapshot: input.session ? normalizeSnapshot(input) : undefined,
+    prompt,
+  };
+}
+
+function normalizeSshLatency(input: RawTerminalSshLatency): TerminalSshLatency {
+  const latencyMs = Number(input.latencyMs ?? input.latency_ms ?? 0);
+  if (!Number.isFinite(latencyMs) || latencyMs <= 0) {
+    throw new Error("SSH latency response did not include latency");
+  }
+  return {
+    sessionId: input.sessionId ?? input.session_id ?? "",
+    latencyMs: Math.round(latencyMs),
   };
 }
 
@@ -165,6 +248,39 @@ export const tauriTerminalClient: TerminalClient = {
         title: params.title,
         cols: params.cols,
         rows: params.rows,
+      }),
+    );
+  },
+  async createSsh(params) {
+    return normalizeSshCreateResult(
+      await invoke<RawTerminalSnapshot>("terminal_create_ssh", {
+        cwd: params.cwd,
+        project_path_key: params.projectPathKey,
+        ssh_host_id: params.hostId,
+        title: params.title,
+        cols: params.cols,
+        rows: params.rows,
+      }),
+    );
+  },
+  async answerSshPrompt(params) {
+    return normalizeSshCreateResult(
+      await invoke<RawTerminalSnapshot>("terminal_answer_ssh_prompt", {
+        prompt_id: params.promptId,
+        prompt_answer: params.answer,
+        trust_host_key: params.trustHostKey,
+      }),
+    );
+  },
+  async cancelSshPrompt(promptId) {
+    await invoke("terminal_cancel_ssh_prompt", {
+      prompt_id: promptId,
+    });
+  },
+  async sshLatency(sessionId, _projectPathKey) {
+    return normalizeSshLatency(
+      await invoke<RawTerminalSshLatency>("terminal_ssh_latency", {
+        session_id: sessionId,
       }),
     );
   },

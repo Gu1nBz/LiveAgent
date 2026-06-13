@@ -42,13 +42,26 @@ func newTerminalWebSocketTest(
 	webTerminalEnabled bool,
 ) (*session.Manager, *session.AgentSession, *websocket.Conn, func()) {
 	t.Helper()
+	return newTerminalWebSocketTestWithPermissions(t, webTerminalEnabled, false)
+}
+
+func newTerminalWebSocketTestWithPermissions(
+	t *testing.T,
+	webTerminalEnabled bool,
+	webSshTerminalEnabled bool,
+) (*session.Manager, *session.AgentSession, *websocket.Conn, func()) {
+	t.Helper()
 
 	sm := session.NewManager()
 	webTerminalSetting := "false"
 	if webTerminalEnabled {
 		webTerminalSetting = "true"
 	}
-	sm.ApplySettingsJSON(`{"remote":{"enableWebTerminal":` + webTerminalSetting + `}}`)
+	webSshTerminalSetting := "false"
+	if webSshTerminalEnabled {
+		webSshTerminalSetting = "true"
+	}
+	sm.ApplySettingsJSON(`{"remote":{"enableWebTerminal":` + webTerminalSetting + `,"enableWebSshTerminal":` + webSshTerminalSetting + `}}`)
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
@@ -60,6 +73,281 @@ func newTerminalWebSocketTest(
 	conn, cleanup := dialGatewayWebSocket(t, handler)
 	authWebSocket(t, conn, "ws-token")
 	return sm, agentSession, conn, cleanup
+}
+
+func TestWebSocketSshTerminalPermissionIsIndependentFromLocalTerminal(t *testing.T) {
+	t.Parallel()
+
+	sm, agentSession, conn, cleanup := newTerminalWebSocketTestWithPermissions(t, false, true)
+	defer cleanup()
+
+	sendEnvelope(t, conn, "terminal-create-local-disabled", "terminal.create", map[string]any{
+		"cwd":              "/workspace/project",
+		"project_path_key": "/workspace/project",
+	})
+	localResponse := receiveEnvelope(t, conn)
+	if localResponse.ID != "terminal-create-local-disabled" || localResponse.Type != "error" {
+		t.Fatalf("local terminal disabled response = %#v, want error", localResponse)
+	}
+	if !strings.Contains(localResponse.Error, "web terminal is disabled") {
+		t.Fatalf("local terminal disabled error = %q", localResponse.Error)
+	}
+
+	sendEnvelope(t, conn, "terminal-create-ssh-enabled", "terminal.create_ssh", map[string]any{
+		"cwd":              " /workspace/project ",
+		"project_path_key": " /workspace/project ",
+		"ssh_host_id":      " prod ",
+		"title":            " Prod SSH ",
+		"cols":             120,
+		"rows":             32,
+	})
+	outbound := readOutboundEnvelope(t, agentSession)
+	req := outbound.GetTerminalRequest()
+	if req == nil {
+		t.Fatalf("terminal.create_ssh outbound payload = %T, want TerminalRequest", outbound.GetPayload())
+	}
+	if req.GetAction() != "create_ssh" ||
+		req.GetCwd() != "/workspace/project" ||
+		req.GetProjectPathKey() != "/workspace/project" ||
+		req.GetSshHostId() != "prod" ||
+		req.GetTitle() != "Prod SSH" ||
+		req.GetCols() != 120 ||
+		req.GetRows() != 32 {
+		t.Fatalf("terminal create_ssh request = %#v", req)
+	}
+
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: outbound.GetRequestId(),
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_TerminalResponse{
+			TerminalResponse: &gatewayv1.TerminalResponse{
+				Action: "create_ssh",
+				Session: &gatewayv1.TerminalSession{
+					Id:             "ssh-1",
+					ProjectPathKey: "/workspace/project",
+					Cwd:            "/workspace/project",
+					Shell:          "ssh",
+					Title:          "Prod SSH",
+					Kind:           "ssh",
+					Cols:           120,
+					Rows:           32,
+					CreatedAt:      1,
+					UpdatedAt:      2,
+					Running:        true,
+					Ssh: &gatewayv1.TerminalSshMetadata{
+						HostId:   "prod",
+						HostName: "Production",
+						Username: "deploy",
+						Host:     "prod.example.com",
+						Port:     22,
+						AuthType: "privateKey",
+					},
+				},
+			},
+		},
+	})
+	createResponse := receiveEnvelopeWithID(t, conn, "terminal-create-ssh-enabled")
+	if createResponse.Type != "response" {
+		t.Fatalf("terminal create_ssh response = %#v, want response", createResponse)
+	}
+	var createPayload struct {
+		Session map[string]any `json:"session"`
+	}
+	if err := json.Unmarshal(createResponse.Payload, &createPayload); err != nil {
+		t.Fatalf("decode create_ssh response: %v", err)
+	}
+	if createPayload.Session["kind"] != "ssh" || createPayload.Session["pid"] != nil {
+		t.Fatalf("create_ssh session payload = %#v, want ssh with nil pid", createPayload.Session)
+	}
+	sshPayload, ok := createPayload.Session["ssh"].(map[string]any)
+	if !ok || sshPayload["host_id"] != "prod" || sshPayload["auth_type"] != "privateKey" {
+		t.Fatalf("create_ssh ssh metadata = %#v", createPayload.Session["ssh"])
+	}
+
+	sendEnvelope(t, conn, "terminal-input-ssh-enabled", "terminal.input", map[string]any{
+		"session_id":       " ssh-1 ",
+		"project_path_key": " /workspace/project ",
+		"data":             "pwd\n",
+	})
+	inputOutbound := readOutboundEnvelope(t, agentSession)
+	inputReq := inputOutbound.GetTerminalRequest()
+	if inputReq == nil {
+		t.Fatalf("ssh terminal input outbound payload = %T, want TerminalRequest", inputOutbound.GetPayload())
+	}
+	if inputReq.GetAction() != "input" ||
+		inputReq.GetSessionId() != "ssh-1" ||
+		inputReq.GetData() != "pwd\n" {
+		t.Fatalf("ssh terminal input request = %#v", inputReq)
+	}
+}
+
+func TestWebSocketSshTerminalCreateRejectedWithoutSshPermission(t *testing.T) {
+	t.Parallel()
+
+	_, _, conn, cleanup := newTerminalWebSocketTestWithPermissions(t, true, false)
+	defer cleanup()
+
+	sendEnvelope(t, conn, "terminal-create-ssh-disabled", "terminal.create_ssh", map[string]any{
+		"cwd":              "/workspace/project",
+		"project_path_key": "/workspace/project",
+		"ssh_host_id":      "prod",
+	})
+
+	env := receiveEnvelope(t, conn)
+	if env.ID != "terminal-create-ssh-disabled" || env.Type != "error" {
+		t.Fatalf("ssh terminal disabled response = %#v, want error", env)
+	}
+	if !strings.Contains(env.Error, "web SSH terminal is disabled") {
+		t.Fatalf("ssh terminal disabled error = %q", env.Error)
+	}
+}
+
+func TestWebSocketTerminalListFiltersLocalSessionsWhenOnlySshEnabled(t *testing.T) {
+	t.Parallel()
+
+	sm, agentSession, conn, cleanup := newTerminalWebSocketTestWithPermissions(t, false, true)
+	defer cleanup()
+
+	sendEnvelope(t, conn, "terminal-list-ssh-only", "terminal.list", map[string]any{
+		"project_path_key": "/workspace/project",
+	})
+	outbound := readOutboundEnvelope(t, agentSession)
+	req := outbound.GetTerminalRequest()
+	if req == nil || req.GetAction() != "list" {
+		t.Fatalf("terminal list outbound payload = %#v, want list request", outbound.GetPayload())
+	}
+
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: outbound.GetRequestId(),
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_TerminalResponse{
+			TerminalResponse: &gatewayv1.TerminalResponse{
+				Action: "list",
+				Sessions: []*gatewayv1.TerminalSession{
+					{
+						Id:             "local-1",
+						ProjectPathKey: "/workspace/project",
+						Cwd:            "/workspace/project",
+						Title:          "Local",
+						Kind:           "local",
+						CreatedAt:      1,
+						UpdatedAt:      1,
+						Running:        true,
+					},
+					{
+						Id:             "ssh-1",
+						ProjectPathKey: "/workspace/project",
+						Cwd:            "/workspace/project",
+						Shell:          "ssh",
+						Title:          "Production",
+						Kind:           "ssh",
+						CreatedAt:      2,
+						UpdatedAt:      2,
+						Running:        true,
+						Ssh: &gatewayv1.TerminalSshMetadata{
+							HostId:   "prod",
+							HostName: "Production",
+							Username: "deploy",
+							Host:     "prod.example.com",
+							Port:     22,
+							AuthType: "password",
+						},
+					},
+				},
+			},
+		},
+	})
+	response := receiveEnvelopeWithID(t, conn, "terminal-list-ssh-only")
+	if response.Type != "response" {
+		t.Fatalf("terminal ssh-only list response = %#v, want response", response)
+	}
+	var payload struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if err := json.Unmarshal(response.Payload, &payload); err != nil {
+		t.Fatalf("decode ssh-only list response: %v", err)
+	}
+	if len(payload.Sessions) != 1 ||
+		payload.Sessions[0]["id"] != "ssh-1" ||
+		payload.Sessions[0]["kind"] != "ssh" {
+		t.Fatalf("ssh-only list sessions = %#v, want only ssh-1", payload.Sessions)
+	}
+}
+
+func TestWebSocketTerminalListMergesCachedSshSessions(t *testing.T) {
+	t.Parallel()
+
+	sm, agentSession, conn, cleanup := newTerminalWebSocketTestWithPermissions(t, false, true)
+	defer cleanup()
+
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "event-created-cached-ssh",
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_TerminalEvent{
+			TerminalEvent: &gatewayv1.TerminalEvent{
+				Kind:           "created",
+				SessionId:      "ssh-1",
+				ProjectPathKey: "/workspace/project",
+				Session: &gatewayv1.TerminalSession{
+					Id:             "ssh-1",
+					ProjectPathKey: "/workspace/project",
+					Cwd:            "/workspace/project",
+					Shell:          "ssh",
+					Title:          "Production",
+					Kind:           "ssh",
+					CreatedAt:      2,
+					UpdatedAt:      2,
+					Running:        true,
+					Ssh: &gatewayv1.TerminalSshMetadata{
+						HostId:   "prod",
+						HostName: "Production",
+						Username: "deploy",
+						Host:     "prod.example.com",
+						Port:     22,
+						AuthType: "password",
+						Status:   "connected",
+					},
+				},
+			},
+		},
+	})
+	createdEvent := receiveEnvelope(t, conn)
+	if createdEvent.Type != "terminal.event" {
+		t.Fatalf("cached ssh created event = %#v, want terminal.event", createdEvent)
+	}
+
+	sendEnvelope(t, conn, "terminal-list-merge-cached-ssh", "terminal.list", map[string]any{})
+	outbound := readOutboundEnvelope(t, agentSession)
+	req := outbound.GetTerminalRequest()
+	if req == nil || req.GetAction() != "list" {
+		t.Fatalf("terminal list outbound payload = %#v, want list request", outbound.GetPayload())
+	}
+
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: outbound.GetRequestId(),
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_TerminalResponse{
+			TerminalResponse: &gatewayv1.TerminalResponse{
+				Action:   "list",
+				Sessions: []*gatewayv1.TerminalSession{},
+			},
+		},
+	})
+	response := receiveEnvelopeWithID(t, conn, "terminal-list-merge-cached-ssh")
+	if response.Type != "response" {
+		t.Fatalf("terminal cached ssh list response = %#v, want response", response)
+	}
+	var payload struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if err := json.Unmarshal(response.Payload, &payload); err != nil {
+		t.Fatalf("decode cached ssh list response: %v", err)
+	}
+	if len(payload.Sessions) != 1 ||
+		payload.Sessions[0]["id"] != "ssh-1" ||
+		payload.Sessions[0]["kind"] != "ssh" {
+		t.Fatalf("cached ssh list sessions = %#v, want ssh-1", payload.Sessions)
+	}
 }
 
 func TestWebSocketTerminalRejectsInteractiveRequestsWhenDisabled(t *testing.T) {

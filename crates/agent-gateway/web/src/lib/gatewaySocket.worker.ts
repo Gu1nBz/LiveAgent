@@ -80,6 +80,7 @@ type ManagedClient = {
   statusError: string | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
   terminalDetachTimers: Map<string, ReturnType<typeof setTimeout>>;
+  terminalSessions: Map<string, TerminalSession>;
 };
 
 type PortState = {
@@ -146,6 +147,49 @@ function shouldPostTerminalEventToPort(state: PortState, event: TerminalEvent) {
     (sessionID !== "" && state.terminalSessionIds.has(sessionID)) ||
     (projectPathKey !== "" && state.terminalProjectKeys.has(projectPathKey))
   );
+}
+
+function applyTerminalSessionEvent(
+  sessions: Map<string, TerminalSession>,
+  event: TerminalEvent,
+) {
+  if (event.kind === "output") return;
+  const sessionId = (event.sessionId || event.session?.id || "").trim();
+  if (event.kind === "closed") {
+    if (sessionId) {
+      sessions.delete(sessionId);
+    }
+    return;
+  }
+  const session = event.session;
+  if (session?.id) {
+    sessions.set(session.id, session);
+  }
+}
+
+function replayTerminalSessionsToPort(port: MessagePort, state: PortState) {
+  const sessions = [...state.client.terminalSessions.values()].sort((a, b) => {
+    const leftProject = (a.projectPathKey || a.cwd || "").trim();
+    const rightProject = (b.projectPathKey || b.cwd || "").trim();
+    return leftProject.localeCompare(rightProject) || a.createdAt - b.createdAt;
+  });
+  for (const session of sessions) {
+    const event: TerminalEvent = {
+      kind: "created",
+      sessionId: session.id,
+      projectPathKey: session.projectPathKey,
+      session,
+    };
+    if (!shouldPostTerminalEventToPort(state, event)) {
+      continue;
+    }
+    postToPort(port, {
+      type: "event",
+      event_type: "terminal",
+      payload: event,
+      connection_id: state.connectionID,
+    });
+  }
 }
 
 function terminalDetachKey(sessionID: string, projectPathKey: string) {
@@ -275,11 +319,15 @@ function getManagedClient(token: string) {
     statusError: null,
     idleTimer: null,
     terminalDetachTimers: new Map(),
+    terminalSessions: new Map(),
   };
 
   managed.client.subscribeStatus((status, error) => {
     managed.status = status;
     managed.statusError = error;
+    if (status?.online === false) {
+      managed.terminalSessions.clear();
+    }
     broadcast(managed, {
       type: "event",
       event_type: "status",
@@ -308,6 +356,7 @@ function getManagedClient(token: string) {
     });
   });
   managed.client.subscribeTerminal((event) => {
+    applyTerminalSessionEvent(managed.terminalSessions, event);
     broadcastTerminal(managed, event);
   });
 
@@ -322,14 +371,15 @@ function connectPort(
   const client = getManagedClient(message.token);
   clearManagedClientCleanup(client);
   client.ports.add(port);
-  portStates.set(port, {
+  const state: PortState = {
     connectionID: message.connection_id,
     client,
     streams: new Map(),
     terminalAllProjects: false,
     terminalProjectKeys: new Set(),
     terminalSessionIds: new Set(),
-  });
+  };
+  portStates.set(port, state);
   postToPort(port, {
     type: "ready",
     connection_id: message.connection_id,
@@ -338,6 +388,7 @@ function connectPort(
       error: client.statusError,
     },
   });
+  replayTerminalSessionsToPort(port, state);
 }
 
 function disconnectPort(port: MessagePort) {
@@ -467,6 +518,16 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
     case "settings.update":
       await client.updateSettings(payload as GatewaySettingsSyncPayload);
       return undefined;
+    case "settings.ssh_known_host.reset": {
+      const body = (payload && typeof payload === "object" ? payload : {}) as Record<
+        string,
+        unknown
+      >;
+      return client.resetSshKnownHost({
+        host: String(body.host ?? ""),
+        port: typeof body.port === "number" ? body.port : Number(body.port ?? 0),
+      });
+    }
     case "skills.list":
       return client.listSkillFiles();
     case "skills.manage":
@@ -536,6 +597,29 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
         cols: typeof body.cols === "number" ? body.cols : undefined,
         rows: typeof body.rows === "number" ? body.rows : undefined,
       });
+    case "terminal.create_ssh":
+      return client.createSshTerminal({
+        cwd: String(body.cwd ?? ""),
+        projectPathKey: String(body.project_path_key ?? ""),
+        hostId: String(body.ssh_host_id ?? ""),
+        title: typeof body.title === "string" ? body.title : undefined,
+        cols: typeof body.cols === "number" ? body.cols : undefined,
+        rows: typeof body.rows === "number" ? body.rows : undefined,
+      });
+    case "terminal.answer_ssh_prompt":
+      return client.answerSshTerminalPrompt({
+        promptId: String(body.prompt_id ?? ""),
+        answer: typeof body.prompt_answer === "string" ? body.prompt_answer : undefined,
+        trustHostKey: body.trust_host_key === true,
+      });
+    case "terminal.cancel_ssh_prompt":
+      await client.cancelSshTerminalPrompt(String(body.prompt_id ?? ""));
+      return { action: "cancel_ssh_prompt" };
+    case "terminal.ssh_latency":
+      return client.sshTerminalLatency(
+        String(body.session_id ?? ""),
+        String(body.project_path_key ?? ""),
+      );
     case "terminal.attach":
       return client.snapshotTerminal(
         String(body.session_id ?? ""),

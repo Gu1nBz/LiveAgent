@@ -540,6 +540,73 @@ test("gateway settings sync payload redacts provider api keys", () => {
   });
 });
 
+test("gateway settings sync redacts ssh secrets and preserves configured state", () => {
+  const appSettings = settings.normalizeSettings({
+    ssh: {
+      hosts: [
+        {
+          id: "prod",
+          name: "Production",
+          host: "prod.example.com",
+          port: 2222,
+          username: "deploy",
+          authType: "privateKey",
+          password: "ssh-password",
+          privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----",
+          privateKeyPath: "~/.ssh/id_ed25519",
+          privateKeyPassphrase: "key-passphrase",
+          proxy: {
+            type: "http",
+            url: "http://127.0.0.1",
+            port: 1080,
+            username: "proxy-user",
+            password: "proxy-password",
+          },
+        },
+      ],
+      projectHostAssociations: {
+        "/workspace/project": ["prod", "missing", "prod"],
+      },
+    },
+    remote: {
+      enableWebTerminal: true,
+      enableWebSshTerminal: true,
+    },
+  });
+
+  const payload = sync.buildGatewaySettingsSyncPayload(appSettings);
+  assert.equal(payload.ssh.hosts[0].password, "");
+  assert.equal(payload.ssh.hosts[0].privateKey, "");
+  assert.equal(payload.ssh.hosts[0].privateKeyPassphrase, "");
+  assert.equal(payload.ssh.hosts[0].proxy.password, "");
+  assert.equal(payload.ssh.hosts[0].passwordConfigured, true);
+  assert.equal(payload.ssh.hosts[0].privateKeyConfigured, true);
+  assert.equal(payload.ssh.hosts[0].privateKeyPassphraseConfigured, true);
+  assert.equal(payload.ssh.hosts[0].proxy.passwordConfigured, true);
+  assert.deepEqual(payload.ssh.projectHostAssociations, {
+    "/workspace/project": ["prod"],
+  });
+  assert.equal(payload.sshSecretUpdates, undefined);
+  assert.deepEqual(payload.remote, {
+    enableWebTerminal: true,
+    enableWebSshTerminal: true,
+    enableWebGit: false,
+    enableWebTunnels: false,
+  });
+
+  const updatePayload = sync.buildGatewaySettingsSyncPayload(appSettings, {
+    includeProviderApiKeyUpdates: true,
+  });
+  assert.deepEqual(updatePayload.sshSecretUpdates, {
+    prod: {
+      password: "ssh-password",
+      privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----",
+      privateKeyPassphrase: "key-passphrase",
+      proxyPassword: "proxy-password",
+    },
+  });
+});
+
 test("workspace project selection does not rewrite global system workdir or sync active project", () => {
   const resolvedSystem = settings.resolveWorkspaceProjects(
     {
@@ -631,18 +698,7 @@ test("gateway settings sync preserves active workspace project by path when ids 
   assert.equal(synced.system.activeWorkspaceProjectId, "desktop-project-a");
 });
 
-test("normalizes project tools panel from current and legacy terminal panel settings", () => {
-  const normalized = settings.normalizeSettings({
-    customSettings: {
-      terminalPanel: {
-        width: 612,
-      },
-    },
-  });
-
-  assert.equal(normalized.customSettings.projectToolsPanel.width, 612);
-  assert.equal(normalized.customSettings.projectToolsPanel.activeTab, "fileTree");
-
+test("normalizes project tools panel from current settings", () => {
   const currentShape = settings.normalizeSettings({
     customSettings: {
       projectToolsPanel: {
@@ -1081,65 +1137,6 @@ test("gateway settings sync keeps project tools panel local and syncs project to
     "/web/project",
   ]);
   assert.equal(synced.customSettings.projectToolsTunnel.openVersion, 2);
-
-  const legacyPanelSynced = sync.applyGatewaySettingsSyncPayload(current, {
-    ...payload,
-    customSettings: {
-      ...payload.customSettings,
-      projectToolsPanel: {
-        width: 360,
-        activeTab: "fileTree",
-        activeTabs: {
-          "/web/project": "fileTree",
-        },
-        tabOrders: {
-          "/web/project": ["web-terminal", "__file_tree__"],
-        },
-      },
-    },
-  });
-  assert.equal(legacyPanelSynced.customSettings.projectToolsPanel.width, 612);
-  assert.equal(legacyPanelSynced.customSettings.projectToolsPanel.activeTab, "terminal");
-  assert.deepEqual(legacyPanelSynced.customSettings.projectToolsPanel.activeTabs, {
-    "/desktop/project": "terminal",
-  });
-  assert.deepEqual(legacyPanelSynced.customSettings.projectToolsPanel.tabOrders, {
-    "/desktop/project": ["desktop-terminal", "__file_tree__"],
-  });
-  assert.deepEqual(legacyPanelSynced.customSettings.projectToolsFileTree.openProjectPathKeys, [
-    "/web/project",
-  ]);
-
-  const {
-    projectToolsFileTree: _projectToolsFileTree,
-    projectToolsGitReview: _projectToolsGitReview,
-    projectToolsTunnel: _projectToolsTunnel,
-    projectToolsPanel: _projectToolsPanel,
-    ...legacyCustomSettings
-  } = payload.customSettings;
-  const legacySynced = sync.applyGatewaySettingsSyncPayload(current, {
-    ...payload,
-    customSettings: legacyCustomSettings,
-  });
-  assert.deepEqual(legacySynced.customSettings.projectToolsFileTree.openProjectPathKeys, [
-    "/desktop/project",
-  ]);
-  assert.equal(legacySynced.customSettings.projectToolsPanel.activeTab, "terminal");
-  assert.deepEqual(legacySynced.customSettings.projectToolsFileTree.projects["/desktop/project"], {
-    query: "desktop",
-    selectedPath: "desktop.ts",
-    expandedPaths: ["", "src"],
-    revision: 1,
-    stateVersion: 0,
-  });
-  assert.deepEqual(legacySynced.customSettings.projectToolsGitReview.openProjectPathKeys, [
-    "/desktop/project",
-  ]);
-  assert.equal(legacySynced.customSettings.projectToolsGitReview.openVersion, 1);
-  assert.deepEqual(legacySynced.customSettings.projectToolsTunnel.openProjectPathKeys, [
-    "/desktop/project",
-  ]);
-  assert.equal(legacySynced.customSettings.projectToolsTunnel.openVersion, 1);
 });
 
 test("gateway settings sync ignores stale project file tree UI snapshots", () => {
@@ -1498,6 +1495,95 @@ test("gateway settings sync applies redacted providers without clearing local ap
   assert.equal(updated.customProviders[0].apiKey, "new-key");
 });
 
+test("gateway settings sync applies redacted ssh hosts without clearing local secrets", () => {
+  const current = settings.normalizeSettings({
+    ssh: {
+      hosts: [
+        {
+          id: "prod",
+          name: "Production",
+          host: "prod.example.com",
+          username: "deploy",
+          authType: "privateKey",
+          password: "old-password",
+          privateKey: "old-key",
+          privateKeyPassphrase: "old-passphrase",
+          proxy: {
+            password: "old-proxy-password",
+          },
+        },
+      ],
+      projectHostAssociations: {
+        "/workspace/project": ["prod"],
+      },
+    },
+  });
+
+  const redacted = sync.applyGatewaySettingsSyncPayload(current, {
+    ssh: {
+      hosts: [
+        {
+          id: "prod",
+          name: "Renamed Production",
+          host: "prod.internal",
+          username: "ubuntu",
+          authType: "privateKey",
+          passwordConfigured: true,
+          privateKeyConfigured: true,
+          privateKeyPassphraseConfigured: true,
+          proxy: {
+            passwordConfigured: true,
+          },
+        },
+      ],
+      projectHostAssociations: {
+        "/workspace/other": ["prod"],
+      },
+    },
+  });
+  assert.equal(redacted.ssh.hosts[0].name, "Renamed Production");
+  assert.equal(redacted.ssh.hosts[0].password, "old-password");
+  assert.equal(redacted.ssh.hosts[0].privateKey, "old-key");
+  assert.equal(redacted.ssh.hosts[0].privateKeyPassphrase, "old-passphrase");
+  assert.equal(redacted.ssh.hosts[0].proxy.password, "old-proxy-password");
+  assert.equal(redacted.ssh.hosts[0].privateKeyPassphraseConfigured, true);
+  assert.deepEqual(redacted.ssh.projectHostAssociations, {
+    "/workspace/other": ["prod"],
+  });
+
+  const updated = sync.applyGatewaySettingsSyncPayload(current, {
+    ssh: {
+      hosts: [
+        {
+          id: "prod",
+          name: "Production",
+          host: "prod.example.com",
+          username: "deploy",
+          authType: "privateKey",
+          passwordConfigured: true,
+          privateKeyConfigured: true,
+          privateKeyPassphraseConfigured: true,
+          proxy: {
+            passwordConfigured: true,
+          },
+        },
+      ],
+    },
+    sshSecretUpdates: {
+      prod: {
+        password: "new-password",
+        privateKey: "new-key",
+        privateKeyPassphrase: "new-passphrase",
+        proxyPassword: "new-proxy-password",
+      },
+    },
+  });
+  assert.equal(updated.ssh.hosts[0].password, "new-password");
+  assert.equal(updated.ssh.hosts[0].privateKey, "new-key");
+  assert.equal(updated.ssh.hosts[0].privateKeyPassphrase, "new-passphrase");
+  assert.equal(updated.ssh.hosts[0].proxy.password, "new-proxy-password");
+});
+
 test("web storage redaction clears api keys but keeps configured state", () => {
   const appSettings = settings.normalizeSettings({
     customProviders: [
@@ -1516,6 +1602,38 @@ test("web storage redaction clears api keys but keeps configured state", () => {
   const redacted = sync.redactSettingsForWebStorage(appSettings);
   assert.equal(redacted.customProviders[0].apiKey, "");
   assert.equal(redacted.customProviders[0].apiKeyConfigured, true);
+});
+
+test("web storage redaction clears ssh secrets but keeps configured state", () => {
+  const appSettings = settings.normalizeSettings({
+    ssh: {
+      hosts: [
+        {
+          id: "prod",
+          name: "Production",
+          host: "prod.example.com",
+          username: "deploy",
+          authType: "privateKey",
+          password: "ssh-password",
+          privateKey: "ssh-key",
+          privateKeyPassphrase: "ssh-passphrase",
+          proxy: {
+            password: "proxy-password",
+          },
+        },
+      ],
+    },
+  });
+
+  const redacted = sync.redactSettingsForWebStorage(appSettings);
+  assert.equal(redacted.ssh.hosts[0].password, "");
+  assert.equal(redacted.ssh.hosts[0].privateKey, "");
+  assert.equal(redacted.ssh.hosts[0].privateKeyPassphrase, "");
+  assert.equal(redacted.ssh.hosts[0].proxy.password, "");
+  assert.equal(redacted.ssh.hosts[0].passwordConfigured, true);
+  assert.equal(redacted.ssh.hosts[0].privateKeyConfigured, true);
+  assert.equal(redacted.ssh.hosts[0].privateKeyPassphraseConfigured, true);
+  assert.equal(redacted.ssh.hosts[0].proxy.passwordConfigured, true);
 });
 
 test("only one agent prompt template remains enabled after normalization", () => {
@@ -1603,17 +1721,7 @@ test("hook and cron normalization keep request bodies only for methods that supp
   assert.equal(invalidCronTask.remainingExecutions, undefined);
 });
 
-test("command hook normalization uses script only and drops legacy commands", () => {
-  const legacy = settings.normalizeConversationHook({
-    id: "hook-legacy",
-    type: "command",
-    event: "agent_start",
-    name: "Legacy",
-    commands: [["echo", "legacy"]],
-  });
-  assert.equal(legacy.script, "");
-  assert.equal(legacy.commands, undefined);
-
+test("command hook normalization uses script only", () => {
   const scriptHook = settings.normalizeConversationHook({
     id: "hook-script",
     type: "command",
@@ -1648,6 +1756,7 @@ test("mcp and remote settings normalize transport, selection, ports, and tokens"
     token: " secret ",
     autoReconnect: false,
     heartbeatInterval: "15.8",
+    enableWebSshTerminal: true,
   });
 
   assert.equal(remote.gatewayUrl, "http://127.0.0.1:8787");
@@ -1656,6 +1765,7 @@ test("mcp and remote settings normalize transport, selection, ports, and tokens"
   assert.equal(remote.token, "secret");
   assert.equal(remote.autoReconnect, false);
   assert.equal(remote.heartbeatInterval, 15);
+  assert.equal(remote.enableWebSshTerminal, true);
 
   const remoteWithOversizedPort = settings.normalizeRemoteSettings({
     grpcPort: "70000",

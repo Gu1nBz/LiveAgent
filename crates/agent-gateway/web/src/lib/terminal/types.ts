@@ -4,6 +4,8 @@ export type TerminalSession = {
   cwd: string;
   shell: string;
   title: string;
+  kind: "local" | "ssh";
+  ssh?: TerminalSshMetadata | null;
   pid?: number | null;
   cols: number;
   rows: number;
@@ -14,12 +16,47 @@ export type TerminalSession = {
   running: boolean;
 };
 
+export type TerminalSshMetadata = {
+  hostId: string;
+  hostName: string;
+  username: string;
+  host: string;
+  port: number;
+  authType: string;
+  status: "connected" | "reconnecting" | "disconnected" | string;
+  reconnectAttempt: number;
+  reconnectMaxAttempts: number;
+};
+
+export type TerminalSshPrompt = {
+  id: string;
+  kind: "hostKey" | "auth" | string;
+  hostId: string;
+  hostName: string;
+  host: string;
+  port: number;
+  message: string;
+  fingerprintSha256?: string;
+  keyType?: string;
+  answerEcho?: boolean;
+};
+
 export type TerminalSnapshot = {
   session: TerminalSession;
   output: string;
   truncated: boolean;
   outputStartOffset?: number;
   outputEndOffset?: number;
+};
+
+export type TerminalSshCreateResult = {
+  snapshot?: TerminalSnapshot;
+  prompt?: TerminalSshPrompt;
+};
+
+export type TerminalSshLatency = {
+  sessionId: string;
+  latencyMs: number;
 };
 
 export type TerminalShellOption = {
@@ -54,6 +91,21 @@ export type TerminalClient = {
     cols?: number;
     rows?: number;
   }): Promise<TerminalSnapshot>;
+  createSsh(params: {
+    cwd: string;
+    projectPathKey: string;
+    hostId: string;
+    title?: string;
+    cols?: number;
+    rows?: number;
+  }): Promise<TerminalSshCreateResult>;
+  answerSshPrompt(params: {
+    promptId: string;
+    answer?: string;
+    trustHostKey?: boolean;
+  }): Promise<TerminalSshCreateResult>;
+  cancelSshPrompt(promptId: string): Promise<void>;
+  sshLatency(sessionId: string, projectPathKey?: string): Promise<TerminalSshLatency>;
   snapshot(
     sessionId: string,
     maxBytes?: number,

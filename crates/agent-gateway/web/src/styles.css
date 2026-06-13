@@ -1840,7 +1840,8 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
   }
 
   html[data-liveagent-webui="gateway"] .workspace-code-editor-overlay,
-  html[data-liveagent-webui="gateway"] .workspace-image-preview-overlay {
+  html[data-liveagent-webui="gateway"] .workspace-image-preview-overlay,
+  html[data-liveagent-webui="gateway"] .workspace-ssh-terminal-overlay {
     z-index: 60;
   }
 
