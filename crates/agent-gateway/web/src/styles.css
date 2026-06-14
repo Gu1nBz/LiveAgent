@@ -1883,17 +1883,34 @@ html[data-liveagent-webui="gateway"] .project-terminal-viewport .xterm-viewport:
     width: min(86vw, 272px) !important;
     max-width: min(86vw, 272px);
     box-shadow: 18px 0 48px hsl(220 22% 10% / 0.16);
-    opacity: 0;
+    /* The drawer is ~86vw wide — almost the full screen on mobile. Fading the
+       opaque panel in from opacity:0 lets the chat content show through it for
+       the duration of the transition, then it snaps solid, which reads as the
+       whole page flashing. Slide only; hide the closed panel (and its shadow)
+       with `visibility` so there is no translucent blend frame. */
+    opacity: 1;
+    visibility: hidden;
     transform: translate3d(-100%, 0, 0);
     transition:
       transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-      opacity 140ms ease !important;
-    will-change: transform, opacity;
+      visibility 0s linear 180ms !important;
+    will-change: transform;
+    /* As a fixed, layer-promoted drawer, `contain: paint` (inherited from the
+       base rule) makes the compositor intermittently re-raster the covered
+       region during the slide — a one-frame whole-screen flash. Drop paint
+       containment here and pin a stable backing layer so the transform plays
+       on its own compositor layer without re-painting the page behind it. */
+    contain: layout style;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
   }
 
   .gateway-editor-host > .chat-history-sidebar[data-state="open"] {
-    opacity: 1;
+    visibility: visible;
     transform: translate3d(0, 0, 0);
+    transition:
+      transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      visibility 0s linear 0s !important;
   }
 
   .gateway-editor-host > .chat-history-sidebar[data-state="closed"] {
@@ -1904,6 +1921,8 @@ html[data-liveagent-webui="gateway"] .project-terminal-viewport .xterm-viewport:
     width: 100%;
     min-width: 0;
     transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
   }
 
   .gateway-footer-strip {
@@ -1919,9 +1938,30 @@ html[data-liveagent-webui="gateway"] .project-terminal-viewport .xterm-viewport:
     max-height: none;
     border: 0;
     border-radius: 0;
-    background: hsl(var(--background) / 0.97);
+    /* This panel is a full-screen (inset:0) mobile sheet. A translucent
+       background plus `backdrop-filter: blur()` means the whole viewport behind
+       it is re-sampled and blurred every frame — and because the React open
+       animation also fades opacity 0→1 and slides translateY, the panel is
+       see-through *and* blurring mid-transition, before its content paints.
+       That translucent, blurred, content-less frame is the flash. An opaque
+       sheet with no backdrop blur covers everything it covers anyway, so drop
+       both and slide only. */
+    background: hsl(var(--background));
     box-shadow: none;
-    backdrop-filter: blur(18px);
+    opacity: 1 !important;
+    visibility: hidden;
+    transition:
+      transform 200ms ease,
+      visibility 0s linear 200ms !important;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+  }
+
+  html[data-liveagent-webui="gateway"] .project-tools-panel[data-state="open"] {
+    visibility: visible;
+    transition:
+      transform 200ms ease,
+      visibility 0s linear 0s !important;
   }
 
   html[data-liveagent-webui="gateway"] .workspace-code-editor-overlay,
