@@ -3,7 +3,7 @@ import { useLocale } from "@/i18n";
 import { cn } from "@/lib/shared/utils";
 import type { SftpClient } from "@/lib/sftp/types";
 import type { TerminalClient, TerminalSession } from "@/lib/terminal/types";
-import { AlertTriangle, FolderTree, RefreshCw, Terminal, Wifi, WifiOff, X } from "../icons";
+import { AlertTriangle, FolderTree, Terminal, X } from "../icons";
 import { XTermViewport } from "../project-tools/XTermViewport";
 import { WorkspaceSftpPanel } from "./WorkspaceSftpPanel";
 
@@ -39,19 +39,6 @@ function sshSessionStatus(session: TerminalSession) {
   return status;
 }
 
-function sshStatusLabel(session: TerminalSession, t: (key: string) => string) {
-  const status = sshSessionStatus(session);
-  if (status === "reconnecting") {
-    const attempt = Math.max(1, Number(session.ssh?.reconnectAttempt ?? 1));
-    const max = Math.max(attempt, Number(session.ssh?.reconnectMaxAttempts ?? 3));
-    return t("workspaceSshTerminal.reconnecting")
-      .replace("{attempt}", String(attempt))
-      .replace("{max}", String(max));
-  }
-  if (status === "disconnected") return t("workspaceSshTerminal.disconnected");
-  return t("workspaceSshTerminal.connected");
-}
-
 function sessionTitle(session: TerminalSession, fallback: string) {
   return session.title || session.ssh?.hostName || fallback;
 }
@@ -68,15 +55,6 @@ function statusDotClassName(session: TerminalSession) {
   if (status === "connected") return "bg-emerald-500";
   if (status === "reconnecting") return "bg-amber-500";
   return "bg-destructive";
-}
-
-function statusIcon(session: TerminalSession) {
-  const status = sshSessionStatus(session);
-  if (status === "connected") return <Wifi className="h-3.5 w-3.5 text-emerald-600" />;
-  if (status === "reconnecting") {
-    return <RefreshCw className="h-3.5 w-3.5 animate-spin text-amber-600" />;
-  }
-  return <WifiOff className="h-3.5 w-3.5 text-destructive" />;
 }
 
 function tabIdFor(sessionId: string, kind: WorkspaceSshTerminalTabKind) {
@@ -210,12 +188,6 @@ export function WorkspaceSshTerminalOverlay(props: WorkspaceSshTerminalOverlayPr
               : t("workspaceSshTerminal.empty")}
           </div>
         </div>
-        {activeSession ? (
-          <div className="hidden shrink-0 items-center gap-1.5 rounded-md bg-background/70 px-2 py-1 text-[11px] text-muted-foreground sm:flex">
-            {statusIcon(activeSession)}
-            <span>{sshStatusLabel(activeSession, t)}</span>
-          </div>
-        ) : null}
         <button
           type="button"
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:border-border hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
