@@ -120,9 +120,8 @@ export function formatConfiguredAgents(templates: DelegateAgentTemplate[]) {
   return templates
     .slice(0, 12)
     .map((template) => {
-      const tags = template.tags.length > 0 ? ` tags=${template.tags.join(",")}` : "";
       const description = template.description ? ` - ${template.description}` : "";
-      return `${template.id} (${template.name})${tags}${description}`;
+      return `${template.id} (${template.name})${description}`;
     })
     .join("\n");
 }

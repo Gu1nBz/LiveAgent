@@ -46,7 +46,6 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
             template_id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT NOT NULL,
-            tags_json TEXT NOT NULL,
             prompt TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 0,
             sort_index INTEGER NOT NULL,

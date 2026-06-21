@@ -9,7 +9,6 @@ import { Textarea } from "../../components/ui/textarea";
 import { useLocale } from "../../i18n";
 import { useModalMotion } from "../../lib/shared/modalMotion";
 import type { AgentPromptTemplate } from "../../lib/settings";
-import { parseAgentTagsInput, PromptTag, stringifyAgentTags } from "./shared";
 
 type AgentPromptTemplateModalProps = {
   initialData?: AgentPromptTemplate;
@@ -25,7 +24,6 @@ export function AgentPromptTemplateModal({
   const { t } = useLocale();
   const [name, setName] = useState(initialData?.name ?? "");
   const [description, setDescription] = useState(initialData?.description ?? "");
-  const [tagsInput, setTagsInput] = useState(() => stringifyAgentTags(initialData?.tags ?? []));
   const [prompt, setPrompt] = useState(initialData?.prompt ?? "");
   const { isClosing, modalState, requestClose } = useModalMotion(onClose);
 
@@ -39,20 +37,22 @@ export function AgentPromptTemplateModal({
     onSave({
       name: trimmedName,
       description: description.trim(),
-      tags: parseAgentTagsInput(tagsInput),
       prompt: trimmedPrompt,
     });
     requestClose();
   }
-
-  const parsedTags = parseAgentTagsInput(tagsInput);
 
   return createPortal(
     <div
       className="settings-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4"
       data-state={modalState}
     >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={requestClose} />
+      <button
+        type="button"
+        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
+        onClick={requestClose}
+        aria-label={t("settings.cancel")}
+      />
 
       <div className="settings-modal-panel relative z-10 flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl">
         <div className="settings-modal-header flex items-center gap-3 border-b px-6 py-4">
@@ -68,44 +68,20 @@ export function AgentPromptTemplateModal({
         </div>
 
         <div className="settings-modal-body flex-1 overflow-y-auto px-6 py-5">
-          <div className="settings-form-grid grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label
-                htmlFor="agent-template-name"
-                className="text-xs font-medium text-muted-foreground"
-              >
-                {t("settings.agentsName")}
-              </Label>
-              <Input
-                id="agent-template-name"
-                value={name}
-                placeholder={t("settings.agentsNamePlaceholder")}
-                onChange={(e) => setName(e.currentTarget.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label
-                htmlFor="agent-template-tags"
-                className="text-xs font-medium text-muted-foreground"
-              >
-                {t("settings.agentsTags")}
-              </Label>
-              <Input
-                id="agent-template-tags"
-                value={tagsInput}
-                placeholder={t("settings.agentsTagsPlaceholder")}
-                onChange={(e) => setTagsInput(e.currentTarget.value)}
-              />
-            </div>
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="agent-template-name"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              {t("settings.agentsName")}
+            </Label>
+            <Input
+              id="agent-template-name"
+              value={name}
+              placeholder={t("settings.agentsNamePlaceholder")}
+              onChange={(e) => setName(e.currentTarget.value)}
+            />
           </div>
-
-          {parsedTags.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {parsedTags.map((tag) => (
-                <PromptTag key={tag} label={tag} />
-              ))}
-            </div>
-          ) : null}
 
           <div className="mt-4 space-y-1.5">
             <Label

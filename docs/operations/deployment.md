@@ -27,7 +27,7 @@
 | `LIVEAGENT_GATEWAY_TOKEN` | 是 | WebUI、HTTP API、桌面 gRPC 的共享访问 token。 |
 | `PORT` | Railway 自动提供 | HTTP/WebUI 监听端口，未提供时 Dockerfile 默认 `8080`。 |
 | `LIVEAGENT_GATEWAY_GRPC_ADDR` | 否 | gRPC 监听地址，默认 `:50051`。 |
-| `LIVEAGENT_GATEWAY_CHAT_EVENT_STORE` | 否 | Gateway Chat Event Store SQLite 路径；未设置时使用用户配置目录下的 `LiveAgent/gateway-chat.sqlite3`。生产容器建议挂载持久卷。 |
+| `LIVEAGENT_GATEWAY_CHAT_EVENT_STORE` | 否 | Gateway Chat Event Store SQLite 路径；Docker 镜像默认使用 `/var/lib/liveagent/gateway-chat.sqlite3`，其他运行方式未设置时使用用户配置目录下的 `LiveAgent/gateway-chat.sqlite3`。生产容器建议挂载持久卷。 |
 | `LIVEAGENT_GATEWAY_CHAT_START_TIMEOUT` | 否 | Chat command 下发后等待桌面端回报 `delivered/claimed/starting` 的超时，默认 `15s`。 |
 | `LIVEAGENT_GATEWAY_CHAT_RENDER_START_TIMEOUT` | 否 | 桌面端接受 command 后等待 `started` 的超时，默认 `45s`。 |
 

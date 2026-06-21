@@ -143,7 +143,7 @@ gateway-docker-smoke: gateway-docker-build
 	@set -e; \
 	name="liveagent-gateway-smoke"; \
 	docker rm -f "$$name" >/dev/null 2>&1 || true; \
-	docker run --rm -d --name "$$name" -p 18080:8080 -e LIVEAGENT_GATEWAY_TOKEN=$(DEV_GATEWAY_TOKEN) $(GATEWAY_DOCKER_IMAGE) >/dev/null; \
+	docker run -d --name "$$name" -p 18080:8080 -e LIVEAGENT_GATEWAY_TOKEN=$(DEV_GATEWAY_TOKEN) $(GATEWAY_DOCKER_IMAGE) >/dev/null; \
 	trap 'docker rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
 	for _ in $$(seq 1 30); do \
 		if curl -fsS http://127.0.0.1:18080/healthz | grep -q '"ok":true'; then \
@@ -152,7 +152,8 @@ gateway-docker-smoke: gateway-docker-build
 		fi; \
 		sleep 1; \
 	done; \
-	docker logs "$$name"; \
+	echo "Gateway Docker smoke test failed; container logs:"; \
+	docker logs "$$name" || true; \
 	exit 1
 
 build-linux: proto webui

@@ -377,7 +377,6 @@ function createDelegateHarness(options = {}) {
         id: "reviewer",
         name: "Reviewer",
         description: "Review code paths",
-        tags: ["review"],
         prompt: "Focus on concrete defects.",
       },
     ],

@@ -79,7 +79,8 @@ jobs:
       - name: Smoke test container
         run: |
           set -euo pipefail
-          docker run --rm -d \
+          docker rm -f liveagent-gateway-smoke >/dev/null 2>&1 || true
+          docker run -d \
             --name liveagent-gateway-smoke \
             -p 18080:8080 \
             -e LIVEAGENT_GATEWAY_TOKEN=ci-token \
@@ -91,7 +92,8 @@ jobs:
             fi
             sleep 1
           done
-          docker logs liveagent-gateway-smoke
+          echo "Gateway Docker smoke test failed; container logs:"
+          docker logs liveagent-gateway-smoke || true
           exit 1
 
   webui:

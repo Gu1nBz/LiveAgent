@@ -62,23 +62,23 @@ function NavItem({ icon, label, active, onClick }: NavItemProps) {
     <button
       type="button"
       onClick={onClick}
-      className={`settings-nav-item group w-full rounded-xl px-3 py-2.5 text-left transition-all ${
+      className={`settings-nav-item group relative w-full rounded-lg px-3 py-2 text-left transition-all duration-150 ${
         active
-          ? "settings-nav-item-active bg-primary text-primary-foreground shadow-xs"
-          : "text-foreground hover:bg-accent/60"
+          ? "settings-nav-item-active bg-primary/10 font-medium text-primary"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
       }`}
     >
       <div className="flex items-center gap-3">
         <div
-          className={`settings-nav-icon flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+          className={`settings-nav-icon flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${
             active
-              ? "bg-primary-foreground/20 text-primary-foreground"
-              : "bg-accent text-muted-foreground group-hover:bg-accent/80"
+              ? "bg-primary/15 text-primary"
+              : "bg-muted/60 text-muted-foreground group-hover:bg-accent group-hover:text-foreground"
           }`}
         >
           {icon}
         </div>
-        <div className="settings-nav-label min-w-0 text-sm font-medium leading-none">
+        <div className="settings-nav-label min-w-0 truncate text-sm leading-none">
           {label}
         </div>
       </div>
@@ -86,38 +86,39 @@ function NavItem({ icon, label, active, onClick }: NavItemProps) {
   );
 }
 
-const NAV_ITEMS_STATIC: Array<{ id: SectionId; icon: ReactNode }> = [
+type NavGroup = {
+  labelKey: string;
+  items: Array<{ id: SectionId; icon: ReactNode }>;
+};
+
+const NAV_GROUPS: NavGroup[] = [
   {
-    id: "system",
-    icon: <Settings2 className="h-4 w-4" />,
+    labelKey: "settings.groupGeneral",
+    items: [
+      { id: "system", icon: <Settings2 className="h-4 w-4" /> },
+      { id: "providers", icon: <Cpu className="h-4 w-4" /> },
+      { id: "agents", icon: <BookOpen className="h-4 w-4" /> },
+    ],
   },
   {
-    id: "providers",
-    icon: <Cpu className="h-4 w-4" />,
+    labelKey: "settings.groupIntelligence",
+    items: [
+      { id: "memory", icon: <Brain className="h-4 w-4" /> },
+    ],
   },
   {
-    id: "agents",
-    icon: <BookOpen className="h-4 w-4" />,
+    labelKey: "settings.groupAutomation",
+    items: [
+      { id: "hooks", icon: <Zap className="h-4 w-4" /> },
+      { id: "cron", icon: <Clock3 className="h-4 w-4" /> },
+    ],
   },
   {
-    id: "memory",
-    icon: <Brain className="h-4 w-4" />,
-  },
-  {
-    id: "hooks",
-    icon: <Zap className="h-4 w-4" />,
-  },
-  {
-    id: "cron",
-    icon: <Clock3 className="h-4 w-4" />,
-  },
-  {
-    id: "ssh",
-    icon: <Key className="h-4 w-4" />,
-  },
-  {
-    id: "remote",
-    icon: <Cloud className="h-4 w-4" />,
+    labelKey: "settings.groupConnectivity",
+    items: [
+      { id: "ssh", icon: <Key className="h-4 w-4" /> },
+      { id: "remote", icon: <Cloud className="h-4 w-4" /> },
+    ],
   },
 ];
 
@@ -145,13 +146,19 @@ export function SettingsPage(props: SettingsPageProps) {
   };
 
   const hiddenSectionSet = useMemo(() => new Set(hiddenSections), [hiddenSections]);
-  const navItems = useMemo(
+  const navGroups = useMemo(
     () =>
-      NAV_ITEMS_STATIC.filter((item) => !hiddenSectionSet.has(item.id)).map((item) => ({
-        ...item,
-        label: sectionLabels[item.id],
-      })),
-    [hiddenSectionSet, sectionLabels],
+      NAV_GROUPS.map((group) => ({
+        label: t(group.labelKey),
+        items: group.items
+          .filter((item) => !hiddenSectionSet.has(item.id))
+          .map((item) => ({ ...item, label: sectionLabels[item.id] })),
+      })).filter((group) => group.items.length > 0),
+    [hiddenSectionSet, sectionLabels, t],
+  );
+  const allNavItems = useMemo(
+    () => navGroups.flatMap((g) => g.items),
+    [navGroups],
   );
 
   useEffect(() => {
@@ -159,11 +166,11 @@ export function SettingsPage(props: SettingsPageProps) {
   }, [initialSection]);
 
   useEffect(() => {
-    if (navItems.some((item) => item.id === section)) {
+    if (allNavItems.some((item) => item.id === section)) {
       return;
     }
-    setSection(navItems[0]?.id ?? "system");
-  }, [navItems, section]);
+    setSection(allNavItems[0]?.id ?? "system");
+  }, [allNavItems, section]);
 
   const saveIndicator = getSaveIndicator(saveState, t);
   const sectionContent = (() => {
@@ -199,39 +206,49 @@ export function SettingsPage(props: SettingsPageProps) {
 
   return (
     <div className="settings-page-shell flex h-full bg-background">
-      <aside className="settings-sidebar flex w-60 shrink-0 flex-col border-r bg-muted/30">
-        <div className="settings-sidebar-header flex items-center gap-2.5 border-b px-4 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-            <Settings2 className="h-4 w-4 text-primary" />
-          </div>
-          <div>
-            <div className="text-sm font-semibold">{t("settings.title")}</div>
-            <div className="text-[11px] text-muted-foreground">LiveAgent</div>
-          </div>
-        </div>
-
-        <nav className="settings-nav flex-1 space-y-1 px-3 py-3">
-          {navItems.map((item) => (
-            <NavItem
-              key={item.id}
-              icon={item.icon}
-              label={item.label}
-              active={section === item.id}
-              onClick={() => setSection(item.id)}
-            />
-          ))}
-        </nav>
-
-        <div className="settings-back-bar border-t px-3 py-3">
+      <aside className="settings-sidebar flex w-60 shrink-0 flex-col border-r border-border/60 bg-muted/20">
+        <div className="settings-sidebar-header border-b border-border/60 px-3 pb-3 pt-3">
           <button
             type="button"
             onClick={onBack}
-            className="settings-back-button flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            className="settings-back-button flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className="h-3.5 w-3.5" />
             <span>{t("settings.backToChat")}</span>
           </button>
+
+          <div className="mt-3 flex items-center gap-2.5 px-1">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+              <Settings2 className="h-4 w-4 text-primary" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold tracking-tight">{t("settings.title")}</div>
+              <div className="text-[11px] text-muted-foreground">LiveAgent</div>
+            </div>
+          </div>
         </div>
+
+        <nav className="settings-nav flex-1 overflow-y-auto px-3 py-3">
+          {navGroups.map((group, gi) => (
+            <div key={group.label} className={`settings-nav-group ${gi > 0 ? "mt-4" : ""}`}>
+              <div className="settings-nav-group-label mb-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                {group.label}
+              </div>
+              <div className="space-y-0.5">
+                {group.items.map((item) => (
+                  <NavItem
+                    key={item.id}
+                    icon={item.icon}
+                    label={item.label}
+                    active={section === item.id}
+                    onClick={() => setSection(item.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </nav>
+
       </aside>
 
       <main className="settings-main flex min-w-0 flex-1 flex-col">

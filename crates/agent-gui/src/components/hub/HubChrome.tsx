@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useLocale } from "../../i18n";
 import { cn } from "../../lib/shared/utils";
 import { PanelLeft } from "../icons";
+import { isMacOsTauri, MacOsTitleBarSpacer } from "../MacOsTitleBarSpacer";
 import { Button } from "../ui/button";
 
 export function HubBackdrop(props: { tone?: "amber" | "violet" | "neutral" }) {
@@ -43,43 +44,47 @@ export function HubHeader(props: {
 }) {
   const { icon, title, subtitle, actions, sidebarOpen, onOpenSidebar } = props;
   const { t } = useLocale();
-  const showSidebarButton = !sidebarOpen;
+  const isMacTitleBarOverlay = isMacOsTauri();
+  const showSidebarButton = !sidebarOpen && !isMacTitleBarOverlay;
   return (
-    <div className="hub-header relative z-10 px-5 pt-6 pb-3 sm:px-6 lg:px-8 xl:px-10">
-      {showSidebarButton ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onOpenSidebar}
-          title={t("tooltip.openSidebar")}
-          className="absolute left-3 top-5 h-9 w-9 rounded-lg text-muted-foreground hover:bg-background/70 hover:text-foreground"
+    <>
+      <MacOsTitleBarSpacer />
+      <div className="hub-header relative z-10 px-5 pt-6 pb-3 sm:px-6 lg:px-8 xl:px-10">
+        {showSidebarButton ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onOpenSidebar}
+            title={t("tooltip.openSidebar")}
+            className="absolute left-3 top-5 h-9 w-9 rounded-lg text-muted-foreground hover:bg-background/70 hover:text-foreground"
+          >
+            <PanelLeft className="h-4.5 w-4.5" />
+          </Button>
+        ) : null}
+        <div
+          className={cn(
+            "mx-auto flex w-full max-w-[1320px] items-center gap-4",
+            showSidebarButton && "pl-11 lg:pl-0",
+          )}
         >
-          <PanelLeft className="h-4.5 w-4.5" />
-        </Button>
-      ) : null}
-      <div
-        className={cn(
-          "mx-auto flex w-full max-w-[1320px] items-center gap-4",
-          showSidebarButton && "pl-11 lg:pl-0",
-        )}
-      >
-        <div className="hub-header-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-border/40 bg-background/70 text-foreground/80 shadow-[0_1px_0_rgba(255,255,255,0.55)_inset] backdrop-blur-xl">
-          {icon}
+          <div className="hub-header-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-border/40 bg-background/70 text-foreground/80 shadow-[0_1px_0_rgba(255,255,255,0.55)_inset] backdrop-blur-xl">
+            {icon}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-[21px] font-semibold leading-tight tracking-tight text-foreground">
+              {title}
+            </h1>
+            {subtitle ? (
+              <p className="mt-0.5 truncate text-[12px] text-muted-foreground" title={subtitle}>
+                {subtitle}
+              </p>
+            ) : null}
+          </div>
+          {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
         </div>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-[21px] font-semibold leading-tight tracking-tight text-foreground">
-            {title}
-          </h1>
-          {subtitle ? (
-            <p className="mt-0.5 truncate text-[12px] text-muted-foreground" title={subtitle}>
-              {subtitle}
-            </p>
-          ) : null}
-        </div>
-        {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -102,7 +107,6 @@ export function GlassPanel(props: {
         return active
           ? "border-border/55 bg-background/80 shadow-[0_1px_0_rgba(255,255,255,0.6)_inset,0_6px_22px_-14px_rgba(15,23,42,0.18)]"
           : "border-border/40 bg-background/60";
-      case "default":
       default:
         return "border-border/40 bg-background/60";
     }

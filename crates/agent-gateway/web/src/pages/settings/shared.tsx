@@ -1,19 +1,5 @@
 export { ConfirmActionPopover, ConfirmDeletePopover } from "../../components/ui/confirm-action-popover";
 
-export function parseAgentTagsInput(input: string): string[] {
-  const out: string[] = [];
-  for (const value of input.split(/[\n,，]+/)) {
-    const tag = value.trim();
-    if (!tag || out.includes(tag)) continue;
-    out.push(tag);
-  }
-  return out;
-}
-
-export function stringifyAgentTags(tags: string[]): string {
-  return tags.join(", ");
-}
-
 export function PromptTag({ label, muted = false }: { label: string; muted?: boolean }) {
   return (
     <span

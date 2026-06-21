@@ -812,7 +812,6 @@ mod tests {
                     "id": "reviewer",
                     "name": "代码审查",
                     "description": "用于审查 PR 和补测试缺口",
-                    "tags": ["review", "qa"],
                     "prompt": "你是一个严格的代码审查助手。",
                     "enabled": true
                 },
@@ -820,7 +819,6 @@ mod tests {
                     "id": "planner",
                     "name": "任务规划",
                     "description": "",
-                    "tags": [],
                     "prompt": "先拆任务，再执行。",
                     "enabled": false
                 }
@@ -833,13 +831,6 @@ mod tests {
                 row.get::<_, i64>(0)
             })
             .expect("count agent rows");
-        let stored_tags = conn
-            .query_row(
-                "SELECT tags_json FROM agent_prompt_templates WHERE template_id = 'reviewer'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .expect("query reviewer tags");
         let stored_enabled = conn
             .query_row(
                 "SELECT enabled FROM agent_prompt_templates WHERE template_id = 'reviewer'",
@@ -850,7 +841,6 @@ mod tests {
         let loaded = load_agents(&conn).expect("load agents");
 
         assert_eq!(row_count, 2);
-        assert_eq!(stored_tags, "[\"review\",\"qa\"]");
         assert_eq!(stored_enabled, 1);
         assert_eq!(
             loaded,
@@ -859,7 +849,6 @@ mod tests {
                     "id": "reviewer",
                     "name": "代码审查",
                     "description": "用于审查 PR 和补测试缺口",
-                    "tags": ["review", "qa"],
                     "prompt": "你是一个严格的代码审查助手。",
                     "enabled": true
                 },
@@ -867,7 +856,6 @@ mod tests {
                     "id": "planner",
                     "name": "任务规划",
                     "description": "",
-                    "tags": [],
                     "prompt": "先拆任务，再执行。",
                     "enabled": false
                 }

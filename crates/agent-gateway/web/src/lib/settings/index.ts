@@ -222,7 +222,6 @@ export type AgentPromptTemplate = {
   id: string;
   name: string;
   description: string;
-  tags: string[];
   prompt: string;
   enabled: boolean;
 };
@@ -934,15 +933,6 @@ function normalizeStringArray(input: unknown): string[] {
     .filter(Boolean);
 }
 
-function normalizeOrderedUniqueStrings(input: unknown): string[] {
-  const out: string[] = [];
-  for (const value of normalizeStringArray(input)) {
-    if (out.includes(value)) continue;
-    out.push(value);
-  }
-  return out;
-}
-
 function normalizeOptionalText(input: unknown): string {
   return typeof input === "string" ? input.trim() : "";
 }
@@ -1298,7 +1288,6 @@ export function normalizeAgentPromptTemplate(input: unknown): AgentPromptTemplat
     id: typeof obj.id === "string" && obj.id.trim() ? obj.id.trim() : crypto.randomUUID(),
     name: typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : "未命名模板",
     description: normalizeOptionalText(obj.description),
-    tags: normalizeOrderedUniqueStrings(obj.tags),
     prompt: normalizeOptionalText(obj.prompt),
     enabled: obj.enabled === true,
   };

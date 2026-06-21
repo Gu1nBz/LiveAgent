@@ -33,7 +33,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin liveagent
+RUN useradd --system --uid 10001 --user-group --home-dir /nonexistent --shell /usr/sbin/nologin liveagent \
+    && install -d -o liveagent -g liveagent -m 0700 /var/lib/liveagent
 
 COPY --from=gateway-builder /out/liveagent-gateway /usr/local/bin/liveagent-gateway
 
@@ -41,6 +42,7 @@ USER liveagent
 
 ENV PORT=8080
 ENV LIVEAGENT_GATEWAY_GRPC_ADDR=:50051
+ENV LIVEAGENT_GATEWAY_CHAT_EVENT_STORE=/var/lib/liveagent/gateway-chat.sqlite3
 
 EXPOSE 8080 50051
 

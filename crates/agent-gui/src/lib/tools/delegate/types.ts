@@ -49,7 +49,7 @@ export type DelegateApplyPolicy = "none" | "explicit" | "auto";
 
 export type DelegateAgentTemplate = Pick<
   AgentPromptTemplate,
-  "id" | "name" | "description" | "tags" | "prompt"
+  "id" | "name" | "description" | "prompt"
 >;
 
 export type DelegateWorktreeInfo = {

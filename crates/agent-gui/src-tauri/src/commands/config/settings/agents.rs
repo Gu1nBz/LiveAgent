@@ -9,26 +9,19 @@ fn load_agents(conn: &Connection) -> Result<Option<Value>, String> {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(4)?,
             ))
         })
         .map_err(|e| format!("读取 {AGENT_PROMPT_TEMPLATES_TABLE} 失败：{e}"))?;
 
     let mut templates = Vec::new();
     for row in rows {
-        let (template_id, name, description, tags_json, prompt, enabled) =
+        let (template_id, name, description, prompt, enabled) =
             row.map_err(|e| format!("读取 {AGENT_PROMPT_TEMPLATES_TABLE} 行失败：{e}"))?;
-        let tags_value = parse_json(&tags_json, AGENT_PROMPT_TEMPLATES_TABLE)?;
-        let tags = extract_string_array(Some(&tags_value), AGENT_PROMPT_TEMPLATES_TABLE)?;
         templates.push(Value::Object(Map::from_iter([
             ("id".to_string(), Value::String(template_id)),
             ("name".to_string(), Value::String(name)),
             ("description".to_string(), Value::String(description)),
-            (
-                "tags".to_string(),
-                Value::Array(tags.into_iter().map(Value::String).collect()),
-            ),
             ("prompt".to_string(), Value::String(prompt)),
             ("enabled".to_string(), Value::Bool(enabled != 0)),
         ])));
@@ -65,8 +58,6 @@ fn save_agents(conn: &mut Connection, payload: Value) -> Result<(), String> {
         let prompt =
             extract_non_empty_string(&template, "prompt", "settings_save_agents payload[]")?;
         let description = extract_optional_string(&template, "description");
-        let tags =
-            extract_string_array(template.get("tags"), "settings_save_agents payload[].tags")?;
         let enabled = match template.get("enabled") {
             Some(Value::Bool(value)) => *value,
             Some(Value::Null) | None => false,
@@ -82,10 +73,6 @@ fn save_agents(conn: &mut Connection, payload: Value) -> Result<(), String> {
             }
             enabled_template_id = Some(template_id.clone());
         }
-        let tags_json = serialize_json(
-            &Value::Array(tags.into_iter().map(Value::String).collect()),
-            AGENT_PROMPT_TEMPLATES_TABLE,
-        )?;
 
         tx.execute(
             AGENT_PROMPT_TEMPLATES_INSERT_SQL,
@@ -93,7 +80,6 @@ fn save_agents(conn: &mut Connection, payload: Value) -> Result<(), String> {
                 template_id,
                 name,
                 description,
-                tags_json,
                 prompt,
                 if enabled { 1_i64 } else { 0_i64 },
                 sort_index as i64,

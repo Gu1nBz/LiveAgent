@@ -2225,6 +2225,7 @@ html[data-liveagent-webui="gateway"] .project-terminal-viewport .xterm-viewport:
   html[data-liveagent-webui="gateway"] .settings-nav {
     order: 2;
     display: flex;
+    flex-wrap: nowrap;
     flex: 0 0 auto;
     gap: 6px;
     overflow-x: auto;
@@ -2241,12 +2242,30 @@ html[data-liveagent-webui="gateway"] .project-terminal-viewport .xterm-viewport:
     margin-top: 0 !important;
   }
 
+  html[data-liveagent-webui="gateway"] .settings-nav-group {
+    display: contents;
+    margin-top: 0 !important;
+  }
+
+  html[data-liveagent-webui="gateway"] .settings-nav-group-label {
+    display: none;
+  }
+
+  html[data-liveagent-webui="gateway"] .settings-nav-group > div:last-child {
+    display: contents;
+  }
+
+  html[data-liveagent-webui="gateway"] .settings-nav-group > div:last-child > * + * {
+    margin-top: 0 !important;
+  }
+
   html[data-liveagent-webui="gateway"] .settings-nav-item {
     width: auto;
     flex: 0 0 auto;
     white-space: nowrap;
     border: 1px solid hsl(var(--border) / 0.5);
     padding: 8px 10px;
+    border-radius: 10px;
   }
 
   html[data-liveagent-webui="gateway"] .settings-nav-item-active {
