@@ -15,19 +15,13 @@ import { Button } from "../../components/ui/button";
 import { useLocale } from "../../i18n";
 import type { AppUpdateCheckResult, AppUpdateController } from "../../lib/appUpdates";
 import { updateUpdateSettings } from "../../lib/settings";
+import { formatReleaseDate } from "./aboutDate";
 import { AgentActivationSwitch } from "./shared";
 import type { SettingsSectionProps } from "./types";
 
 type AboutSectionProps = SettingsSectionProps & {
   appUpdate: AppUpdateController;
 };
-
-function formatReleaseDate(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-}
 
 function releaseTitle(result?: AppUpdateCheckResult) {
   if (!result) return "";
