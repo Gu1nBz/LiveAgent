@@ -26,6 +26,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     "tooltip.switchToDark": "切换到深色模式",
     "tooltip.closeSidebar": "关闭边栏",
     "tooltip.openSidebar": "打开边栏",
+    "appUpdate.update": "更新",
+    "appUpdate.updateTo": "更新到 v{version}",
+    "appUpdate.failedRetry": "更新失败：{message}。点击重试。",
 
     /* ── Chat Page ── */
     "chat.newConversation": "新对话",
@@ -1478,6 +1481,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     "tooltip.switchToDark": "Switch to Dark Mode",
     "tooltip.closeSidebar": "Close Sidebar",
     "tooltip.openSidebar": "Open Sidebar",
+    "appUpdate.update": "Update",
+    "appUpdate.updateTo": "Update to v{version}",
+    "appUpdate.failedRetry": "Update failed: {message}. Click to retry.",
 
     /* ── Chat Page ── */
     "chat.newConversation": "New Conversation",

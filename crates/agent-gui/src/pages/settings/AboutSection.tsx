@@ -1,6 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -15,34 +13,14 @@ import {
 import { Markdown } from "../../components/Markdown";
 import { Button } from "../../components/ui/button";
 import { useLocale } from "../../i18n";
+import type { AppUpdateCheckResult, AppUpdateController } from "../../lib/appUpdates";
 import { updateUpdateSettings } from "../../lib/settings";
 import { AgentActivationSwitch } from "./shared";
 import type { SettingsSectionProps } from "./types";
 
-type AppUpdateChannel = "stable" | "prerelease";
-
-type AppUpdateCheckResult = {
-  configured: boolean;
-  available: boolean;
-  currentVersion: string;
-  version?: string | null;
-  date?: string | null;
-  body?: string | null;
-  channel: AppUpdateChannel;
-  releaseTag?: string | null;
-  releaseName?: string | null;
-  releaseUrl?: string | null;
-  repository: string;
-  message?: string | null;
+type AboutSectionProps = SettingsSectionProps & {
+  appUpdate: AppUpdateController;
 };
-
-type CheckState =
-  | { status: "checking"; result?: AppUpdateCheckResult }
-  | { status: "ready"; result: AppUpdateCheckResult }
-  | { status: "installing"; result: AppUpdateCheckResult }
-  | { status: "installed"; result: AppUpdateCheckResult }
-  | { status: "restarting"; result: AppUpdateCheckResult }
-  | { status: "error"; result?: AppUpdateCheckResult; message: string };
 
 function formatReleaseDate(value?: string | null) {
   if (!value) return "";
@@ -86,73 +64,22 @@ function releaseNotesBody(result?: AppUpdateCheckResult) {
   return body;
 }
 
-export function AboutSection(props: SettingsSectionProps) {
-  const { settings, setSettings } = props;
+export function AboutSection(props: AboutSectionProps) {
+  const { settings, setSettings, appUpdate } = props;
   const { t } = useLocale();
   const includePrereleases = settings.updates.includePrereleases;
-  const [checkState, setCheckState] = useState<CheckState>({ status: "checking" });
-
-  const runCheck = useCallback(async () => {
-    setCheckState((prev) => ({
-      status: "checking",
-      result: "result" in prev ? prev.result : undefined,
-    }));
-
-    try {
-      const result = await invoke<AppUpdateCheckResult>("app_update_check", {
-        include_prerelease: includePrereleases,
-      });
-      setCheckState({ status: "ready", result });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setCheckState((prev) => ({
-        status: "error",
-        result: "result" in prev ? prev.result : undefined,
-        message: message || t("settings.aboutUpdateCheckFailed"),
-      }));
-    }
-  }, [includePrereleases, t]);
-
-  useEffect(() => {
-    void runCheck();
-  }, [runCheck]);
+  const checkState = appUpdate.state;
 
   async function handleInstallUpdate() {
-    if (checkState.status !== "ready" || !checkState.result.available) return;
-
-    setCheckState({ status: "installing", result: checkState.result });
-    try {
-      const result = await invoke<AppUpdateCheckResult>("app_update_install", {
-        include_prerelease: includePrereleases,
-      });
-      setCheckState({ status: "installed", result });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setCheckState({
-        status: "error",
-        result: checkState.result,
-        message: message || t("settings.aboutUpdateInstallFailed"),
-      });
-    }
+    await appUpdate.installOnly().catch(() => undefined);
   }
 
   async function handleRestartApp() {
     if (checkState.status !== "installed") return;
-
-    setCheckState({ status: "restarting", result: checkState.result });
-    try {
-      await invoke("app_restart");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setCheckState({
-        status: "error",
-        result: checkState.result,
-        message: message || t("settings.aboutRestartFailed"),
-      });
-    }
+    await appUpdate.restart().catch(() => undefined);
   }
 
-  const latestResult = "result" in checkState ? checkState.result : undefined;
+  const latestResult = appUpdate.result;
   const latestReleaseNotes = releaseNotesBody(latestResult);
   const channelLabel =
     latestResult?.channel === "prerelease"
@@ -165,8 +92,7 @@ export function AboutSection(props: SettingsSectionProps) {
   const installing = checkState.status === "installing";
   const installed = checkState.status === "installed";
   const restarting = checkState.status === "restarting";
-  const canInstall =
-    checkState.status === "ready" && checkState.result.configured && checkState.result.available;
+  const canInstall = appUpdate.canInstall;
   const statusTitle =
     checkState.status === "error"
       ? t("settings.aboutUpdateError")
@@ -185,7 +111,7 @@ export function AboutSection(props: SettingsSectionProps) {
                   : t("settings.aboutUpdaterNotConfigured");
   const statusDescription =
     checkState.status === "error"
-      ? checkState.message
+      ? appUpdate.message || t("settings.aboutUpdateError")
       : checking
         ? t("settings.aboutCheckingDesc")
         : installing
@@ -231,7 +157,7 @@ export function AboutSection(props: SettingsSectionProps) {
             type="button"
             variant="outline"
             size="sm"
-            onClick={runCheck}
+            onClick={() => void appUpdate.runCheck().catch(() => undefined)}
             disabled={checking || installing || restarting}
           >
             {checking ? (

@@ -5,6 +5,7 @@ import { CronPromptRunner } from "./components/cron/CronPromptRunner";
 import { MemoryOrganizerRunner } from "./components/memory/MemoryOrganizerRunner";
 import { WindowsTitleBar } from "./components/WindowsTitleBar";
 import { LocaleContext, t as translate } from "./i18n";
+import { type AppUpdateController, useAppUpdateController } from "./lib/appUpdates";
 import {
   type AppSettings,
   getDefaultSettings,
@@ -40,7 +41,7 @@ function asErrorMessage(error: unknown, fallback: string) {
 
 const GATEWAY_SETTINGS_SYNC_EVENT = "gateway:settings-sync";
 
-function AppChrome(props: { children: ReactNode }) {
+function AppChrome(props: { children: ReactNode; appUpdate?: AppUpdateController }) {
   return (
     <div
       className="relative flex h-full w-full flex-col overflow-hidden bg-background"
@@ -48,7 +49,7 @@ function AppChrome(props: { children: ReactNode }) {
         event.preventDefault();
       }}
     >
-      <WindowsTitleBar />
+      <WindowsTitleBar appUpdate={props.appUpdate} />
       <div className="relative min-h-0 flex-1 overflow-hidden bg-background">{props.children}</div>
     </div>
   );
@@ -298,6 +299,21 @@ export default function App() {
     [settings.locale],
   );
 
+  const appUpdateMessages = useMemo(
+    () => ({
+      checkFailed: translate("settings.aboutUpdateCheckFailed", settings.locale),
+      installFailed: translate("settings.aboutUpdateInstallFailed", settings.locale),
+      restartFailed: translate("settings.aboutRestartFailed", settings.locale),
+    }),
+    [settings.locale],
+  );
+
+  const appUpdate = useAppUpdateController({
+    enabled: settingsReady,
+    includePrereleases: settings.updates.includePrereleases,
+    messages: appUpdateMessages,
+  });
+
   useEffect(() => {
     if (!settingsReady) {
       return;
@@ -335,7 +351,7 @@ export default function App() {
   if (!settingsReady) {
     return (
       <LocaleContext.Provider value={localeContextValue}>
-        <AppChrome>
+        <AppChrome appUpdate={appUpdate}>
           <div className="flex h-full w-full items-center justify-center bg-background text-sm text-muted-foreground">
             {translate("chat.loading", settings.locale)}
           </div>
@@ -349,7 +365,7 @@ export default function App() {
 
   return (
     <LocaleContext.Provider value={localeContextValue}>
-      <AppChrome>
+      <AppChrome appUpdate={appUpdate}>
         <CronPromptRunner settings={settings} />
         <MemoryOrganizerRunner settings={settings} setSettings={setSettings} />
         <ChatPage
@@ -359,6 +375,7 @@ export default function App() {
           setContext={setContext}
           onOpenSettings={openSettings}
           onToggleTheme={toggleTheme}
+          appUpdate={appUpdate}
         />
         {visible && (
           <div
@@ -373,6 +390,7 @@ export default function App() {
               saveState={settingsSaveState}
               onBack={closeSettings}
               initialSection={settingsSection}
+              appUpdate={appUpdate}
             />
           </div>
         )}

@@ -3,7 +3,9 @@ import { type MouseEvent, useCallback, useEffect, useRef, useState } from "react
 
 import iconSimpleUrl from "../../src-tauri/icons/icon-simple.png";
 import { useLocale } from "../i18n";
+import type { AppUpdateController } from "../lib/appUpdates";
 import { cn } from "../lib/shared/utils";
+import { AppUpdateButton } from "./AppUpdateButton";
 import { Maximize2, Minimize2, Minus, X } from "./icons";
 
 type TauriRuntimeWindow = Window & {
@@ -29,7 +31,7 @@ function reportWindowChromeError(action: string, error: unknown) {
   console.error(`failed to ${action} LiveAgent window`, error);
 }
 
-export function WindowsTitleBar() {
+export function WindowsTitleBar({ appUpdate }: { appUpdate?: AppUpdateController }) {
   const { t } = useLocale();
   const [isVisible, setIsVisible] = useState(() => isWindowsTauriRuntime());
   const [isMaximized, setIsMaximized] = useState(false);
@@ -199,6 +201,9 @@ export function WindowsTitleBar() {
         className="m-0 flex h-full shrink-0 items-stretch border-0 p-0"
         aria-label={t("window.controls")}
       >
+        {appUpdate ? (
+          <AppUpdateButton appUpdate={appUpdate} className="my-1" />
+        ) : null}
         <button
           type="button"
           className="group flex h-full w-[38px] items-center justify-center text-foreground/55 transition-colors duration-150 hover:bg-black/[0.05] hover:text-foreground/90 focus-visible:outline-hidden focus-visible:bg-black/[0.05] focus-visible:text-foreground/90 dark:hover:bg-white/[0.07] dark:focus-visible:bg-white/[0.07]"

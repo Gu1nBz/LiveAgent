@@ -40,6 +40,7 @@ import type { WorkspaceImagePreviewOpenRequest } from "../components/workspace-e
 import type { WorkspaceSshTerminalOpenRequest } from "../components/workspace-editor/WorkspaceSshTerminalOverlay";
 import { isWorkspaceImagePath } from "../components/workspace-editor/workspaceImagePreview";
 import { useLocale } from "../i18n";
+import type { AppUpdateController } from "../lib/appUpdates";
 import {
   type CompactionStatus,
   noteCompactionApplied,
@@ -233,6 +234,7 @@ type ChatPageProps = {
   setContext: (next: Context) => void;
   onOpenSettings: (section?: SectionId) => void;
   onToggleTheme: () => void;
+  appUpdate?: AppUpdateController;
 };
 
 type GatewayRuntimeStatus = {
@@ -536,7 +538,8 @@ function createWorkspaceProjectFromPath(path: string, kind: WorkspaceProject["ki
 }
 
 export function ChatPage(props: ChatPageProps) {
-  const { settings, setSettings, context, setContext, onOpenSettings, onToggleTheme } = props;
+  const { settings, setSettings, context, setContext, onOpenSettings, onToggleTheme, appUpdate } =
+    props;
   // Monaco reads NLS globals while the lazy editor module imports monaco-editor.
   setPreferredMonacoNlsLocale(settings.locale);
   const { t } = useLocale();
@@ -4390,6 +4393,7 @@ export function ChatPage(props: ChatPageProps) {
           sidebarOpen={sidebarOpen}
           onToggle={handleToggleSidebar}
           onOpenSettings={() => onOpenSettings()}
+          appUpdate={appUpdate}
         />
         {/* ---- Sidebar ---- */}
         <ChatHistorySidebar

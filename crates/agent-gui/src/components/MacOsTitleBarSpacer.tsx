@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import type { AppUpdateController } from "../lib/appUpdates";
 import { cn } from "../lib/shared/utils";
+import { AppUpdateButton } from "./AppUpdateButton";
 import { PanelLeft, PanelLeftClose, Settings } from "./icons";
 
 type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown };
@@ -91,10 +93,12 @@ export function MacOsTitleBarToggle({
   sidebarOpen,
   onToggle,
   onOpenSettings,
+  appUpdate,
 }: {
   sidebarOpen: boolean;
   onToggle: () => void;
   onOpenSettings?: () => void;
+  appUpdate?: AppUpdateController;
 }) {
   const [show] = useState(isMacOsTauri);
   const trafficLightMetrics = useMacOsTrafficLightMetrics(show);
@@ -134,6 +138,9 @@ export function MacOsTitleBarToggle({
           <Settings className="h-4 w-4" />
         </button>
       )}
+      {onOpenSettings && appUpdate ? (
+        <AppUpdateButton appUpdate={appUpdate} className="ml-1" />
+      ) : null}
     </div>
   );
 }

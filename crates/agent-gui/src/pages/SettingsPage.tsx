@@ -121,6 +121,7 @@ export function SettingsPage(props: SettingsPageProps) {
     onBack,
     initialSection = "system",
     hiddenSections = [],
+    appUpdate,
   } = props;
   const { t } = useLocale();
   const [section, setSection] = useState<SectionId>(initialSection);
@@ -184,7 +185,7 @@ export function SettingsPage(props: SettingsPageProps) {
           />
         );
       case "about":
-        return <AboutSection settings={settings} setSettings={setSettings} />;
+        return <AboutSection settings={settings} setSettings={setSettings} appUpdate={appUpdate} />;
       default: {
         const unreachable: never = section;
         return unreachable;

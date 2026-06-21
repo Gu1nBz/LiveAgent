@@ -1,3 +1,4 @@
+import type { AppUpdateController } from "../../lib/appUpdates";
 import type { AppSettings } from "../../lib/settings";
 import type { SettingsSaveState } from "../../lib/settings/storage";
 
@@ -21,6 +22,7 @@ export type SettingsPageProps = {
   onBack: () => void;
   initialSection?: SectionId;
   hiddenSections?: SectionId[];
+  appUpdate: AppUpdateController;
 };
 
 export type SettingsSectionProps = {
