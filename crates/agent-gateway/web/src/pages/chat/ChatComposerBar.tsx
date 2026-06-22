@@ -8,13 +8,20 @@ import {
 } from "react";
 import {
   Brain,
+  ChevronDown,
+  ChevronUp,
+  Clock3,
   Globe2,
   Lightbulb,
   Loader2,
   Paperclip,
+  Play,
   Send,
   Square,
+  SquarePen,
+  Trash2,
   X,
+  Zap,
 } from "../../components/icons";
 
 import {
@@ -59,13 +66,19 @@ function RuntimeControlTooltip(props: { label: string; children: ReactNode }) {
       {props.children}
       <span
         aria-hidden
-        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-2 py-1 text-[11px] font-medium text-popover-foreground opacity-0 shadow-md transition-opacity duration-150 group-focus-within/runtime-tooltip:opacity-100 group-hover/runtime-tooltip:opacity-100"
+        className="pointer-events-none invisible absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-2 py-1 text-[11px] font-medium text-popover-foreground opacity-0 shadow-md transition-[opacity,visibility] duration-0 group-focus-within/runtime-tooltip:visible group-focus-within/runtime-tooltip:opacity-100 group-focus-within/runtime-tooltip:delay-150 group-focus-within/runtime-tooltip:duration-150 group-hover/runtime-tooltip:visible group-hover/runtime-tooltip:opacity-100 group-hover/runtime-tooltip:delay-150 group-hover/runtime-tooltip:duration-150"
       >
         {props.label}
       </span>
     </span>
   );
 }
+
+export type ChatQueueTurnPreview = {
+  id: string;
+  previewText: string;
+  fileCount: number;
+};
 
 export const ChatComposerBar = memo(function ChatComposerBar(props: {
   composerRef: MutableRefObject<MentionComposerHandle | null>;
@@ -84,6 +97,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   onGitChanged?: (workdir: string) => void;
   onSend: () => void;
   onStop: () => void;
+  onInterruptAndSend: () => void;
   onPrepareChatRuntime?: () => void;
   onComposerBusyChange: (isBusy: boolean) => void;
   onChatRuntimeControlsChange: (patch: Partial<ChatRuntimeControls>) => void;
@@ -91,6 +105,11 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   onPasteFiles: (files: File[]) => void;
   pendingUploadedFiles: PendingUploadedFile[];
   onRemovePendingUpload: (relativePath: string) => void;
+  queuedTurns: ChatQueueTurnPreview[];
+  onRunQueuedTurnNow: (id: string) => void;
+  onMoveQueuedTurn: (id: string, direction: "up" | "down") => void;
+  onEditQueuedTurn: (id: string) => void;
+  onRemoveQueuedTurn: (id: string) => void;
 }) {
   const {
     composerRef,
@@ -109,6 +128,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     onGitChanged,
     onSend,
     onStop,
+    onInterruptAndSend,
     onPrepareChatRuntime,
     onComposerBusyChange,
     onChatRuntimeControlsChange,
@@ -116,19 +136,20 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     onPasteFiles,
     pendingUploadedFiles,
     onRemovePendingUpload,
+    queuedTurns,
+    onRunQueuedTurnNow,
+    onMoveQueuedTurn,
+    onEditQueuedTurn,
+    onRemoveQueuedTurn,
   } = props;
   const { t } = useLocale();
   const [composerIsEmpty, setComposerIsEmpty] = useState(true);
   const composerLayerRef = useRef<HTMLDivElement | null>(null);
-  const uploadDisabled = isInputDisabled || isSending || isUploadingFiles || !isAgentMode || !workdir;
-  const controlsDisabled = isInputDisabled || isSending;
+  const uploadDisabled = isInputDisabled || isUploadingFiles || !isAgentMode || !workdir;
+  const controlsDisabled = isInputDisabled;
+  const hasSendableDraft = !composerIsEmpty || pendingUploadedFiles.length > 0;
   const thinkingSupported = reasoningOptions.length > 0;
-  const sendDisabled =
-    isSending
-      ? false
-      : isInputDisabled ||
-        isUploadingFiles ||
-        (composerIsEmpty && pendingUploadedFiles.length === 0);
+  const sendDisabled = isInputDisabled || isUploadingFiles || !hasSendableDraft;
   const selectedReasoning = reasoningOptions.includes(chatRuntimeControls.reasoning)
     ? chatRuntimeControls.reasoning
     : DEFAULT_CHAT_RUNTIME_CONTROLS.reasoning;
@@ -218,7 +239,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                 </div>
                 <button
                   type="button"
-                  disabled={isInputDisabled || isSending}
+                  disabled={isInputDisabled}
                   onClick={() => onRemovePendingUpload(file.relativePath)}
                   className="shrink-0 rounded-full p-1 text-muted-foreground/70 opacity-0 transition-all hover:bg-foreground/5 hover:text-foreground group-hover:opacity-100 disabled:pointer-events-none"
                   aria-label={`${t("chat.upload.removeFile")} ${file.fileName}`}
@@ -231,7 +252,94 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
           </div>
         )}
 
-        <div className="composer-glass-card relative overflow-hidden rounded-[24px] border border-white/55 bg-white/65 shadow-[0_12px_40px_-12px_rgba(15,23,42,0.20),0_2px_6px_-2px_rgba(15,23,42,0.06)] backdrop-blur-xl backdrop-saturate-[180%] transition-all focus-within:border-white/80 focus-within:bg-white/72 focus-within:shadow-[0_18px_48px_-12px_rgba(15,23,42,0.26),0_4px_12px_-4px_rgba(15,23,42,0.08)] dark:border-white/[0.08] dark:bg-white/[0.05] dark:focus-within:border-white/[0.14] dark:focus-within:bg-white/[0.075]">
+        {queuedTurns.length > 0 ? (
+          <div
+            title={t("chat.queue.title").replace("{count}", String(queuedTurns.length))}
+            className="mx-auto mb-[-1px] w-[calc(100%-1.5rem)] max-w-[720px] overflow-hidden rounded-t-lg rounded-b-none border border-b-0 border-black/[0.055] bg-white/70 p-1 shadow-[0_8px_24px_-18px_rgba(15,23,42,0.24),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-2xl backdrop-saturate-[165%] dark:border-white/[0.10] dark:bg-white/[0.06] dark:shadow-[0_8px_24px_-18px_rgba(0,0,0,0.72),inset_0_1px_0_rgba(255,255,255,0.08)]"
+          >
+            <ul className="flex max-h-[76px] min-w-0 flex-col gap-1 overflow-x-hidden overflow-y-auto pr-0.5">
+              {queuedTurns.map((item, index) => (
+                <li
+                  key={item.id}
+                  className="grid h-9 min-h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 rounded-md border border-black/[0.035] bg-white/42 px-2 text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.56)] backdrop-blur-xl backdrop-saturate-[150%] dark:border-white/[0.06] dark:bg-white/[0.04] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                >
+                  <Clock3 className="h-3 w-3 shrink-0 text-muted-foreground/65" />
+                  <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                    <span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] leading-4 text-foreground/88">
+                      {item.previewText || t("chat.queue.emptyMessage")}
+                    </span>
+                    {item.fileCount > 0 ? (
+                      <span className="max-w-[4.5rem] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap text-[9px] leading-4 text-muted-foreground">
+                        {t("chat.queue.fileCount").replace("{count}", String(item.fileCount))}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <RuntimeControlTooltip label={t("chat.queue.moveUp")}>
+                      <button
+                        type="button"
+                        disabled={index === 0}
+                        onClick={() => onMoveQueuedTurn(item.id, "up")}
+                        title={t("chat.queue.moveUp")}
+                        aria-label={t("chat.queue.moveUp")}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+                      >
+                        <ChevronUp className="h-3 w-3" />
+                      </button>
+                    </RuntimeControlTooltip>
+                    <RuntimeControlTooltip label={t("chat.queue.moveDown")}>
+                      <button
+                        type="button"
+                        disabled={index === queuedTurns.length - 1}
+                        onClick={() => onMoveQueuedTurn(item.id, "down")}
+                        title={t("chat.queue.moveDown")}
+                        aria-label={t("chat.queue.moveDown")}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+                      >
+                        <ChevronDown className="h-3 w-3" />
+                      </button>
+                    </RuntimeControlTooltip>
+                    <RuntimeControlTooltip label={t("chat.queue.edit")}>
+                      <button
+                        type="button"
+                        onClick={() => onEditQueuedTurn(item.id)}
+                        title={t("chat.queue.edit")}
+                        aria-label={t("chat.queue.edit")}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground"
+                      >
+                        <SquarePen className="h-3 w-3" />
+                      </button>
+                    </RuntimeControlTooltip>
+                    <RuntimeControlTooltip label={t("chat.queue.runNow")}>
+                      <button
+                        type="button"
+                        onClick={() => onRunQueuedTurnNow(item.id)}
+                        title={t("chat.queue.runNow")}
+                        aria-label={t("chat.queue.runNow")}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground"
+                      >
+                        <Play className="h-3 w-3" />
+                      </button>
+                    </RuntimeControlTooltip>
+                    <RuntimeControlTooltip label={t("chat.queue.delete")}>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveQueuedTurn(item.id)}
+                        title={t("chat.queue.delete")}
+                        aria-label={t("chat.queue.delete")}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </RuntimeControlTooltip>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        <div className="composer-glass-card relative overflow-hidden rounded-[24px] border border-black/[0.055] bg-white/70 shadow-[0_12px_40px_-14px_rgba(15,23,42,0.22),0_2px_6px_-2px_rgba(15,23,42,0.08),inset_0_1px_0_rgba(255,255,255,0.74)] backdrop-blur-2xl backdrop-saturate-[165%] transition-all focus-within:border-black/[0.075] focus-within:bg-white/74 focus-within:shadow-[0_16px_46px_-14px_rgba(15,23,42,0.26),0_4px_12px_-4px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.78)] dark:border-white/[0.10] dark:bg-white/[0.06] dark:shadow-[0_12px_40px_-14px_rgba(0,0,0,0.72),0_2px_6px_-2px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)] dark:focus-within:border-white/[0.15] dark:focus-within:bg-white/[0.08]">
           {/* macOS material rim-light */}
           <div
             aria-hidden
@@ -240,7 +348,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
           {/* subtle inner gloss gradient */}
           <div
             aria-hidden
-            className="pointer-events-none absolute inset-0 rounded-[24px] bg-gradient-to-b from-white/30 to-transparent opacity-60 dark:from-white/[0.04] dark:opacity-100"
+            className="pointer-events-none absolute inset-0 rounded-[24px] bg-gradient-to-b from-white/18 to-transparent opacity-70 dark:from-white/[0.04] dark:opacity-100"
           />
 
           <div className="relative px-4 pt-3.5" onFocusCapture={onPrepareChatRuntime}>
@@ -406,36 +514,55 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
               />
             </div>
 
-            <Button
-              disabled={sendDisabled}
-              onClick={() => {
-                if (isSending) {
-                  onStop();
-                  return;
-                }
-                if (isInputDisabled) return;
-                onSend();
-              }}
-              size="icon"
-              title={isSending ? t("chat.stopGeneration") : t("chat.sendMessage")}
-              aria-label={isSending ? t("chat.stopGeneration") : t("chat.sendMessage")}
-              style={
-                isSending
-                  ? {
+            <div className="flex shrink-0 items-center gap-1">
+              {isSending ? (
+                <>
+                  <Button
+                    disabled={sendDisabled}
+                    onClick={() => {
+                      if (isInputDisabled) return;
+                      onInterruptAndSend();
+                    }}
+                    size="icon"
+                    title={t("chat.queue.interruptAndSend")}
+                    aria-label={t("chat.queue.interruptAndSend")}
+                    className="h-8 w-8 shrink-0 rounded-full border border-amber-500/25 bg-amber-500/12 text-amber-700 shadow-[0_1px_2px_rgba(15,23,42,0.08)] transition-all hover:bg-amber-500/18 hover:text-amber-800 disabled:bg-foreground/10 disabled:text-foreground/35 dark:text-amber-300 dark:hover:text-amber-200"
+                  >
+                    <Zap className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      if (isInputDisabled) return;
+                      onStop();
+                    }}
+                    size="icon"
+                    title={t("chat.stopGeneration")}
+                    aria-label={t("chat.stopGeneration")}
+                    style={{
                       backgroundColor: "hsl(var(--destructive))",
                       backgroundImage: "none",
                       color: "hsl(var(--destructive-foreground))",
-                    }
-                  : undefined
-              }
-              className="h-8 w-8 shrink-0 rounded-full shadow-[0_1px_2px_rgba(15,23,42,0.12)] transition-all disabled:opacity-100 [&:not(:disabled)]:bg-foreground [&:not(:disabled)]:text-background [&:not(:disabled)]:hover:bg-foreground/85 [&:not(:disabled)]:hover:shadow-[0_4px_14px_-2px_rgba(15,23,42,0.28)] [&:not(:disabled)]:active:scale-95 disabled:bg-foreground/10 disabled:text-foreground/35"
-            >
-              {isSending ? (
-                <Square className="h-3 w-3 fill-current" />
-              ) : (
-                <Send className="h-3.5 w-3.5" />
-              )}
-            </Button>
+                    }}
+                    className="h-8 w-8 shrink-0 rounded-full shadow-[0_1px_2px_rgba(15,23,42,0.12)] transition-all hover:opacity-90 active:scale-95"
+                  >
+                    <Square className="h-3 w-3 fill-current" />
+                  </Button>
+                </>
+              ) : null}
+              <Button
+                disabled={sendDisabled}
+                onClick={() => {
+                  if (isInputDisabled) return;
+                  onSend();
+                }}
+                size="icon"
+                title={isSending ? t("chat.queue.addToQueue") : t("chat.sendMessage")}
+                aria-label={isSending ? t("chat.queue.addToQueue") : t("chat.sendMessage")}
+                className="h-8 w-8 shrink-0 rounded-full shadow-[0_1px_2px_rgba(15,23,42,0.12)] transition-all disabled:opacity-100 [&:not(:disabled)]:bg-foreground [&:not(:disabled)]:text-background [&:not(:disabled)]:hover:bg-foreground/85 [&:not(:disabled)]:hover:shadow-[0_4px_14px_-2px_rgba(15,23,42,0.28)] [&:not(:disabled)]:active:scale-95 disabled:bg-foreground/10 disabled:text-foreground/35"
+              >
+                {isSending ? <Clock3 className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
+              </Button>
+            </div>
           </div>
         </div>
       </div>

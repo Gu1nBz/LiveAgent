@@ -43,6 +43,7 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
     usageContextWindow,
     liveTranscriptStore,
     isCompactionRunning,
+    bottomReservePx = 0,
     copiedMessageKey,
     setCopiedMessageKey,
     onResendFromEdit,
@@ -52,6 +53,9 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
   const showNoModelsState = !hasModels;
   const showStartChatState = hasModels && historyItems.length === 0 && !isSending;
   const shouldReserveTranscriptBottomSpace = !(showNoModelsState || showStartChatState);
+  const transcriptBottomReservePx = shouldReserveTranscriptBottomSpace
+    ? Math.max(192, Math.ceil(bottomReservePx) + 12)
+    : 0;
   const [scrollViewport, setScrollViewport] = useState<HTMLDivElement | null>(null);
   const transcriptRootRef = useRef<HTMLDivElement | null>(null);
   const transcriptContextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -239,7 +243,7 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
             />
           </div>
 
-          <div ref={bottomRef} className={shouldReserveTranscriptBottomSpace ? "h-48" : "h-0"} />
+          <div ref={bottomRef} style={{ height: transcriptBottomReservePx }} />
         </div>
       </ScrollArea>
       {transcriptContextMenu && transcriptContextMenuPosition

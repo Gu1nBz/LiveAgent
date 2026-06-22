@@ -1,4 +1,5 @@
 import type { MutableRefObject } from "react";
+import type { MentionComposerDraft } from "../../../components/chat/MentionComposer";
 import type { HistoryMessageRef } from "../../../lib/chat/conversation/conversationState";
 import type { ChatHistorySummary } from "../../../lib/chat/history/chatHistory";
 import type { PendingUploadedFile } from "../../../lib/chat/messages/uploadedFiles";
@@ -76,6 +77,7 @@ export type ActiveGatewayBridgeRequest = {
 
 export type SendChatAction = (overrides?: {
   textOverride?: string;
+  composerDraftOverride?: MentionComposerDraft;
   uploadedFilesOverride?: PendingUploadedFile[];
   conversationIdOverride?: string;
   executionModeOverride?: ExecutionMode;
@@ -83,9 +85,10 @@ export type SendChatAction = (overrides?: {
   selectedSystemToolIdsOverride?: SystemToolId[];
   runtimeControlsOverride?: ChatRuntimeControls;
   gatewayBridgeRequestOverride?: ActiveGatewayBridgeRequest | null;
+  preserveComposerOnStart?: boolean;
   beforeRuntimeStart?: () => Promise<void>;
   afterInitialHistoryPersist?: () => Promise<void>;
-}) => Promise<void>;
+}) => Promise<boolean>;
 
 export type GatewayBridgeRuntimeRefs = {
   currentConversationIdRef: MutableRefObject<string>;

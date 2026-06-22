@@ -1,4 +1,4 @@
-export { ChatComposerBar } from "./components/ChatComposerBar";
+export { ChatComposerBar, type ChatQueueTurnPreview } from "./components/ChatComposerBar";
 export { ChatHeader } from "./components/ChatHeader";
 export type {
   ActiveGatewayBridgeRequest,

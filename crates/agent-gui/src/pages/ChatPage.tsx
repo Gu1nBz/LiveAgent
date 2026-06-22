@@ -177,6 +177,7 @@ import {
   buildResumeContext as buildResumeConversationContext,
   ChatComposerBar,
   ChatHeader,
+  type ChatQueueTurnPreview,
   ChatTranscript,
   clearSilentMemoryExtractionState,
   createChatRuntimeHost,
@@ -200,6 +201,22 @@ import {
   useLiveTranscriptController,
   usePendingUploads,
 } from "./chat";
+import {
+  appendQueuedChatTurn,
+  buildQueuedChatTurnPreview,
+  createQueuedChatTurn,
+  getQueuedConversationIds,
+  insertQueuedChatTurnAtSlot,
+  moveQueuedChatTurn,
+  promoteQueuedChatTurn,
+  type QueuedChatTurn,
+  type QueuedChatTurnEditSlot,
+  queuedChatTurnHasContent,
+  removeQueuedChatTurn,
+  removeQueuedChatTurnsForConversation,
+  resolveQueuedChatTurnSlotIndex,
+  takeNextQueuedChatTurn,
+} from "./chat/queue/chatTurnQueue";
 import { McpHubPage } from "./mcp-hub/McpHubPage";
 import type { SectionId } from "./settings/types";
 import { SkillsHubPage } from "./skills-hub/SkillsHubPage";
@@ -1370,7 +1387,7 @@ export function ChatPage(props: ChatPageProps) {
     async () => undefined,
   );
   const deleteConversationActionRef = useRef<(id: string) => Promise<void>>(async () => undefined);
-  const sendActionRef = useRef<SendChatAction>(async () => undefined);
+  const sendActionRef = useRef<SendChatAction>(async () => false);
   const ensureGatewayBridgeConversationReadyRef = useRef<
     (id: string, options?: EnsureGatewayBridgeConversationReadyOptions) => Promise<string>
   >(async (id) => id.trim());
@@ -1779,6 +1796,44 @@ export function ChatPage(props: ChatPageProps) {
     addNotify,
   });
   const [isFileDropActive, setIsFileDropActive] = useState(false);
+  const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
+  const [queuedChatTurns, setQueuedChatTurns] = useState<QueuedChatTurn[]>([]);
+  const queuedChatTurnsRef = useRef<QueuedChatTurn[]>([]);
+  const queuedChatProcessingConversationIdsRef = useRef(new Set<string>());
+  const queuedChatTurnEditSlotRef = useRef<
+    | (QueuedChatTurnEditSlot & {
+        originalId: string;
+        createdAt: number;
+        executionMode: ExecutionMode;
+        workdir: string;
+        selectedSystemToolIds: SystemToolId[];
+        runtimeControls: ChatRuntimeControls;
+      })
+    | null
+  >(null);
+  const previousRunningConversationIdsRef = useRef<ReadonlySet<string>>(new Set());
+
+  const setQueuedChatTurnsState = useCallback(
+    (updater: (current: QueuedChatTurn[]) => QueuedChatTurn[]) => {
+      const next = updater(queuedChatTurnsRef.current).slice();
+      queuedChatTurnsRef.current = next;
+      setQueuedChatTurns(next);
+      return next;
+    },
+    [],
+  );
+
+  const queuedChatTurnsForCurrentConversation = useMemo<ChatQueueTurnPreview[]>(
+    () =>
+      queuedChatTurns
+        .filter((item) => item.conversationId === currentConversationId)
+        .map((item) => ({
+          id: item.id,
+          previewText: buildQueuedChatTurnPreview(item.draft),
+          fileCount: item.uploadedFiles.length,
+        })),
+    [currentConversationId, queuedChatTurns],
+  );
 
   const deleteConversationLocalCaches = useCallback(
     (conversationId: string) => {
@@ -1792,8 +1847,9 @@ export function ChatPage(props: ChatPageProps) {
       clearSilentMemoryExtractionState(key);
       clearSilentMemoryDecisions(key);
       deleteConversationArtifacts(key);
+      setQueuedChatTurnsState((current) => removeQueuedChatTurnsForConversation(current, key));
     },
-    [deleteConversationArtifacts, pendingUploadsByConversationRef],
+    [deleteConversationArtifacts, pendingUploadsByConversationRef, setQueuedChatTurnsState],
   );
 
   function resetVisibleTransientState(targetConversationId = currentConversationIdRef.current) {
@@ -1861,10 +1917,15 @@ export function ChatPage(props: ChatPageProps) {
 
   const pruneIdleConversationCaches = useCallback(
     (extraKeepIds: Iterable<string> = []) => {
+      const queuedConversationIds = getQueuedConversationIds(queuedChatTurnsRef.current);
       pruneIdleConversationRuntimeCaches({
         runtimeCache: conversationRuntimeCacheRef.current,
         persistedStateCache: persistedConversationStateRef.current,
-        keepConversationIds: [currentConversationIdRef.current, ...extraKeepIds],
+        keepConversationIds: [
+          currentConversationIdRef.current,
+          ...extraKeepIds,
+          ...queuedConversationIds,
+        ],
         isConversationRunning,
         onPruneConversation: (conversationId) => {
           deleteConversationLocalCaches(conversationId);
@@ -1987,14 +2048,252 @@ export function ChatPage(props: ChatPageProps) {
     [currentConversationIdRef, historyItemsRef],
   );
 
-  function stopSending() {
-    const conversationId = currentConversationIdRef.current;
-    const controller = getConversationAbortController(conversationId);
-    if (!controller) return;
-    const transcriptStore = getConversationLiveTranscriptStore(conversationId);
+  function stopConversation(conversationId: string) {
+    const targetConversationId = conversationId.trim();
+    if (!targetConversationId) return false;
+    const controller = getConversationAbortController(targetConversationId);
+    if (!controller) return false;
+    const transcriptStore = getConversationLiveTranscriptStore(targetConversationId);
     captureAbortSnapshot(transcriptStore);
     updateToolStatus("正在停止当前任务...", transcriptStore, true);
     controller.abort();
+    return true;
+  }
+
+  function stopSending() {
+    stopConversation(currentConversationIdRef.current);
+  }
+
+  function clearCurrentComposerDraftForQueuedTurn(conversationId: string) {
+    const targetConversationId = conversationId.trim();
+    if (!targetConversationId || currentConversationIdRef.current !== targetConversationId) {
+      return;
+    }
+    composerRef.current?.clear();
+    pendingUploadsByConversationRef.current.delete(targetConversationId);
+    setPendingUploadedFiles([]);
+    clearCachedComposerDraft(targetConversationId);
+  }
+
+  function enqueueCurrentComposerTurn(position: "end" | "front" | "edit") {
+    const conversationId = currentConversationIdRef.current.trim();
+    const draft = composerRef.current?.getDraft() ?? null;
+    const uploadedFiles = pendingUploadedFiles.slice();
+    if (!conversationId || !queuedChatTurnHasContent(draft, uploadedFiles)) {
+      return false;
+    }
+
+    const runtimeEntry =
+      conversationRuntimeCacheRef.current.get(conversationId) ??
+      buildRuntimeEntryFromVisibleState();
+    const editSlot =
+      position === "edit" && queuedChatTurnEditSlotRef.current?.conversationId === conversationId
+        ? queuedChatTurnEditSlotRef.current
+        : null;
+    const executionMode = editSlot?.executionMode ?? settings.system.executionMode;
+    const workdirForTurn = isAgentExecutionMode(executionMode)
+      ? (
+          editSlot?.workdir ??
+          runtimeEntry.workdir ??
+          displayedConversationWorkdir ??
+          settings.system.workdir
+        ).trim()
+      : "";
+    const queuedTurn = createQueuedChatTurn({
+      id: editSlot?.originalId,
+      conversationId,
+      draft,
+      uploadedFiles,
+      executionMode,
+      workdir: workdirForTurn,
+      selectedSystemToolIds: editSlot?.selectedSystemToolIds ?? settings.system.selectedSystemTools,
+      runtimeControls: editSlot?.runtimeControls ?? settings.chatRuntimeControls,
+      createdAt: editSlot?.createdAt,
+    });
+
+    setQueuedChatTurnsState((current) => {
+      if (editSlot) {
+        return insertQueuedChatTurnAtSlot(current, queuedTurn, editSlot);
+      }
+      return position === "front"
+        ? promoteQueuedChatTurn(appendQueuedChatTurn(current, queuedTurn), queuedTurn.id)
+        : appendQueuedChatTurn(current, queuedTurn);
+    });
+    if (editSlot) {
+      queuedChatTurnEditSlotRef.current = null;
+    }
+    clearCurrentComposerDraftForQueuedTurn(conversationId);
+    return true;
+  }
+
+  function isQueuedChatTurnEditBlockingProcessing(conversationId: string) {
+    const slot = queuedChatTurnEditSlotRef.current;
+    if (!slot || slot.conversationId !== conversationId.trim()) return false;
+    const queue = queuedChatTurnsRef.current;
+    const firstQueuedIndex = queue.findIndex((item) => item.conversationId === slot.conversationId);
+    if (firstQueuedIndex < 0) return false;
+    return resolveQueuedChatTurnSlotIndex(queue, slot) <= firstQueuedIndex;
+  }
+
+  function requestQueuedChatTurnProcessing(conversationId: string) {
+    const targetConversationId = conversationId.trim();
+    if (!targetConversationId) return;
+    if (queuedChatProcessingConversationIdsRef.current.has(targetConversationId)) return;
+    if (isConversationRunning(targetConversationId)) return;
+    if (isQueuedChatTurnEditBlockingProcessing(targetConversationId)) return;
+    if (!queuedChatTurnsRef.current.some((item) => item.conversationId === targetConversationId)) {
+      return;
+    }
+
+    queuedChatProcessingConversationIdsRef.current.add(targetConversationId);
+    let inFlightQueuedTurn: QueuedChatTurn | null = null;
+    void Promise.resolve()
+      .then(async () => {
+        if (isConversationRunning(targetConversationId)) return;
+        const taken = takeNextQueuedChatTurn(queuedChatTurnsRef.current, targetConversationId);
+        if (!taken.item) return false;
+        const queuedTurn = taken.item;
+        inFlightQueuedTurn = queuedTurn;
+        queuedChatTurnsRef.current = taken.queue;
+        setQueuedChatTurns(taken.queue);
+        const accepted = await sendActionRef.current({
+          composerDraftOverride: queuedTurn.draft,
+          uploadedFilesOverride: queuedTurn.uploadedFiles,
+          conversationIdOverride: targetConversationId,
+          executionModeOverride: queuedTurn.executionMode,
+          workdirOverride: queuedTurn.workdir,
+          selectedSystemToolIdsOverride: queuedTurn.selectedSystemToolIds,
+          runtimeControlsOverride: queuedTurn.runtimeControls,
+          preserveComposerOnStart: true,
+        });
+        if (!accepted) {
+          setQueuedChatTurnsState((current) =>
+            promoteQueuedChatTurn(appendQueuedChatTurn(current, queuedTurn), queuedTurn.id),
+          );
+          inFlightQueuedTurn = null;
+        }
+        return accepted;
+      })
+      .then((accepted) => {
+        queuedChatProcessingConversationIdsRef.current.delete(targetConversationId);
+        if (
+          accepted &&
+          !isConversationRunning(targetConversationId) &&
+          queuedChatTurnsRef.current.some((item) => item.conversationId === targetConversationId)
+        ) {
+          requestQueuedChatTurnProcessing(targetConversationId);
+        }
+      })
+      .catch(() => {
+        const failedQueuedTurn = inFlightQueuedTurn;
+        if (failedQueuedTurn) {
+          setQueuedChatTurnsState((current) =>
+            promoteQueuedChatTurn(
+              appendQueuedChatTurn(current, failedQueuedTurn),
+              failedQueuedTurn.id,
+            ),
+          );
+          inFlightQueuedTurn = null;
+        }
+        queuedChatProcessingConversationIdsRef.current.delete(targetConversationId);
+      });
+  }
+
+  useEffect(() => {
+    const previousRunningConversationIds = previousRunningConversationIdsRef.current;
+    previousRunningConversationIdsRef.current = runningConversationIds;
+    for (const conversationId of getQueuedConversationIds(queuedChatTurnsRef.current)) {
+      if (
+        previousRunningConversationIds.has(conversationId) &&
+        !runningConversationIds.has(conversationId)
+      ) {
+        requestQueuedChatTurnProcessing(conversationId);
+      }
+    }
+  }, [runningConversationIds, queuedChatTurns]);
+
+  function enqueueCurrentComposerTurnAndMaybeInterrupt() {
+    const conversationId = currentConversationIdRef.current.trim();
+    if (!enqueueCurrentComposerTurn("front")) return;
+    if (isConversationRunning(conversationId)) {
+      stopConversation(conversationId);
+      return;
+    }
+    requestQueuedChatTurnProcessing(conversationId);
+  }
+
+  function runQueuedTurnNow(id: string) {
+    const queuedTurn = queuedChatTurnsRef.current.find((item) => item.id === id.trim());
+    if (!queuedTurn) return;
+    setQueuedChatTurnsState((current) => promoteQueuedChatTurn(current, queuedTurn.id));
+    if (isConversationRunning(queuedTurn.conversationId)) {
+      stopConversation(queuedTurn.conversationId);
+      return;
+    }
+    requestQueuedChatTurnProcessing(queuedTurn.conversationId);
+  }
+
+  function moveQueuedTurn(id: string, direction: "up" | "down") {
+    setQueuedChatTurnsState((current) => moveQueuedChatTurn(current, id, direction));
+  }
+
+  function editQueuedTurn(id: string) {
+    const key = id.trim();
+    const queuedTurnIndex = queuedChatTurnsRef.current.findIndex((item) => item.id === key);
+    const queuedTurn = queuedTurnIndex >= 0 ? queuedChatTurnsRef.current[queuedTurnIndex] : null;
+    if (!queuedTurn) return;
+    const targetConversationId = queuedTurn.conversationId.trim();
+    if (!targetConversationId || currentConversationIdRef.current.trim() !== targetConversationId) {
+      return;
+    }
+
+    const currentDraft = composerRef.current?.getDraft() ?? null;
+    const currentUploads = pendingUploadedFiles.slice();
+    if (queuedChatTurnHasContent(currentDraft, currentUploads)) {
+      enqueueCurrentComposerTurn(queuedChatTurnEditSlotRef.current ? "edit" : "end");
+    }
+
+    const sameConversationQueue = queuedChatTurnsRef.current.filter(
+      (item) => item.conversationId === targetConversationId,
+    );
+    const sameConversationIndex = sameConversationQueue.findIndex((item) => item.id === key);
+    const previousId =
+      sameConversationIndex > 0
+        ? (sameConversationQueue[sameConversationIndex - 1]?.id ?? null)
+        : null;
+    const nextId =
+      sameConversationIndex >= 0
+        ? (sameConversationQueue[sameConversationIndex + 1]?.id ?? null)
+        : null;
+    queuedChatTurnEditSlotRef.current = {
+      conversationId: targetConversationId,
+      previousId,
+      nextId,
+      index: sameConversationIndex >= 0 ? sameConversationIndex : undefined,
+      originalId: queuedTurn.id,
+      createdAt: queuedTurn.createdAt,
+      executionMode: queuedTurn.executionMode,
+      workdir: queuedTurn.workdir,
+      selectedSystemToolIds: queuedTurn.selectedSystemToolIds.slice(),
+      runtimeControls: { ...queuedTurn.runtimeControls },
+    };
+    setQueuedChatTurnsState((current) => removeQueuedChatTurn(current, key));
+    composerRef.current?.setDraft(queuedTurn.draft);
+    if (queuedTurn.uploadedFiles.length > 0) {
+      pendingUploadsByConversationRef.current.set(
+        targetConversationId,
+        queuedTurn.uploadedFiles.slice(),
+      );
+    } else {
+      pendingUploadsByConversationRef.current.delete(targetConversationId);
+    }
+    setPendingUploadedFiles(queuedTurn.uploadedFiles.slice());
+    clearCachedComposerDraft(targetConversationId);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  function removeQueuedTurn(id: string) {
+    setQueuedChatTurnsState((current) => removeQueuedChatTurn(current, id));
   }
 
   const {
@@ -2681,6 +2980,7 @@ export function ChatPage(props: ChatPageProps) {
 
   async function send(overrides?: {
     textOverride?: string;
+    composerDraftOverride?: MentionComposerDraft;
     uploadedFilesOverride?: PendingUploadedFile[];
     conversationIdOverride?: string;
     executionModeOverride?: ExecutionMode;
@@ -2688,13 +2988,14 @@ export function ChatPage(props: ChatPageProps) {
     selectedSystemToolIdsOverride?: SystemToolId[];
     runtimeControlsOverride?: ChatRuntimeControls;
     gatewayBridgeRequestOverride?: ActiveGatewayBridgeRequest | null;
+    preserveComposerOnStart?: boolean;
     beforeRuntimeStart?: () => Promise<void>;
     afterInitialHistoryPersist?: () => Promise<void>;
   }) {
     const overrideConversationId = overrides?.conversationIdOverride?.trim() ?? "";
     const conversationId = overrideConversationId || currentConversationIdRef.current;
     if (!conversationId) {
-      return;
+      return false;
     }
 
     const runtimeEntry =
@@ -2763,22 +3064,22 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
       }
-      return;
+      return false;
     }
     if (isImportingPastedTextRef.current && typeof overrides?.textOverride !== "string") {
-      return;
+      return false;
     }
     if (hydratingConversationIdRef.current === conversationId) {
       const message = "当前会话仍在补全完整历史，请稍候。";
       setConversationErrorState(message);
       gatewayBridgeEvents.emitError(message, conversationId);
-      return;
+      return false;
     }
     if (hydrationFailedConversationIdRef.current === conversationId) {
       const message = "当前会话完整历史加载失败，请重新打开该会话后再继续。";
       setConversationErrorState(message);
       gatewayBridgeEvents.emitError(message, conversationId);
-      return;
+      return false;
     }
     if (runtimeEntry.compactionStatus.phase !== "idle") {
       updateConversationRuntimeEntry(conversationId, (prev) => ({
@@ -2797,7 +3098,7 @@ export function ChatPage(props: ChatPageProps) {
       const message = asErrorMessage(error, "当前模型配置不可用，请重新选择后重试。");
       setConversationErrorState(message);
       gatewayBridgeEvents.emitError(message);
-      return;
+      return false;
     }
 
     const { selectedModel, provider, providerId, model } = effectiveSelectedModel;
@@ -2838,26 +3139,27 @@ export function ChatPage(props: ChatPageProps) {
       providerConfig.modelConfig,
     );
 
-    const composerDraft =
-      typeof overrides?.textOverride === "string"
-        ? null
-        : (composerRef.current?.getDraft() ?? null);
-    let text =
-      typeof overrides?.textOverride === "string"
-        ? overrides.textOverride.trim()
-        : composerDraft
-          ? (effectiveIsAgentMode && composerDraft.largePastes.length > 0
-              ? composerDraft.textWithoutLargePastes
-              : buildTextFromComposerDraft(composerDraft)
-            ).trim()
-          : "";
+    const textOverride =
+      typeof overrides?.textOverride === "string" ? overrides.textOverride : null;
+    const hasTextOverride = textOverride !== null;
+    const composerDraft = hasTextOverride
+      ? null
+      : (overrides?.composerDraftOverride ?? composerRef.current?.getDraft() ?? null);
+    let text = hasTextOverride
+      ? textOverride.trim()
+      : composerDraft
+        ? (effectiveIsAgentMode && composerDraft.largePastes.length > 0
+            ? composerDraft.textWithoutLargePastes
+            : buildTextFromComposerDraft(composerDraft)
+          ).trim()
+        : "";
     let uploadedFiles = overrides?.uploadedFilesOverride ?? pendingUploadedFiles;
 
     if (
       effectiveIsAgentMode &&
       composerDraft &&
       composerDraft.largePastes.length > 0 &&
-      typeof overrides?.textOverride !== "string"
+      !hasTextOverride
     ) {
       isImportingPastedTextRef.current = true;
       setIsImportingPastedText(true);
@@ -2874,7 +3176,7 @@ export function ChatPage(props: ChatPageProps) {
         setErrorMessage(message);
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
-        return;
+        return false;
       } finally {
         isImportingPastedTextRef.current = false;
         setIsImportingPastedText(false);
@@ -2888,7 +3190,7 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
       }
-      return;
+      return false;
     }
     const pendingUserMessage = userMessage;
     const content =
@@ -3064,7 +3366,7 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
         markConversationRunStopped();
-        return;
+        return true;
       }
       try {
         await overrides.afterInitialHistoryPersist();
@@ -3074,7 +3376,7 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
         markConversationRunStopped();
-        return;
+        return true;
       }
     } else {
       const initialPersistConfirmation = initialPersist
@@ -3103,7 +3405,7 @@ export function ChatPage(props: ChatPageProps) {
           gatewayBridgeEvents.emitError(message, conversationId);
           gatewayBridgeEvents.close();
           markConversationRunStopped();
-          return;
+          return true;
         }
       }
       void initialPersistConfirmation;
@@ -3261,7 +3563,7 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
         markConversationRunStopped();
-        return;
+        return true;
       }
 
       const selectedSkills = selectedSkillNames.map((n) => byName.get(n)!).filter(Boolean);
@@ -3664,10 +3966,18 @@ export function ChatPage(props: ChatPageProps) {
       }
     }
 
-    if (typeof overrides?.textOverride !== "string") {
+    if (!hasTextOverride && !overrides?.composerDraftOverride) {
       clearCachedComposerDraft(conversationId);
     }
-    resetVisibleTransientState(conversationId);
+    if (!overrides?.preserveComposerOnStart) {
+      resetVisibleTransientState(conversationId);
+    } else {
+      setConversationErrorState(null);
+      updateConversationRuntimeEntry(conversationId, (prev) => ({
+        ...prev,
+        hookWarning: null,
+      }));
+    }
 
     try {
       if (effectiveIsAgentMode) {
@@ -3835,7 +4145,9 @@ export function ChatPage(props: ChatPageProps) {
       clearAbortSnapshot(transcriptStore);
       markConversationRunStopped();
       pruneIdleConversationCaches([conversationId]);
+      requestQueuedChatTurnProcessing(conversationId);
     }
+    return true;
   }
 
   sendActionRef.current = send;
@@ -4248,12 +4560,28 @@ export function ChatPage(props: ChatPageProps) {
   );
 
   const handleSend = useCallback(() => {
+    const conversationId = currentConversationIdRef.current.trim();
+    const runtimeEntry = conversationRuntimeCacheRef.current.get(conversationId);
+    if (queuedChatTurnEditSlotRef.current?.conversationId === conversationId) {
+      if (enqueueCurrentComposerTurn("edit")) {
+        requestQueuedChatTurnProcessing(conversationId);
+      }
+      return;
+    }
+    if (conversationId && (isConversationRunning(conversationId) || runtimeEntry?.isSending)) {
+      enqueueCurrentComposerTurn("end");
+      return;
+    }
     void sendActionRef.current();
-  }, []);
+  }, [enqueueCurrentComposerTurn, isConversationRunning]);
 
   const handleStopSending = useCallback(() => {
     stopSendingActionRef.current();
   }, []);
+
+  const handleInterruptAndSend = useCallback(() => {
+    enqueueCurrentComposerTurnAndMaybeInterrupt();
+  }, [enqueueCurrentComposerTurnAndMaybeInterrupt]);
 
   const handleComposerBusyChange = useCallback((isBusy: boolean) => {
     composerBusyRef.current = isBusy;
@@ -4332,10 +4660,7 @@ export function ChatPage(props: ChatPageProps) {
     isImportingPastedText ||
     isUploadingFiles;
   const canDropUpload =
-    isAgentMode &&
-    Boolean(displayedConversationWorkdir.trim()) &&
-    !isSending &&
-    !isComposerInputDisabled;
+    isAgentMode && Boolean(displayedConversationWorkdir.trim()) && !isComposerInputDisabled;
   const fileDropTitle = canDropUpload
     ? t("chat.upload.dropReady")
     : !isAgentMode
@@ -4603,6 +4928,7 @@ export function ChatPage(props: ChatPageProps) {
                 usageContextWindow={currentModelContextWindow}
                 liveTranscriptStore={liveTranscriptStore}
                 isCompactionRunning={isCompactionRunning}
+                bottomReservePx={composerOverlayHeight}
                 copiedMessageKey={copiedMessageKey}
                 setCopiedMessageKey={setCopiedMessageKey}
                 onResendFromEdit={handleResendFromEdit}
@@ -4630,12 +4956,19 @@ export function ChatPage(props: ChatPageProps) {
                 }
                 onSend={handleSend}
                 onStop={handleStopSending}
+                onInterruptAndSend={handleInterruptAndSend}
                 onComposerBusyChange={handleComposerBusyChange}
                 onChatRuntimeControlsChange={handleChatRuntimeControlsChange}
                 onPickReadableFiles={pickReadableFiles}
                 onPasteFiles={importReadableFiles}
                 pendingUploadedFiles={pendingUploadedFiles}
                 onRemovePendingUpload={removePendingUpload}
+                queuedTurns={queuedChatTurnsForCurrentConversation}
+                onRunQueuedTurnNow={runQueuedTurnNow}
+                onMoveQueuedTurn={moveQueuedTurn}
+                onEditQueuedTurn={editQueuedTurn}
+                onRemoveQueuedTurn={removeQueuedTurn}
+                onHeightChange={setComposerOverlayHeight}
               />
               {isFileDropActive ? (
                 <div

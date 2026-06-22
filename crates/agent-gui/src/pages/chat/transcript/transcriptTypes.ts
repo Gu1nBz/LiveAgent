@@ -24,6 +24,7 @@ export type ChatTranscriptProps = {
   usageContextWindow?: number;
   liveTranscriptStore: LiveTranscriptStore;
   isCompactionRunning: boolean;
+  bottomReservePx?: number;
   copiedMessageKey: string | null;
   setCopiedMessageKey: (key: string | null) => void;
   onResendFromEdit: (

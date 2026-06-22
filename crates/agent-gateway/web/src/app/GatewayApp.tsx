@@ -30,12 +30,28 @@ import type {
 import { ChatHistorySidebar } from "@/components/chat/ChatHistorySidebar";
 import { SharedHistoryManagerModal } from "@/components/chat/SharedHistoryManagerModal";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
-import { ChatComposerBar } from "@/pages/chat/ChatComposerBar";
+import { ChatComposerBar, type ChatQueueTurnPreview } from "@/pages/chat/ChatComposerBar";
 import { ChatHeader } from "@/pages/chat/ChatHeader";
 import { SkillsHubPage } from "@/pages/skills-hub/SkillsHubPage";
 import { McpHubPage } from "@/pages/mcp-hub/McpHubPage";
 import type { SectionId } from "@/pages/settings/types";
 import { useChatSkills } from "@/pages/chat/useChatSkills";
+import {
+  appendQueuedChatTurn,
+  buildQueuedChatTurnPreview,
+  createQueuedChatTurn,
+  getQueuedConversationIds,
+  insertQueuedChatTurnAtSlot,
+  moveQueuedChatTurn,
+  promoteQueuedChatTurn,
+  queuedChatTurnHasContent,
+  removeQueuedChatTurn,
+  removeQueuedChatTurnsForConversation,
+  resolveQueuedChatTurnSlotIndex,
+  takeNextQueuedChatTurn,
+  type QueuedChatTurn,
+  type QueuedChatTurnEditSlot,
+} from "@/pages/chat/queue/chatTurnQueue";
 import { mergeAlwaysEnabledSkillNames } from "@/lib/skills";
 import { buildModelOptions, sortHistoryItems, VIBING_STATUS } from "@/lib/chat/chatPageHelpers";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -244,6 +260,7 @@ export default function GatewayApp() {
   const [localRunningConversationIds, setLocalRunningConversationIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  const [queuedChatTurns, setQueuedChatTurns] = useState<QueuedChatTurn[]>([]);
   const [remoteRunningConversationIds, setRemoteRunningConversationIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -355,6 +372,18 @@ export default function GatewayApp() {
   const chatErrorRef = useRef(chatError);
   const chatToolStatusRef = useRef(chatToolStatus);
   const chatToolStatusIsCompactionRef = useRef(chatToolStatusIsCompaction);
+  const queuedChatTurnsRef = useRef<QueuedChatTurn[]>([]);
+  const queuedChatProcessingConversationIdsRef = useRef(new Set<string>());
+  const queuedChatTurnEditSlotRef = useRef<
+    | (QueuedChatTurnEditSlot & {
+        originalId: string;
+        createdAt: number;
+        workdir: string;
+        runtimeControls: ChatRuntimeControls;
+      })
+    | null
+  >(null);
+  const previousRunningConversationIdsRef = useRef<ReadonlySet<string>>(new Set());
   const selectedHistoryRef = useRef(selectedHistory);
   const selectedHistoryEntriesRef = useRef(selectedHistoryEntries);
   const historyItemsRef = useRef(historyItems);
@@ -441,6 +470,16 @@ export default function GatewayApp() {
     composerRef,
     setChatError,
   });
+
+  const setQueuedChatTurnsState = useCallback(
+    (updater: (current: QueuedChatTurn[]) => QueuedChatTurn[]) => {
+      const next = updater(queuedChatTurnsRef.current).slice();
+      queuedChatTurnsRef.current = next;
+      setQueuedChatTurns(next);
+      return next;
+    },
+    [],
+  );
 
   const recordProjectActivity = useCallback(
     (workdir?: string | null, updatedAt?: number | null) => {
@@ -3813,6 +3852,257 @@ export default function GatewayApp() {
     }
   }
 
+  function isConversationRunningForQueue(conversationId: string) {
+    const key = conversationId.trim();
+    return Boolean(
+      key &&
+        (localRunningConversationIdsRef.current.has(key) ||
+          remoteRunningConversationIdsRef.current.has(key) ||
+          chatStartLocksRef.current.has(key) ||
+          getConversationAbortController(key) !== null),
+    );
+  }
+
+  async function materializeComposerDraftForSend(
+    draft: MentionComposerDraft,
+    files: PendingUploadedFile[],
+    workdir: string,
+  ) {
+    let text = (
+      isAgentMode && draft.largePastes.length > 0
+        ? draft.textWithoutLargePastes
+        : buildTextFromComposerDraft(draft)
+    ).trim();
+    let uploadedFiles = files;
+
+    if (isAgentMode && draft.largePastes.length > 0) {
+      setChatError(null);
+      isImportingPastedTextRef.current = true;
+      setIsUploadingFiles(true);
+      try {
+        const imported = await importPastedTextsAsFiles({
+          token,
+          workdir,
+          pastes: draft.largePastes,
+        });
+        text = buildTextFromComposerDraft(draft, imported.fileByPasteId).trim();
+        uploadedFiles = mergePendingUploadedFiles(files, imported.files);
+      } finally {
+        isImportingPastedTextRef.current = false;
+        setIsUploadingFiles(false);
+      }
+    }
+
+    return { text, uploadedFiles };
+  }
+
+  function clearCurrentComposerDraftForQueuedTurn(conversationId: string) {
+    const key = conversationId.trim();
+    if (!key || getDisplayedConversationId() !== key) {
+      return;
+    }
+    composerRef.current?.clear();
+    setPendingUploadsForConversation(key, []);
+    clearCachedComposerDraft(key);
+  }
+
+  function enqueueCurrentComposerTurn(position: "end" | "front" | "edit") {
+    const conversationIdValue = getDisplayedConversationId();
+    const draft = composerRef.current?.getDraft() ?? null;
+    const uploadedFiles = pendingUploadedFiles.slice();
+    if (!conversationIdValue || !queuedChatTurnHasContent(draft, uploadedFiles)) {
+      return false;
+    }
+
+    const cachedRuntime = conversationRuntimeCacheRef.current.get(conversationIdValue);
+    const editSlot =
+      position === "edit" &&
+      queuedChatTurnEditSlotRef.current?.conversationId === conversationIdValue
+        ? queuedChatTurnEditSlotRef.current
+        : null;
+    const workdirForTurn = (
+      editSlot?.workdir ??
+      cachedRuntime?.workdir ??
+      displayedConversationWorkdirRef.current ??
+      activeWorkspaceProjectPath ??
+      settings.system.workdir
+    ).trim();
+    const queuedTurn = createQueuedChatTurn({
+      id: editSlot?.originalId,
+      conversationId: conversationIdValue,
+      draft,
+      uploadedFiles,
+      workdir: workdirForTurn,
+      runtimeControls: editSlot?.runtimeControls ?? chatRuntimeControlsForCurrentProvider,
+      createdAt: editSlot?.createdAt,
+    });
+
+    setQueuedChatTurnsState((current) => {
+      if (editSlot) {
+        return insertQueuedChatTurnAtSlot(current, queuedTurn, editSlot);
+      }
+      return position === "front"
+        ? promoteQueuedChatTurn(appendQueuedChatTurn(current, queuedTurn), queuedTurn.id)
+        : appendQueuedChatTurn(current, queuedTurn);
+    });
+    if (editSlot) {
+      queuedChatTurnEditSlotRef.current = null;
+    }
+    clearCurrentComposerDraftForQueuedTurn(conversationIdValue);
+    return true;
+  }
+
+  function isQueuedChatTurnEditBlockingProcessing(conversationId: string) {
+    const slot = queuedChatTurnEditSlotRef.current;
+    const key = conversationId.trim();
+    if (!slot || slot.conversationId !== key) return false;
+    const queue = queuedChatTurnsRef.current;
+    const firstQueuedIndex = queue.findIndex((item) => item.conversationId === slot.conversationId);
+    if (firstQueuedIndex < 0) return false;
+    return resolveQueuedChatTurnSlotIndex(queue, slot) <= firstQueuedIndex;
+  }
+
+  function requestQueuedChatTurnProcessing(conversationId: string) {
+    const targetConversationId = conversationId.trim();
+    if (!api || !targetConversationId) return;
+    if (queuedChatProcessingConversationIdsRef.current.has(targetConversationId)) return;
+    if (isConversationRunningForQueue(targetConversationId)) return;
+    if (isQueuedChatTurnEditBlockingProcessing(targetConversationId)) return;
+    if (!queuedChatTurnsRef.current.some((item) => item.conversationId === targetConversationId)) {
+      return;
+    }
+
+    queuedChatProcessingConversationIdsRef.current.add(targetConversationId);
+    let inFlightQueuedTurn: QueuedChatTurn | null = null;
+    void Promise.resolve()
+      .then(async () => {
+        if (isConversationRunningForQueue(targetConversationId)) return false;
+        const taken = takeNextQueuedChatTurn(queuedChatTurnsRef.current, targetConversationId);
+        if (!taken.item) return false;
+        const queuedTurn = taken.item;
+        inFlightQueuedTurn = queuedTurn;
+        queuedChatTurnsRef.current = taken.queue;
+        setQueuedChatTurns(taken.queue);
+        const materialized = await materializeComposerDraftForSend(
+          queuedTurn.draft,
+          queuedTurn.uploadedFiles,
+          queuedTurn.workdir,
+        );
+        if (!materialized.text && materialized.uploadedFiles.length === 0) {
+          return true;
+        }
+        await sendChat(materialized.text, {
+          conversationId: targetConversationId,
+          uploadedFiles: materialized.uploadedFiles,
+          runtimeControls: queuedTurn.runtimeControls,
+          workdir: queuedTurn.workdir,
+        });
+        inFlightQueuedTurn = null;
+        return true;
+      })
+      .then((accepted) => {
+        queuedChatProcessingConversationIdsRef.current.delete(targetConversationId);
+        if (
+          accepted &&
+          !isConversationRunningForQueue(targetConversationId) &&
+          queuedChatTurnsRef.current.some((item) => item.conversationId === targetConversationId)
+        ) {
+          requestQueuedChatTurnProcessing(targetConversationId);
+        }
+      })
+      .catch((error) => {
+        const failedQueuedTurn = inFlightQueuedTurn;
+        if (failedQueuedTurn) {
+          setQueuedChatTurnsState((current) =>
+            promoteQueuedChatTurn(
+              appendQueuedChatTurn(current, failedQueuedTurn),
+              failedQueuedTurn.id,
+            ),
+          );
+        }
+        const message = asErrorMessage(error, "queued chat request failed");
+        updateConversationRuntimeEntry(targetConversationId, (current) => ({
+          ...current,
+          error: message,
+        }));
+        queuedChatProcessingConversationIdsRef.current.delete(targetConversationId);
+      });
+  }
+
+  function enqueueCurrentComposerTurnAndMaybeInterrupt() {
+    const conversationIdValue = getDisplayedConversationId();
+    if (!enqueueCurrentComposerTurn("front")) return;
+    if (isConversationRunningForQueue(conversationIdValue)) {
+      void cancelChat(conversationIdValue);
+      return;
+    }
+    requestQueuedChatTurnProcessing(conversationIdValue);
+  }
+
+  function runQueuedTurnNow(id: string) {
+    const queuedTurn = queuedChatTurnsRef.current.find((item) => item.id === id.trim());
+    if (!queuedTurn) return;
+    setQueuedChatTurnsState((current) => promoteQueuedChatTurn(current, queuedTurn.id));
+    if (isConversationRunningForQueue(queuedTurn.conversationId)) {
+      void cancelChat(queuedTurn.conversationId);
+      return;
+    }
+    requestQueuedChatTurnProcessing(queuedTurn.conversationId);
+  }
+
+  function moveQueuedTurn(id: string, direction: "up" | "down") {
+    setQueuedChatTurnsState((current) => moveQueuedChatTurn(current, id, direction));
+  }
+
+  function editQueuedTurn(id: string) {
+    const key = id.trim();
+    const queuedTurnIndex = queuedChatTurnsRef.current.findIndex((item) => item.id === key);
+    const queuedTurn = queuedTurnIndex >= 0 ? queuedChatTurnsRef.current[queuedTurnIndex] : null;
+    if (!queuedTurn) return;
+    const targetConversationId = queuedTurn.conversationId.trim();
+    if (!targetConversationId || getDisplayedConversationId() !== targetConversationId) {
+      return;
+    }
+
+    const currentDraft = composerRef.current?.getDraft() ?? null;
+    const currentUploads = pendingUploadedFiles.slice();
+    if (queuedChatTurnHasContent(currentDraft, currentUploads)) {
+      enqueueCurrentComposerTurn(queuedChatTurnEditSlotRef.current ? "edit" : "end");
+    }
+
+    const sameConversationQueue = queuedChatTurnsRef.current.filter(
+      (item) => item.conversationId === targetConversationId,
+    );
+    const sameConversationIndex = sameConversationQueue.findIndex((item) => item.id === key);
+    const previousId =
+      sameConversationIndex > 0
+        ? (sameConversationQueue[sameConversationIndex - 1]?.id ?? null)
+        : null;
+    const nextId =
+      sameConversationIndex >= 0
+        ? (sameConversationQueue[sameConversationIndex + 1]?.id ?? null)
+        : null;
+    queuedChatTurnEditSlotRef.current = {
+      conversationId: targetConversationId,
+      previousId,
+      nextId,
+      index: sameConversationIndex >= 0 ? sameConversationIndex : undefined,
+      originalId: queuedTurn.id,
+      createdAt: queuedTurn.createdAt,
+      workdir: queuedTurn.workdir,
+      runtimeControls: { ...queuedTurn.runtimeControls },
+    };
+    setQueuedChatTurnsState((current) => removeQueuedChatTurn(current, key));
+    composerRef.current?.setDraft(queuedTurn.draft);
+    setPendingUploadsForConversation(targetConversationId, queuedTurn.uploadedFiles.slice());
+    clearCachedComposerDraft(targetConversationId);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  function removeQueuedTurn(id: string) {
+    setQueuedChatTurnsState((current) => removeQueuedChatTurn(current, id));
+  }
+
   function startNewConversation(options?: { workdir?: string }) {
     const currentConversationId = conversationIdRef.current.trim();
     if (currentConversationId) {
@@ -4753,6 +5043,11 @@ export default function GatewayApp() {
     setHistoryListLoadingMore(false);
     setHistoryDetailLoading(false);
     setHistoryMutating(false);
+    queuedChatTurnsRef.current = [];
+    queuedChatProcessingConversationIdsRef.current.clear();
+    queuedChatTurnEditSlotRef.current = null;
+    previousRunningConversationIdsRef.current = new Set();
+    setQueuedChatTurns([]);
     setLocalRunningConversationIds(new Set());
     setRemoteRunningConversationIds(new Set());
     setRemoteRunningConversationRuntime(new Map());
@@ -4919,6 +5214,21 @@ export default function GatewayApp() {
     }
     return next;
   }, [historyItems, remoteRunningConversationRuntime, sidebarRunningConversationIds]);
+
+  useEffect(() => {
+    const currentRunningConversationIds = new Set(sidebarRunningConversationIds);
+    const previousRunningConversationIds = previousRunningConversationIdsRef.current;
+    previousRunningConversationIdsRef.current = currentRunningConversationIds;
+    for (const conversationIdValue of getQueuedConversationIds(queuedChatTurnsRef.current)) {
+      if (
+        previousRunningConversationIds.has(conversationIdValue) &&
+        !currentRunningConversationIds.has(conversationIdValue)
+      ) {
+        requestQueuedChatTurnProcessing(conversationIdValue);
+      }
+    }
+  }, [queuedChatTurns, sidebarRunningConversationIds]);
+
   const projectActivityUpdatedAts = useMemo(() => {
     const updatedAts = buildWorkspaceProjectActivityUpdatedAts([
       ...historyWorkdirs,
@@ -4960,6 +5270,17 @@ export default function GatewayApp() {
     currentConversationRuntimeWorkdir ||
     (isAgentMode ? activeWorkspaceProjectPath || settings.system.workdir.trim() : "");
   displayedConversationWorkdirRef.current = displayedConversationWorkdir;
+  const queuedChatTurnsForDisplayedConversation = useMemo<ChatQueueTurnPreview[]>(
+    () =>
+      queuedChatTurns
+        .filter((item) => item.conversationId === displayedConversationId)
+        .map((item) => ({
+          id: item.id,
+          previewText: buildQueuedChatTurnPreview(item.draft),
+          fileCount: item.uploadedFiles.length,
+        })),
+    [displayedConversationId, queuedChatTurns],
+  );
   const terminalProjectPath = isAgentMode ? activeWorkspaceProjectPath.trim() : "";
   const terminalProjectPathKey = terminalProjectPath
     ? workspaceProjectPathKey(terminalProjectPath)
@@ -5754,12 +6075,14 @@ export default function GatewayApp() {
                     onSend={() => {
                       if (
                         submitInFlightRef.current ||
-                        chatBusyRef.current ||
-                        isObservingRemoteLiveConversation ||
                         isUploadingFiles ||
                         isImportingPastedTextRef.current ||
                         composerInputDisabled
                       ) {
+                        return;
+                      }
+                      if (chatBusyRef.current || isObservingRemoteLiveConversation) {
+                        enqueueCurrentComposerTurn("end");
                         return;
                       }
                       submitInFlightRef.current = true;
@@ -5841,6 +6164,7 @@ export default function GatewayApp() {
                         isObservingRemoteLiveConversation ? displayedConversationId : undefined,
                       );
                     }}
+                    onInterruptAndSend={enqueueCurrentComposerTurnAndMaybeInterrupt}
                     onPrepareChatRuntime={() => {
                       if (!api || historyShareToken) {
                         return;
@@ -5861,6 +6185,11 @@ export default function GatewayApp() {
                         current.filter((file) => file.relativePath !== relativePath),
                       );
                     }}
+                    queuedTurns={queuedChatTurnsForDisplayedConversation}
+                    onRunQueuedTurnNow={runQueuedTurnNow}
+                    onMoveQueuedTurn={moveQueuedTurn}
+                    onEditQueuedTurn={editQueuedTurn}
+                    onRemoveQueuedTurn={removeQueuedTurn}
                   />
                   {isFileDropActive ? (
                     <FileDropOverlay
