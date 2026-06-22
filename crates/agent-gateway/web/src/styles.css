@@ -1718,7 +1718,7 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
   background: hsl(250 60% 32% / 0.2);
 }
 
-/* Icon + soft emanating pulses (no rotation) */
+/* Icon */
 .sync-loading-stage {
   position: relative;
   display: flex;
@@ -1727,20 +1727,6 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
   width: 60px;
   height: 60px;
   margin-top: 2px;
-}
-
-.sync-loading-pulse {
-  position: absolute;
-  inset: 0;
-  border-radius: 18px;
-  border: 1.5px solid hsl(var(--primary) / 0.4);
-  opacity: 0;
-  will-change: transform, opacity;
-  animation: syncPulse 2.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
-}
-
-.sync-loading-pulse--2 {
-  animation-delay: 1.4s;
 }
 
 .sync-loading-icon {
@@ -1804,12 +1790,6 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
   50% { transform: scale(1.05); }
 }
 
-@keyframes syncPulse {
-  0% { transform: scale(0.9); opacity: 0; }
-  35% { opacity: 0.45; }
-  100% { transform: scale(1.85); opacity: 0; }
-}
-
 @keyframes syncDotBounce {
   0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
   40% { transform: translateY(-7px); opacity: 1; }
@@ -1819,7 +1799,6 @@ html[data-liveagent-webui="gateway"] .external-link-modal-overlay[data-state="cl
   .sync-loading-entrance,
   .sync-loading-icon,
   .sync-loading-orb,
-  .sync-loading-pulse,
   .sync-loading-dots i {
     animation: none;
   }

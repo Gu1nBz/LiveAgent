@@ -11,8 +11,6 @@ export function SettingsSyncLoading({ locale }: SettingsSyncLoadingProps) {
       <div className="sync-loading-orb sync-loading-orb--2" aria-hidden="true" />
 
       <div className="sync-loading-stage">
-        <span className="sync-loading-pulse" aria-hidden="true" />
-        <span className="sync-loading-pulse sync-loading-pulse--2" aria-hidden="true" />
         <div className="sync-loading-icon">
           <img
             src="/favicon.svg"
