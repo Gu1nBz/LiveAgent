@@ -157,7 +157,7 @@ export interface MentionComposerProps {
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-const MAX_SUGGESTIONS = 20;
+const MAX_SUGGESTIONS = 30;
 const MENTION_INDEX_MAX_RESULTS = 5000;
 const MENTION_TAG_ATTR = "data-mention-path";
 const MENTION_KIND_ATTR = "data-mention-kind";
@@ -1335,7 +1335,7 @@ function Popup({
         aria-hidden
         className="pointer-events-none absolute inset-x-4 top-0 h-px rounded-full bg-gradient-to-r from-transparent via-white/85 to-transparent dark:via-white/15"
       />
-      <div className="mention-popup-scroll relative max-h-[260px] overflow-y-auto py-1">
+      <div className="mention-popup-scroll relative max-h-[260px] overflow-y-auto py-0.5">
         {isLoading && (
           <div className="px-3 py-2 text-xs text-muted-foreground">Indexing files...</div>
         )}
@@ -1358,7 +1358,7 @@ function Popup({
               }
               ref={i === highlightIndex ? hlRef : undefined}
               className={cn(
-                "mention-popup-item group mx-1.5 flex cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-sm transition-all",
+                "mention-popup-item group mx-1.5 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-[13px] leading-5 transition-all",
                 i === highlightIndex
                   ? "bg-foreground/[0.08] text-foreground shadow-[inset_0_0_0_1px_rgba(15,23,42,0.06)] dark:bg-white/[0.08] dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
                   : "text-foreground/85 hover:bg-foreground/[0.04] dark:text-foreground/90 dark:hover:bg-white/[0.04]",
@@ -1370,7 +1370,7 @@ function Popup({
             >
               <span
                 className={cn(
-                  "flex h-6 w-6 shrink-0 items-center justify-center rounded-lg",
+                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-md",
                   isSkill
                     ? "bg-violet-500/10 text-violet-700 dark:bg-violet-400/15 dark:text-violet-300"
                     : isDir
@@ -1379,15 +1379,15 @@ function Popup({
                 )}
               >
                 {Icon ? (
-                  <Icon width={14} height={14} />
+                  <Icon width={12} height={12} />
                 ) : (
-                  <span className="text-[12px] font-semibold">$</span>
+                  <span className="text-[11px] font-semibold">$</span>
                 )}
               </span>
               <span className="min-w-0 flex-1 truncate">
                 <span className="font-medium tracking-tight text-foreground/95">{title}</span>
                 {subtitle && (
-                  <span className="ml-1.5 text-[11px] text-muted-foreground/85">{subtitle}</span>
+                  <span className="ml-1.5 text-[10px] text-muted-foreground/85">{subtitle}</span>
                 )}
               </span>
               {isSkill ? (
