@@ -161,21 +161,14 @@ export function buildToolsSuffix(workdir: string, availableToolNames?: readonly 
   if (hasFileTool || has("Bash")) {
     const subject =
       hasFileTool && has("Bash") ? "File tools and Bash" : hasFileTool ? "File tools" : "Bash";
-    const subjectVerb = subject === "Bash" ? "takes" : "take";
-    const skillsRootAllowed = has("SkillsManager") || hasFileTool;
     sections.push(
       [
         "## Workspace & Paths",
         `- Workspace root (sandbox): \`${workdir}\``,
-        `- ${subject} ${subjectVerb} an optional \`root\` argument that selects the sandbox the rest of the call resolves under:`,
-        "  • Omit `root` → workspace root above.",
-        skillsRootAllowed
-          ? '  • `root="skills"` → fixed Skills root. Authorized ONLY for Skills enabled in this conversation; do not access files from other installed Skills through any tool.'
-          : null,
-        "- `path` / `cwd` values must be relative. NEVER use an absolute path, `..` segments, `.`, `./`, or `.\\`. To target the root itself, simply omit the argument.",
+        `- ${subject} ${subject === "Bash" ? "accepts" : "accept"} the path you see: workspace-relative, absolute, ~/..., file://, pathRef values, or skill://<enabled-skill>/... paths.`,
+        "- To target the workspace root for optional `path` / `cwd` values, omit the argument.",
         "- Use `/` as the separator everywhere, including Glob and Grep patterns. Windows `\\` is auto-normalized.",
-        "- Absolute paths printed in Skill docs, examples, logs, or earlier messages are illustrations only. Do NOT pass them as `path` / `cwd` values — translate them into `(root, relative-path)` first.",
-        "- absolute workspace or Skills paths shown in Skill docs, examples, logs, or earlier messages are illustrations only. Convert them to scoped file-tool calls.",
+        "- For enabled Skill files, prefer skill://<baseDir>/... or a pathRef returned by SkillsManager/List/Glob/Grep/Read.",
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n"),
@@ -217,7 +210,7 @@ export function buildToolsSuffix(workdir: string, availableToolNames?: readonly 
       );
     }
     if (has("Delete")) {
-      lines.push("- For workspace or Skills deletion, use Delete with the correct root/path.");
+      lines.push("- For workspace or Skill deletion, use Delete with the exact path or pathRef.");
     }
     if (hasAny("Grep", "Glob", "List")) {
       lines.push(
@@ -226,7 +219,7 @@ export function buildToolsSuffix(workdir: string, availableToolNames?: readonly 
     }
     if (has("SkillsManager") && hasReadFamily) {
       lines.push(
-        '- For files inside a Skill, call file tools with `root="skills"` and a path like `<baseDir>/references/guide.md`. Never expand the Skills root into an absolute path.',
+        '- For files inside a Skill, call file tools with a path like `skill://<baseDir>/references/guide.md` or a pathRef returned by a tool.',
       );
     }
     if (has("Bash")) {
@@ -260,11 +253,10 @@ export function buildToolsSuffix(workdir: string, availableToolNames?: readonly 
         "- Do not embed images with Markdown syntax like ![alt](path), HTML <img>, file:// URLs, or local relative image paths in your final text.",
         has("SkillsManager")
           ? [
-              '- Local image: pass `path` (+ matching `root`). Skill image: `root="skills"` + relative path; do not use Bash, `open`, `xdg-open`, or absolute Skills paths. Remote image: pass `url` / `urls` or `source` / `sources` directly — do not download unless the user asked to save it locally.',
-              '- For image files inside installed Skills, call Image with root="skills" and a path relative to the fixed Skills root.',
-              "- Do not use Bash, open, xdg-open, Markdown, HTML, or absolute Skills paths to display Skill images.",
+              "- Local image: pass `path` exactly as seen, including workspace-relative, absolute, pathRef, or skill:// paths. Remote image: pass `url` / `urls` or `source` / `sources` directly — do not download unless the user asked to save it locally.",
+              "- Do not use Bash, open, xdg-open, Markdown, or HTML to display Skill images.",
             ].join("\n")
-          : "- Local image: pass `path` (+ matching `root`). Remote image: pass `url` / `urls` or `source` / `sources` directly — do not download unless the user asked to save it locally.",
+          : "- Local image: pass `path` exactly as seen. Remote image: pass `url` / `urls` or `source` / `sources` directly — do not download unless the user asked to save it locally.",
         "- For remote images, call Image with url/urls or source/sources directly instead of downloading them, unless the user explicitly asks to save the file locally.",
         "- Whenever an image path or URL appears in the conversation (from the user, a tool result, or earlier context) and the user should see it, call Image with that path/URL before producing the final reply.",
         "- If another tool saves, downloads, screenshots, generates, or returns an image file path or image URL and the user should see it, call Image with that path or URL before the final response.",
@@ -278,13 +270,12 @@ export function buildToolsSuffix(workdir: string, availableToolNames?: readonly 
     sections.push(
       [
         "## Bash",
-        "- Bash.cwd is relative to the selected Bash root.",
-        '- `Bash.cwd` follows the `root` rules in **Workspace & Paths**. The canonical form for running a Skill script is `root="skills"` with `cwd="<skill-name>/scripts"` plus a relative command.',
-        '- To run installed Skill scripts, use root="skills" with cwd="<skill-name>/scripts".',
-        "- The alternative form — passing an absolute path inside the command (e.g. `python ~/.liveagent/skills/<skill-name>/scripts/foo.py`) — is also accepted as long as the referenced Skill is enabled in this conversation. Both forms run the same script; prefer the canonical form for clarity, but you do not need to retry just to switch forms.",
+        "- Bash.cwd follows the path rules in **Workspace & Paths**.",
+        '- To run installed Skill scripts, use cwd="skill://<enabled-skill>/scripts" plus a relative command.',
+        "- Passing an absolute Skill script path inside the command is also accepted as long as the referenced Skill is enabled in this conversation.",
         "- For endpoint tests with curl, include an explicit timeout such as `--max-time 30` so a stalled local server or upstream request cannot hold the whole turn indefinitely.",
         "- Background commands using `&` must redirect stdout and stderr to a log file before detaching, for example `nohup command > /tmp/liveagent-task.log 2>&1 < /dev/null &`; otherwise use a dedicated terminal or managed process workflow for dev servers/watchers.",
-        '- For reading, listing, or searching Skill content, always use Read/List/Glob/Grep with `root="skills"` — Bash `cat`/`ls`/`find`/`grep`/`rg`/`sed`/`awk` against `~/.liveagent/skills` is still routed back to the file tools.',
+        "- For reading, listing, or searching Skill content, always use Read/List/Glob/Grep with skill:// paths — Bash cat/ls/find/grep/rg/sed/awk against ~/.liveagent/skills is still routed back to the file tools.",
         "- Do not guess `skills/` paths inside the workspace; if a Skill is needed, enable it in the chat Skills selector first.",
         "- Do not cd into ~/.liveagent/skills or workspace skills/ guesses.",
       ].join("\n"),

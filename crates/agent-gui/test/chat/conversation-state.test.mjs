@@ -244,8 +244,11 @@ test("display-only Image tool results keep UI images but omit inline image bytes
           contentHash: "hash-png",
         },
         {
-          root: "skills",
-          path: "demo/assets/logo.jpg",
+          path: "skill://demo/assets/logo.jpg",
+          scope: "skill",
+          relativePath: "demo/assets/logo.jpg",
+          displayPath: "skill://demo/assets/logo.jpg",
+          pathRef: "skill:demo/assets/logo.jpg",
           mimeType: "image/jpeg",
           sizeBytes: 5678,
           mtimeMs: 2,
@@ -273,7 +276,7 @@ test("display-only Image tool results keep UI images but omit inline image bytes
   );
   assert.match(requestContext.messages[0].content[0].text, /Displayed 2 images/);
   assert.match(requestContext.messages[0].content[0].text, /uploads\/001\.png/);
-  assert.match(requestContext.messages[0].content[0].text, /root=skills path=demo\/assets\/logo\.jpg/);
+  assert.match(requestContext.messages[0].content[0].text, /skill:\/\/demo\/assets\/logo\.jpg/);
   assert.match(requestContext.messages[0].content[0].text, /mime=image\/png/);
   assert.match(requestContext.messages[0].content[0].text, /display-only UI tool/);
 });

@@ -8,45 +8,253 @@ const systemTools = loader.loadModule("src/lib/tools/customSystemTools.ts");
 const systemToolOptions = loader.loadModule("src/lib/tools/systemToolOptions.ts");
 const skillBuiltinHelpers = loader.loadModule("src/lib/skills/builtin.ts");
 
-test("required tool paths must be relative workspace paths", () => {
-  assert.equal(pathUtils.normalizeRequiredToolRelPath(" ./src\\App.tsx ", "path"), "src/App.tsx");
+test("ToolPathResolver accepts broad workspace path inputs", async () => {
+  const resolver = new pathUtils.ToolPathResolver({ workdir: "/workspace/project" });
 
-  for (const value of ["", ".", "..", "../secret", "/tmp/file", "C:/tmp/file", "safe:name"]) {
-    assert.throws(
-      () => pathUtils.normalizeRequiredToolRelPath(value, "path"),
-      /path must be a relative path/,
-      `expected ${value} to be rejected`,
-    );
-  }
+  const relative = await resolver.resolvePath(" ./src\\App.tsx ", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(relative.scope, "workspace");
+  assert.equal(relative.relativePath, "src/App.tsx");
+  assert.equal(relative.absolutePath, "/workspace/project/src/App.tsx");
+  assert.equal(relative.displayPath, "src/App.tsx");
+  assert.equal(relative.pathRef, "workspace:src/App.tsx");
+
+  const absolute = await resolver.resolvePath("/workspace/project/src/App.tsx", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(absolute.scope, "workspace");
+  assert.equal(absolute.relativePath, "src/App.tsx");
+
+  const fileUrl = await resolver.resolvePath("file:///workspace/project/src/App.tsx", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(fileUrl.scope, "workspace");
+  assert.equal(fileUrl.relativePath, "src/App.tsx");
+
+  const pathRef = await resolver.resolvePath("workspace:src/App.tsx", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(pathRef.scope, "workspace");
+  assert.equal(pathRef.relativePath, "src/App.tsx");
+
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("../secret", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+      }),
+    /cannot contain \.\./,
+  );
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("//server/share/file.txt", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+      }),
+    /UNC path/,
+  );
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("file:////server/share/file.txt", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+        allowExternal: true,
+      }),
+    /UNC paths are not supported/,
+  );
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("file://server/share/file.txt", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+        allowExternal: true,
+      }),
+    /UNC paths are not supported/,
+  );
 });
 
-test("optional tool paths allow empty root but reject escapes", () => {
-  assert.equal(pathUtils.normalizeOptionalToolRelPath("", "path"), undefined);
-  assert.equal(pathUtils.normalizeOptionalToolRelPath(".", "path"), undefined);
-  assert.equal(pathUtils.normalizeOptionalToolRelPath("docs/readme.md", "path"), "docs/readme.md");
+test("ToolPathResolver normalizes Windows workspace path variants", async () => {
+  const resolver = new pathUtils.ToolPathResolver({ workdir: "C:/Users/Alice/Repo" });
 
-  for (const value of ["../secret", "/tmp/file", "C:/tmp/file", "foo:bar"]) {
-    assert.throws(
-      () => pathUtils.normalizeOptionalToolRelPath(value, "path"),
-      /path must be a relative path/,
-    );
-  }
+  const relative = await resolver.resolvePath("src\\App.tsx", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(relative.scope, "workspace");
+  assert.equal(relative.relativePath, "src/App.tsx");
+  assert.equal(relative.absolutePath, "C:/Users/Alice/Repo/src/App.tsx");
+
+  const absolute = await resolver.resolvePath("C:\\Users\\Alice\\Repo\\src\\App.tsx", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(absolute.scope, "workspace");
+  assert.equal(absolute.relativePath, "src/App.tsx");
+
+  const lowercaseDrive = await resolver.resolvePath("c:/users/alice/repo/src/App.tsx", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(lowercaseDrive.scope, "workspace");
+  assert.equal(lowercaseDrive.relativePath, "src/App.tsx");
+
+  const driveFileUrl = await resolver.resolvePath("file:///C:/Users/Alice/Repo/src/App.tsx", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(driveFileUrl.scope, "workspace");
+  assert.equal(driveFileUrl.relativePath, "src/App.tsx");
+
+  const localhostFileUrl = await resolver.resolvePath(
+    "file://localhost/C:/Users/Alice/Repo/src/App.tsx",
+    {
+      label: "Read.path",
+      intent: "read",
+      required: true,
+    },
+  );
+  assert.equal(localhostFileUrl.scope, "workspace");
+  assert.equal(localhostFileUrl.relativePath, "src/App.tsx");
+
+  const extendedWorkdirResolver = new pathUtils.ToolPathResolver({
+    workdir: "\\\\?\\C:\\Users\\Alice\\Repo",
+  });
+  const normalPathWithExtendedWorkdir = await extendedWorkdirResolver.resolvePath(
+    "C:\\Users\\Alice\\Repo\\src\\App.tsx",
+    {
+      label: "Read.path",
+      intent: "read",
+      required: true,
+    },
+  );
+  assert.equal(normalPathWithExtendedWorkdir.scope, "workspace");
+  assert.equal(normalPathWithExtendedWorkdir.relativePath, "src/App.tsx");
+
+  const extendedPath = await resolver.resolvePath("\\\\?\\C:\\Users\\Alice\\Repo\\src\\App.tsx", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(extendedPath.scope, "workspace");
+  assert.equal(extendedPath.relativePath, "src/App.tsx");
+
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("C:Users\\Alice\\Repo\\src\\App.tsx", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+      }),
+    /cannot contain ':' path segments/,
+  );
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("CON/file.txt", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+      }),
+    /Windows reserved path component/,
+  );
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("\\\\server\\share\\file.txt", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+        allowExternal: true,
+      }),
+    /UNC path/,
+  );
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("\\\\?\\UNC\\server\\share\\file.txt", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+        allowExternal: true,
+      }),
+    /UNC path/,
+  );
 });
 
-test("file tool roots default to workspace and gate skills root", () => {
-  assert.equal(pathUtils.normalizeToolFileRoot(undefined, "Read.root"), "workspace");
-  assert.equal(pathUtils.normalizeToolFileRoot("workspace", "Read.root"), "workspace");
-  assert.equal(
-    pathUtils.normalizeToolFileRoot("skills", "Read.root", { allowSkillsRoot: true }),
-    "skills",
+test("ToolPathResolver resolves enabled Skill paths and gates external paths by intent", async () => {
+  const resolver = new pathUtils.ToolPathResolver({
+    workdir: "/workspace/project",
+    skillsRootEnabled: true,
+    skillsRootDir: "/Users/me/.liveagent/skills",
+    skillAccessPolicy: {
+      allowedSkillNames: ["skills-creator"],
+      allowedSkillBaseDirs: ["skills-creator"],
+    },
+  });
+
+  const skillUrl = await resolver.resolvePath("skill://skills-creator/SKILL.md", {
+    label: "Read.path",
+    intent: "read",
+    required: true,
+  });
+  assert.equal(skillUrl.scope, "skill");
+  assert.equal(skillUrl.relativePath, "skills-creator/SKILL.md");
+  assert.equal(skillUrl.absolutePath, "/Users/me/.liveagent/skills/skills-creator/SKILL.md");
+  assert.equal(skillUrl.displayPath, "skill://skills-creator/SKILL.md");
+  assert.equal(skillUrl.pathRef, "skill:skills-creator/SKILL.md");
+
+  const absoluteSkill = await resolver.resolvePath(
+    "/Users/me/.liveagent/skills/skills-creator/SKILL.md",
+    {
+      label: "Read.path",
+      intent: "read",
+      required: true,
+    },
   );
-  assert.throws(
-    () => pathUtils.normalizeToolFileRoot("skills", "Read.root"),
-    /root=skills is only available when Skills are enabled/,
+  assert.equal(absoluteSkill.scope, "skill");
+  assert.equal(absoluteSkill.relativePath, "skills-creator/SKILL.md");
+
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("skill://metaphysics-steward/SKILL.md", {
+        label: "Read.path",
+        intent: "read",
+        required: true,
+      }),
+    /not enabled/,
   );
-  assert.throws(
-    () => pathUtils.normalizeToolFileRoot("home", "Read.root", { allowSkillsRoot: true }),
-    /root must be workspace or skills/,
+
+  const externalImage = await resolver.resolvePath("/Users/me/Pictures/chart.png", {
+    label: "Image.path",
+    intent: "image",
+    required: true,
+    allowExternal: true,
+  });
+  assert.equal(externalImage.scope, "external");
+  assert.equal(externalImage.pathRef, "file:///Users/me/Pictures/chart.png");
+
+  await assert.rejects(
+    () =>
+      resolver.resolvePath("/Users/me/Pictures/chart.png", {
+        label: "Write.path",
+        intent: "write",
+        required: true,
+      }),
+    /outside the workspace and enabled Skills/,
   );
 });
 
@@ -69,7 +277,7 @@ test("builtin agent skills stay selected and sort first", () => {
   assert.equal(skillBuiltinHelpers.isUserSelectableSkillName("workflow-skill"), true);
 });
 
-test("file tools can read from the fixed skills root without exposing absolute paths as arguments", async () => {
+test("file tools can read enabled Skill files via skill URLs", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({
     mocks: {
@@ -103,24 +311,27 @@ test("file tools can read from the fixed skills root without exposing absolute p
   });
 
   const readTool = bundle.tools.find((tool) => tool.name === "Read");
-  assert.match(JSON.stringify(readTool.parameters), /"skills"/);
+  assert.doesNotMatch(JSON.stringify(readTool.parameters), /"root"/);
+  assert.equal(readTool.parameters.additionalProperties, false);
+  assert.match(JSON.stringify(readTool.parameters), /skill:\/\//);
 
   const result = await bundle.executeToolCall({
     type: "toolCall",
     id: "read-skill-file",
     name: "Read",
     arguments: {
-      root: "skills",
-      path: "skills-creator/SKILL.md",
+      path: "skill://skills-creator/SKILL.md",
       limit: 20,
     },
   });
 
   assert.equal(result.isError, false);
   assert.equal(result.details.kind, "read_text");
-  assert.equal(result.details.root, "skills");
-  assert.equal(result.details.path, "skills-creator/SKILL.md");
-  assert.match(result.content[0].text, /Read: root=skills path=skills-creator\/SKILL\.md/);
+  assert.equal(result.details.scope, "skill");
+  assert.equal(result.details.path, "skill://skills-creator/SKILL.md");
+  assert.equal(result.details.relativePath, "skills-creator/SKILL.md");
+  assert.equal(result.details.pathRef, "skill:skills-creator/SKILL.md");
+  assert.match(result.content[0].text, /Read: skill:\/\/skills-creator\/SKILL\.md/);
   assert.deepEqual(invocations, [
     {
       command: "fs_read_text",
@@ -138,7 +349,46 @@ test("file tools can read from the fixed skills root without exposing absolute p
   ]);
 });
 
-test("file tools enforce enabled Skill allowlist for root=skills", async () => {
+test("file tool schemas are strict and reject unsupported root arguments", async () => {
+  const invocations = [];
+  const fsLoader = createTsModuleLoader({
+    mocks: {
+      "@tauri-apps/api/core": {
+        async invoke(command, args) {
+          invocations.push({ command, args });
+          throw new Error("unexpected invoke");
+        },
+      },
+    },
+  });
+  const fsTools = fsLoader.loadModule("src/lib/tools/fsTools.ts");
+  const fileToolState = fsLoader.loadModule("src/lib/tools/fileToolState.ts");
+  const bundle = fsTools.createFsTools({
+    workdir: "/workspace",
+    fileState: fileToolState.createFileToolState(),
+  });
+
+  for (const tool of bundle.tools) {
+    assert.equal(tool.parameters.additionalProperties, false, `${tool.name} should be strict`);
+    assert.doesNotMatch(JSON.stringify(tool.parameters), /"root"/);
+  }
+
+  const result = await bundle.executeToolCall({
+    type: "toolCall",
+    id: "read-with-old-root",
+    name: "Read",
+    arguments: {
+      root: "workspace",
+      path: "README.md",
+    },
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /unsupported argument: root/);
+  assert.deepEqual(invocations, []);
+});
+
+test("file tools enforce enabled Skill allowlist for skill URLs", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({
     mocks: {
@@ -168,8 +418,7 @@ test("file tools enforce enabled Skill allowlist for root=skills", async () => {
     id: "blocked-skill-read",
     name: "Read",
     arguments: {
-      root: "skills",
-      path: "metaphysics-steward/SKILL.md",
+      path: "skill://metaphysics-steward/SKILL.md",
     },
   });
   assert.equal(readResult.isError, true);
@@ -181,12 +430,12 @@ test("file tools enforce enabled Skill allowlist for root=skills", async () => {
     id: "blocked-skill-glob",
     name: "Glob",
     arguments: {
-      root: "skills",
       pattern: "metaphysics-steward/scripts/**/*",
+      path: "skill://metaphysics-steward/scripts",
     },
   });
   assert.equal(globResult.isError, true);
-  assert.match(globResult.content[0].text, /metaphysics-steward\/scripts\/\*\*\/\*/);
+  assert.match(globResult.content[0].text, /metaphysics-steward\/scripts.*is not enabled/);
   assert.deepEqual(invocations, []);
 });
 
@@ -228,14 +477,13 @@ test("file tools allow direct mutations inside enabled Skills when mutation is g
     id: "blocked-skill-write",
     name: "Write",
     arguments: {
-      root: "skills",
-      path: "demo/SKILL.md",
+      path: "skill://demo/SKILL.md",
       content: "---\nname: demo\ndescription: Demo\n---\n",
     },
   });
 
   assert.equal(result.isError, false);
-  assert.match(result.content[0].text, /Write: root=skills path=demo\/SKILL\.md/);
+  assert.match(result.content[0].text, /Write: skill:\/\/demo\/SKILL\.md/);
   assert.match(result.content[0].text, /mode=rewrite/);
   assert.deepEqual(invocations, [
     {
@@ -283,8 +531,7 @@ test("file tools block direct mutations inside built-in Skills", async () => {
     id: "blocked-builtin-skill-write",
     name: "Write",
     arguments: {
-      root: "skills",
-      path: "skills-creator/SKILL.md",
+      path: "skill://skills-creator/SKILL.md",
       content: "---\nname: skills-creator\ndescription: Changed\n---\n",
     },
   });
@@ -295,14 +542,26 @@ test("file tools block direct mutations inside built-in Skills", async () => {
   assert.deepEqual(invocations, []);
 });
 
-test("file tools reject absolute skills paths with a root=skills retry hint", async () => {
+test("file tools normalize absolute enabled Skill paths", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({
     mocks: {
       "@tauri-apps/api/core": {
         async invoke(command, args) {
           invocations.push({ command, args });
-          throw new Error("unexpected invoke");
+          assert.equal(command, "fs_read_text");
+          return {
+            kind: "text",
+            path: args.path,
+            content: "1\t---\n2\tname: skills-installer\n",
+            truncated: false,
+            startLine: 1,
+            numLines: 2,
+            totalLines: 2,
+            isPartialView: false,
+            mtimeMs: 10,
+            contentHash: "hash",
+          };
         },
       },
     },
@@ -318,21 +577,35 @@ test("file tools reject absolute skills paths with a root=skills retry hint", as
 
   const result = await bundle.executeToolCall({
     type: "toolCall",
-    id: "bad-read",
+    id: "absolute-skill-read",
     name: "Read",
     arguments: {
       path: "/Users/me/.liveagent/skills/skills-installer/SKILL.md",
     },
   });
 
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /Retry with root="skills"/);
-  assert.match(result.content[0].text, /path="skills-installer\/SKILL\.md"/);
-  assert.match(result.content[0].text, /Do not use Bash/);
-  assert.deepEqual(invocations, []);
+  assert.equal(result.isError, false);
+  assert.equal(result.details.scope, "skill");
+  assert.equal(result.details.path, "skill://skills-installer/SKILL.md");
+  assert.equal(result.details.relativePath, "skills-installer/SKILL.md");
+  assert.deepEqual(invocations, [
+    {
+      command: "fs_read_text",
+      args: {
+        workdir: "/Users/me/.liveagent/skills",
+        path: "skills-installer/SKILL.md",
+        start_line: undefined,
+        limit: undefined,
+        page_start: undefined,
+        page_limit: undefined,
+        cell_start: undefined,
+        cell_limit: undefined,
+      },
+    },
+  ]);
 });
 
-test("file tool runtime errors tell the model to stay on scoped file tools", async () => {
+test("file tool runtime errors point to exact path/pathRef recovery", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({
     mocks: {
@@ -358,15 +631,13 @@ test("file tool runtime errors tell the model to stay on scoped file tools", asy
     id: "missing-skill-file",
     name: "Read",
     arguments: {
-      root: "skills",
-      path: "demo/missing.md",
+      path: "skill://demo/missing.md",
     },
   });
 
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /Read failed for root=skills path=demo\/missing\.md/);
-  assert.match(result.content[0].text, /Retry with root="skills", path="demo\/missing\.md"/);
-  assert.match(result.content[0].text, /Use List\/Glob\/Grep with the same root to locate files/);
+  assert.match(result.content[0].text, /Read failed for skill:\/\/demo\/missing\.md/);
+  assert.match(result.content[0].text, /Use the exact path, pathRef, or displayPath/);
   assert.match(result.content[0].text, /Do not use Bash/);
   assert.deepEqual(invocations, [
     {
@@ -517,7 +788,7 @@ test("Edit auto-primes a full text snapshot before replacement", async () => {
   assert.deepEqual(invocations.map((call) => call.command), ["fs_read_text", "fs_edit_text"]);
 });
 
-test("SkillsManager legacy read form is routed through manage action payload", async () => {
+test("SkillsManager read accepts explicit skill entry paths", async () => {
   const invocations = [];
   const skillLoader = createTsModuleLoader({
     mocks: {
@@ -549,7 +820,8 @@ test("SkillsManager legacy read form is routed through manage action payload", a
     id: "skill-read",
     name: "SkillsManager",
     arguments: {
-      path: "skills-installer/SKILL.md",
+      action: "read",
+      path: "skill://skills-installer/SKILL.md",
       offset: 2,
       length: 2,
     },
@@ -561,8 +833,8 @@ test("SkillsManager legacy read form is routed through manage action payload", a
   assert.equal(result.details.startLine, 3);
   assert.equal(result.details.numLines, 2);
   assert.match(result.content[0].text, /<LiveAgentSkillFileRules>/);
-  assert.match(result.content[0].text, /root="skills"/);
-  assert.match(result.content[0].text, /path="skills-installer\/\.\.\."/);
+  assert.match(result.content[0].text, /skill:\/\/skills-installer\/\.\.\./);
+  assert.match(result.content[0].text, /path="skill:\/\/skills-installer\/\.\.\."/);
   assert.match(result.content[0].text, /Do not use Bash/);
   assert.deepEqual(invocations, [
     {
@@ -1001,7 +1273,7 @@ test("SkillsManager read errors route sibling Skill files back to file tools", a
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /SkillsManager\(action="read"\) is for Skill entry files/);
   assert.match(result.content[0].text, /looks like a sibling file inside a Skill/);
-  assert.match(result.content[0].text, /Read\/List\/Glob\/Grep using root="skills" and path="global-memory\/\.\.\."/);
+  assert.match(result.content[0].text, /Read\/List\/Glob\/Grep using path="skill:\/\/global-memory\/\.\.\."/);
   assert.match(result.content[0].text, /Do not use Bash cat\/ls\/find\/grep/);
 });
 
@@ -1096,8 +1368,8 @@ test("SkillsManager create action builds payload and refreshes skill discovery",
     assert.equal(result.details.action, "create");
     assert.equal(result.details.createdName, "workflow-skill");
     assert.equal(result.details.target, "/Users/me/.liveagent/skills/workflow-skill");
-    assert.match(result.content[0].text, /root=skills/);
-    assert.match(result.content[0].text, /target=skills:workflow-skill/);
+    assert.match(result.content[0].text, /pathScheme=skill:\/\/<baseDir>\/\.\.\./);
+    assert.match(result.content[0].text, /target=skill:\/\/workflow-skill/);
     assert.match(result.content[0].text, /skillFile=workflow-skill\/SKILL\.md/);
     assert.match(result.content[0].text, /enabled=true/);
     assert.doesNotMatch(result.content[0].text, /\/Users\/me\/\.liveagent\/skills/);
@@ -1141,7 +1413,7 @@ test("SkillsManager create action builds payload and refreshes skill discovery",
       },
     });
     assert.equal(packageResult.isError, false);
-    assert.match(packageResult.content[0].text, /archive=skills:\.packages\/workflow-skill\.skill/);
+    assert.match(packageResult.content[0].text, /archive=skill:\/\/\.packages\/workflow-skill\.skill/);
     assert.deepEqual(events, ["liveagent:skills-discovery-updated"]);
     assert.deepEqual(invocations, [
       {
@@ -1231,6 +1503,11 @@ test("Image file tool returns display image details and inline image content", a
   assert.deepEqual(result.details.images, [
     {
       path: "uploads/001.jpg",
+      scope: "workspace",
+      absolutePath: "/workspace/uploads/001.jpg",
+      relativePath: "uploads/001.jpg",
+      displayPath: "uploads/001.jpg",
+      pathRef: "workspace:uploads/001.jpg",
       sourceType: "path",
       renderMode: "inline",
       mimeType: "image/jpeg",
@@ -1255,7 +1532,7 @@ test("Image file tool returns display image details and inline image content", a
   ]);
 });
 
-test("Image file tool reads installed Skill images through root=skills", async () => {
+test("Image file tool reads installed Skill images through skill URLs", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({
     mocks: {
@@ -1285,20 +1562,24 @@ test("Image file tool reads installed Skill images through root=skills", async (
   });
 
   const imageTool = bundle.tools.find((tool) => tool.name === "Image");
-  assert.match(JSON.stringify(imageTool.parameters), /"skills"/);
+  assert.doesNotMatch(JSON.stringify(imageTool.parameters), /"root"/);
+  assert.equal(imageTool.parameters.additionalProperties, false);
+  assert.match(JSON.stringify(imageTool.parameters), /skill:\/\//);
 
   const result = await bundle.executeToolCall({
     type: "toolCall",
     id: "image-skill-call",
     name: "Image",
-    arguments: { root: "skills", path: "demo/assets/logo.png" },
+    arguments: { path: "skill://demo/assets/logo.png" },
   });
 
   assert.equal(result.isError, false);
   assert.equal(result.details.kind, "display_image");
-  assert.equal(result.details.images[0].root, "skills");
-  assert.equal(result.details.images[0].path, "demo/assets/logo.png");
-  assert.match(result.content[0].text, /Display image: root=skills path=demo\/assets\/logo\.png/);
+  assert.equal(result.details.images[0].scope, "skill");
+  assert.equal(result.details.images[0].path, "skill://demo/assets/logo.png");
+  assert.equal(result.details.images[0].relativePath, "demo/assets/logo.png");
+  assert.equal(result.details.images[0].pathRef, "skill:demo/assets/logo.png");
+  assert.match(result.content[0].text, /Display image: skill:\/\/demo\/assets\/logo\.png/);
   assert.deepEqual(invocations, [
     {
       command: "fs_read_image_source",
@@ -1312,14 +1593,22 @@ test("Image file tool reads installed Skill images through root=skills", async (
   ]);
 });
 
-test("Image file tool rejects absolute workspace and Skill paths with scoped retry hints", async () => {
+test("Image file tool normalizes absolute workspace and Skill image paths", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({
     mocks: {
       "@tauri-apps/api/core": {
         async invoke(command, args) {
           invocations.push({ command, args });
-          throw new Error("unexpected invoke");
+          return {
+            kind: "image",
+            path: args.source,
+            mimeType: "image/png",
+            data: "image-bytes",
+            sizeBytes: 64,
+            mtimeMs: 12,
+            contentHash: "image-hash",
+          };
         },
       },
     },
@@ -1335,40 +1624,41 @@ test("Image file tool rejects absolute workspace and Skill paths with scoped ret
 
   const workspaceResult = await bundle.executeToolCall({
     type: "toolCall",
-    id: "bad-workspace-image",
+    id: "absolute-workspace-image",
     name: "Image",
     arguments: { path: "/workspace/uploads/logo.png" },
   });
-  assert.equal(workspaceResult.isError, true);
-  assert.match(
-    workspaceResult.content[0].text,
-    /Retry with root="workspace" \(or omit root\), path="uploads\/logo\.png"/,
-  );
-  assert.match(workspaceResult.content[0].text, /Do not use Bash/);
+  assert.equal(workspaceResult.isError, false);
+  assert.equal(workspaceResult.details.images[0].scope, "workspace");
+  assert.equal(workspaceResult.details.images[0].path, "uploads/logo.png");
 
   const skillsResult = await bundle.executeToolCall({
     type: "toolCall",
-    id: "bad-skill-image",
+    id: "absolute-skill-image",
     name: "Image",
     arguments: { path: "/Users/me/.liveagent/skills/demo/assets/logo.png" },
   });
-  assert.equal(skillsResult.isError, true);
-  assert.match(skillsResult.content[0].text, /Retry with root="skills", path="demo\/assets\/logo\.png"/);
-  assert.match(skillsResult.content[0].text, /Do not use Bash/);
+  assert.equal(skillsResult.isError, false);
+  assert.equal(skillsResult.details.images[0].scope, "skill");
+  assert.equal(skillsResult.details.images[0].path, "skill://demo/assets/logo.png");
 
   const homeSkillsResult = await bundle.executeToolCall({
     type: "toolCall",
-    id: "bad-home-skill-image",
+    id: "home-skill-image",
     name: "Image",
     arguments: { path: "~/.liveagent/skills/demo/assets/logo.png" },
   });
-  assert.equal(homeSkillsResult.isError, true);
-  assert.match(
-    homeSkillsResult.content[0].text,
-    /Retry with root="skills", path="demo\/assets\/logo\.png"/,
+  assert.equal(homeSkillsResult.isError, false);
+  assert.equal(homeSkillsResult.details.images[0].scope, "skill");
+  assert.equal(homeSkillsResult.details.images[0].path, "skill://demo/assets/logo.png");
+  assert.deepEqual(
+    invocations.map((call) => [call.args.workdir, call.args.source]),
+    [
+      ["/workspace", "uploads/logo.png"],
+      ["/Users/me/.liveagent/skills", "demo/assets/logo.png"],
+      ["/Users/me/.liveagent/skills", "demo/assets/logo.png"],
+    ],
   );
-  assert.match(homeSkillsResult.content[0].text, /Do not use Bash/);
-  assert.deepEqual(invocations, []);
 });
 
 test("Image file tool blocks fixed Skills root paths when Skills are disabled", async () => {
@@ -1398,12 +1688,12 @@ test("Image file tool blocks fixed Skills root paths when Skills are disabled", 
   });
 
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /fixed Skills root.*blocked/);
-  assert.match(result.content[0].text, /Enable the Skill.*root="skills", path="demo\/assets\/logo\.png"/);
+  assert.match(result.content[0].text, /installed Skill files, but Skills are not enabled/);
+  assert.match(result.content[0].text, /skill:\/\/demo\/assets\/logo\.png/);
   assert.deepEqual(invocations, []);
 });
 
-test("Image runtime errors tell the model to retry with scoped image paths", async () => {
+test("Image runtime errors point to exact path/pathRef recovery", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({
     mocks: {
@@ -1428,13 +1718,12 @@ test("Image runtime errors tell the model to retry with scoped image paths", asy
     type: "toolCall",
     id: "missing-skill-image",
     name: "Image",
-    arguments: { root: "skills", path: "demo/assets/missing.png" },
+    arguments: { path: "skill://demo/assets/missing.png" },
   });
 
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /Image failed for root=skills path=demo\/assets\/missing\.png/);
-  assert.match(result.content[0].text, /Retry with root="skills", path="demo\/assets\/missing\.png"/);
-  assert.match(result.content[0].text, /Use List\/Glob\/Grep with the same root to locate files/);
+  assert.match(result.content[0].text, /Image failed for skill:\/\/demo\/assets\/missing\.png/);
+  assert.match(result.content[0].text, /Pass the path exactly as returned/);
   assert.match(result.content[0].text, /Do not use Bash/);
   assert.deepEqual(invocations, [
     {

@@ -513,7 +513,6 @@ test("DeepSeek DSML stream wrapper strips repeated historical tool call text bef
   const toolCall = createToolCall("call_00_quPNrz0VAAnTk8FHPCXr6162", "Grep", {
     pattern: "express",
     file_pattern: "**/*.js",
-    root: "workspace",
     ignore_case: true,
   });
   const wrapped = wrapDeepSeekDsmlToolCallStream(
@@ -523,7 +522,7 @@ test("DeepSeek DSML stream wrapper strips repeated historical tool call text bef
         "## 4️⃣ Grep 文本搜索\n\nHist",
         "orical tool call (read-only, not repeating):\n",
         "tool_name: Grep\n",
-        'arguments: {"pattern": "express", "file_pattern": "**/*.js", "root": "workspace", "ignore_case": true}',
+        'arguments: {"pattern": "express", "file_pattern": "**/*.js", "ignore_case": true}',
       ],
       toolCall,
     ),
@@ -608,7 +607,6 @@ test("DeepSeek DSML stream wrapper strips bare tool_name text before native tool
 
 test("DeepSeek DSML stream wrapper strips malformed historical request text before native tool calls", async () => {
   const toolCall = createToolCall("call_01_native_bash", "Bash", {
-    root: "workspace",
     command: "ls -la tool-test/",
     cwd: ".",
   });
@@ -621,7 +619,6 @@ test("DeepSeek DSML stream wrapper strips malformed historical request text befo
         "tool_name: Bash\n",
         "arguments:\n",
         "{\n",
-        '  "root": "workspace",\n',
         '  "command": "echo \'Node: $(node --version 2>/dev/null || echo "未安装")\'"\n',
         "}\n\n",
       ],

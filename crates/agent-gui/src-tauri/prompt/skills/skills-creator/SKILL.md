@@ -10,7 +10,7 @@ Create LiveAgent-compatible skills in the fixed runtime skills root by keeping t
 ## Workflow
 
 1. Confirm the target skill name, trigger description, captured workflow, and any required reference/helper files.
-2. Read `references/agent-skill-format.md` and `references/authoring-patterns.md` through file tools with `root="skills"` and paths prefixed by this skill's `baseDir` before shaping long instructions.
+2. Read `references/agent-skill-format.md` and `references/authoring-patterns.md` through file tools before shaping long instructions. Use `path="skill://skills-creator/references/agent-skill-format.md"` and `path="skill://skills-creator/references/authoring-patterns.md"`, or use the exact `pathRef` returned by a prior tool.
 3. Translate any user-provided non-English requirements into English before drafting skill documentation. Preserve code identifiers, filenames, commands, URLs, and literal values exactly when needed.
 4. Draft the `SKILL.md` body in English imperative form. Keep frontmatter to `name` and `description` unless a compatibility reason requires an optional key.
 5. Move deterministic or reusable details into `files` only when they are truly needed; keep explanatory material in English `references/`; keep output-only resources in `assets/`.
@@ -27,7 +27,7 @@ Create LiveAgent-compatible skills in the fixed runtime skills root by keeping t
 - Do not add README-style files such as `README.md`, `INSTALLATION_GUIDE.md`, `QUICK_REFERENCE.md`, or `CHANGELOG.md` inside a skill.
 - Prefer one-hop references from `SKILL.md`; do not build deep reference chains.
 - Keep the `SKILL.md` body short enough to read comfortably through `SkillsManager`.
-- When inspecting or optimizing files inside an enabled installed skill, use `Read`, `List`, `Glob`, `Grep`, `Write`, `Edit`, or `Delete` with `root="skills"` and a path relative to the fixed Skills root. Never expand the Skills root into an absolute local path.
+- When inspecting or optimizing files inside an enabled installed skill, use `Read`, `List`, `Glob`, `Grep`, `Write`, `Edit`, or `Delete` with the exact path you see: prefer `skill://<baseDir>/...` or a `pathRef` returned by a tool. Do not use Bash for workspace or Skill file operations.
 - Create new skill directories through `SkillsManager(action=create)` or `SkillsManager(action=install)`. Use `conflict=backup` or `conflict=overwrite` only when the user has accepted replacement.
 - Creating a skill automatically enables it for the current conversation.
 

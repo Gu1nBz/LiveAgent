@@ -108,8 +108,18 @@ function buildPagedResultTags(params: {
   ];
 }
 
-function fileRootTags(root?: string | null): MetaTag[] {
-  return root && root !== "workspace" ? [{ label: "root", value: root }] : [];
+function filePathTags(details: {
+  scope?: string;
+  displayPath?: string;
+  pathRef?: string;
+  absolutePath?: string;
+}): MetaTag[] {
+  return [
+    ...(details.scope && details.scope !== "workspace"
+      ? [{ label: "scope", value: details.scope }]
+      : []),
+    ...(details.pathRef ? [{ label: "pathRef", value: details.pathRef }] : []),
+  ];
 }
 
 export function PathDisplay({ path, className }: { path: string; className?: string }) {
@@ -247,7 +257,7 @@ export function ToolResultDisplay({
         <ToolSurface>
           <MetaTags
             tags={[
-              ...fileRootTags(details.root),
+              ...filePathTags(details),
               {
                 label: "lines",
                 value:
@@ -377,7 +387,7 @@ export function ToolResultDisplay({
         <ToolSurface>
           <MetaTags
             tags={[
-              ...fileRootTags(details.root),
+              ...filePathTags(details),
               { label: "mime", value: details.mimeType },
               { label: "size", value: `${details.sizeBytes} bytes` },
               ...(details.reusedExisting ? [{ label: "cache", value: "unchanged" }] : []),
@@ -408,7 +418,7 @@ export function ToolResultDisplay({
         <ToolSurface>
           <MetaTags
             tags={[
-              ...fileRootTags(details.root),
+              ...filePathTags(details),
               {
                 label: "pages",
                 value:
@@ -435,7 +445,7 @@ export function ToolResultDisplay({
         <ToolSurface>
           <MetaTags
             tags={[
-              ...fileRootTags(details.root),
+              ...filePathTags(details),
               {
                 label: "cells",
                 value:
@@ -462,7 +472,7 @@ export function ToolResultDisplay({
         <ToolSurface>
           <MetaTags
             tags={[
-              ...fileRootTags(details.root),
+              ...filePathTags(details),
               ...(details.mimeType ? [{ label: "mime", value: details.mimeType }] : []),
               ...(typeof details.sizeBytes === "number"
                 ? [{ label: "size", value: `${details.sizeBytes} bytes` }]
@@ -486,7 +496,7 @@ export function ToolResultDisplay({
         <ToolSurface>
           <MetaTags
             tags={[
-              ...fileRootTags(details.root),
+              ...filePathTags(details),
               { label: "target", value: details.existedBefore ? "existing" : "new" },
               { label: "bytes", value: String(details.bytesWritten) },
               { label: "lines", value: String(details.totalLines) },
@@ -504,7 +514,7 @@ export function ToolResultDisplay({
       <EditDiffView
         beforeText={details.oldPreview}
         afterText={details.newPreview}
-        filePath={details.root === "skills" ? `skills:${details.path}` : details.path}
+        filePath={details.displayPath || details.path}
       />
     );
   }
@@ -514,7 +524,7 @@ export function ToolResultDisplay({
     return (
       <ToolSurface>
         <MetaTags
-          tags={[...fileRootTags(details.root), { label: "kind", value: details.targetKind }]}
+          tags={[...filePathTags(details), { label: "kind", value: details.targetKind }]}
         />
       </ToolSurface>
     );
@@ -532,7 +542,7 @@ export function ToolResultDisplay({
               total: details.total,
               offset: details.offset,
               hasMore: details.hasMore,
-            }).concat(fileRootTags(details.root))}
+            }).concat(filePathTags(details))}
           />
         </ToolSurface>
         <ToolSurface className="max-h-56 overflow-auto">
@@ -569,7 +579,7 @@ export function ToolResultDisplay({
               total: details.total,
               offset: details.offset,
               hasMore: details.hasMore,
-            }).concat(fileRootTags(details.root))}
+            }).concat(filePathTags(details))}
           />
         </ToolSurface>
         <ToolSurface className="max-h-56 overflow-auto">
@@ -594,7 +604,7 @@ export function ToolResultDisplay({
         <ToolSurface>
           <MetaTags
             tags={[
-              ...fileRootTags(details.root),
+              ...filePathTags(details),
               { label: "mode", value: details.outputMode },
               { label: "matches", value: String(details.matchCount) },
               { label: "files", value: String(details.fileCount) },

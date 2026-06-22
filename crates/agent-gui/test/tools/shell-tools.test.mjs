@@ -129,6 +129,7 @@ test("Bash tool schema allows larger timeout values but clamps for Codex", async
   });
 
   assert.match(JSON.stringify(bundle.tools[0].parameters), /"maximum":600000/);
+  assert.equal(bundle.tools[0].parameters.additionalProperties, false);
 
   const result = await bundle.executeToolCall({
     ...createBashCall(),
@@ -142,6 +143,38 @@ test("Bash tool schema allows larger timeout values but clamps for Codex", async
   assert.equal(calls.length, 1);
   assert.equal(calls[0].args.timeout_ms, 30_000);
   assert.match(result.content[0].text, /timeout_ms: 30000/);
+});
+
+test("Bash tool rejects unsupported root arguments", async () => {
+  const calls = [];
+  const loader = createTsModuleLoader({
+    mocks: {
+      "@tauri-apps/api/core": {
+        async invoke(command, args) {
+          calls.push({ command, args });
+          throw new Error("unexpected invoke");
+        },
+      },
+    },
+  });
+
+  const { createShellTools } = loader.loadModule("src/lib/tools/shellTools.ts");
+  const bundle = createShellTools({
+    workdir: "/repo",
+    providerId: "codex",
+  });
+
+  const result = await bundle.executeToolCall({
+    ...createBashCall(),
+    arguments: {
+      root: "workspace",
+      command: "echo ready",
+    },
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /unsupported argument: root/);
+  assert.deepEqual(calls, []);
 });
 
 test("Bash tool rejects background commands that keep stdio attached", async () => {
@@ -454,23 +487,21 @@ test("Bash tool can execute from the fixed Skills root with relative cwd", async
     skillsRootDir: "/Users/me/.liveagent/skills",
   });
 
-  assert.match(JSON.stringify(bundle.tools[0].parameters), /"skills"/);
+  assert.match(JSON.stringify(bundle.tools[0].parameters), /skill:\/\//);
 
   const result = await bundle.executeToolCall({
     type: "toolCall",
     id: "call-skill-bash",
     name: "Bash",
     arguments: {
-      root: "skills",
-      cwd: "metaphysics-steward/scripts",
+      cwd: "skill://metaphysics-steward/scripts",
       command: "python3 steward.py --mode qimen",
       timeout_ms: 1000,
     },
   });
 
   assert.equal(result.isError, false);
-  assert.match(result.content[0].text, /root: skills/);
-  assert.match(result.content[0].text, /cwd: metaphysics-steward\/scripts/);
+  assert.match(result.content[0].text, /cwd: skill:\/\/metaphysics-steward\/scripts/);
   assert.equal(calls[0].args.workdir, "/Users/me/.liveagent/skills");
   assert.equal(calls[0].args.cwd, "metaphysics-steward/scripts");
 });
@@ -530,7 +561,7 @@ test("Bash tool allows enabled Skill scripts by direct absolute path without cd"
   assert.equal(calls[0].args.command, command);
 });
 
-test("Bash tool enforces enabled Skill allowlist for root=skills cwd", async () => {
+test("Bash tool enforces enabled Skill allowlist for skill cwd", async () => {
   const calls = [];
   const loader = createTsModuleLoader({
     mocks: {
@@ -560,8 +591,7 @@ test("Bash tool enforces enabled Skill allowlist for root=skills cwd", async () 
     id: "blocked-skill-bash-cwd",
     name: "Bash",
     arguments: {
-      root: "skills",
-      cwd: "metaphysics-steward/scripts",
+      cwd: "skill://metaphysics-steward/scripts",
       command: "python3 steward.py --mode qimen",
       timeout_ms: 1000,
     },
@@ -609,7 +639,7 @@ test("Bash tool blocks absolute Skills root access from workspace commands", asy
   });
 
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /Bash cannot access ~\/\.liveagent\/skills or absolute Skills paths/);
+  assert.match(result.content[0].text, /Bash cannot cd into the fixed Skills root/);
   assert.deepEqual(calls, []);
 });
 
@@ -643,7 +673,7 @@ test("Bash tool blocks fixed Skills root access even when Skills are disabled", 
   });
 
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /Bash cannot access ~\/\.liveagent\/skills or absolute Skills paths/);
+  assert.match(result.content[0].text, /Bash cannot read or search ~\/\.liveagent\/skills/);
   assert.deepEqual(calls, []);
 });
 
@@ -680,6 +710,6 @@ test("Bash tool blocks workspace skills guesses before shell execution", async (
 
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /workspace skills\/ guesses/);
-  assert.match(result.content[0].text, /root="skills".*cwd="<skill-name>\/scripts"/);
+  assert.match(result.content[0].text, /cwd to skill:\/\/<enabled-skill>\/scripts/);
   assert.deepEqual(calls, []);
 });

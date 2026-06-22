@@ -28,6 +28,12 @@ function asErrorMessage(err: unknown) {
 function normalizeSkillPath(input: unknown) {
   const raw = typeof input === "string" ? input.trim() : "";
   if (!raw) return "";
+  if (/^skill:\/\//i.test(raw)) {
+    return raw.replace(/^skill:\/\//i, "").replace(/^\/+/, "").replace(/\\/g, "/");
+  }
+  if (/^skill:/i.test(raw)) {
+    return raw.replace(/^skill:/i, "").replace(/^\/+/, "").replace(/\\/g, "/");
+  }
   if (/^[a-zA-Z]:[\\/]/.test(raw)) return "";
   if (raw.startsWith("/") || raw.startsWith("\\\\")) return "";
   return raw.replace(/^[.][\\/]/, "");
@@ -47,29 +53,26 @@ function formatSkillLineWindow(startLine: number, numLines: number) {
 }
 
 const SKILL_MANAGER_PARAMETERS = Type.Object({
-  action: Type.Optional(
-    Type.Union(
-      [
-        Type.Literal("read"),
-        Type.Literal("list"),
-        Type.Literal("install"),
-        Type.Literal("create"),
-        Type.Literal("validate"),
-        Type.Literal("package"),
-        Type.Literal("delete"),
-        Type.Literal("clawhub_search"),
-        Type.Literal("clawhub_install"),
-      ],
-      {
-        description:
-          "Skill management action. Omit action when using the legacy read form with path.",
-      },
-    ),
+  action: Type.Union(
+    [
+      Type.Literal("read"),
+      Type.Literal("list"),
+      Type.Literal("install"),
+      Type.Literal("create"),
+      Type.Literal("validate"),
+      Type.Literal("package"),
+      Type.Literal("delete"),
+      Type.Literal("clawhub_search"),
+      Type.Literal("clawhub_install"),
+    ],
+    {
+      description: "Skill management action.",
+    },
   ),
   path: Type.Optional(
     Type.String({
       description:
-        "Relative Skill file path for action=read, for example my-skill/SKILL.md, my-skill/skill.json, or my-skill/README.md.",
+        "Skill entry file path for action=read. Accepts skill://<baseDir>/SKILL.md, skill:<baseDir>/SKILL.md, or <baseDir>/SKILL.md.",
     }),
   ),
   offset: Type.Optional(
@@ -175,7 +178,7 @@ const SKILL_MANAGER_PARAMETERS = Type.Object({
 function normalizeAction(args: Record<string, unknown>) {
   const action = typeof args.action === "string" ? args.action.trim() : "";
   if (action) return action;
-  return typeof args.path === "string" && args.path.trim() ? "read" : "list";
+  throw new Error("SkillsManager.action is required");
 }
 
 function optionalString(args: Record<string, unknown>, key: string) {
@@ -235,9 +238,9 @@ function displaySkillRootPath(rootDir: string, path: string | null | undefined) 
   const value = typeof path === "string" ? normalizeDisplayPath(path) : "";
   if (!value) return "";
   const root = normalizeDisplayPath(rootDir);
-  if (root && value === root) return "skills:<root>";
+  if (root && value === root) return "skill://<root>";
   if (root && value.startsWith(`${root}/`)) {
-    return `skills:${value.slice(root.length + 1)}`;
+    return `skill://${value.slice(root.length + 1)}`;
   }
   return value;
 }
@@ -282,9 +285,9 @@ function buildSkillReadPathRules(path: string) {
   return [
     "",
     "<LiveAgentSkillFileRules>",
-    `- This Skill file was read from root="skills". For sibling files, use file tools with root="skills" and paths that start with ${baseDir}/.`,
-    "- If the Skill text includes absolute local paths, home-directory paths, drive-letter paths, or shell snippets that read Skill files with cat/ls/find/grep, treat those path fragments as non-portable examples.",
-    `- Use Read/List/Glob/Grep with root="skills" and path="${baseDir}/..." to read or locate Skill files. Do not use Bash for those file operations.`,
+    `- This Skill file was read from skill://${baseDir}/... . For sibling files, use file tools with paths that start with skill://${baseDir}/.`,
+    "- If the Skill text includes shell snippets that read Skill files with cat/ls/find/grep, use the dedicated file tools for those reads.",
+    `- Use Read/List/Glob/Grep with path="skill://${baseDir}/..." to read or locate Skill files. Do not use Bash for those file operations.`,
     "</LiveAgentSkillFileRules>",
   ].join("\n");
 }
@@ -313,7 +316,7 @@ function buildSkillManagerErrorText(args: Record<string, unknown>, error: unknow
   }
 
   lines.push(
-    `To read or locate files inside this Skill, retry with Read/List/Glob/Grep using root="skills" and path="${baseDir}/...".`,
+    `To read or locate files inside this Skill, retry with Read/List/Glob/Grep using path="skill://${baseDir}/...".`,
     "Do not use Bash cat/ls/find/grep or absolute ~/.liveagent/skills paths for Skill file access.",
   );
 
@@ -331,7 +334,7 @@ function normalizeSkillManagerPayload(
 
   if (action === "read") {
     const path = normalizeSkillPath(args.path);
-    if (!path) throw new Error("SkillsManager.path must be a relative path for action=read");
+    if (!path) throw new Error("SkillsManager.path must be a Skill entry path for action=read");
     payload.path = path;
     const offset = optionalNumber(args, "offset");
     const length = optionalNumber(args, "length");
@@ -459,8 +462,8 @@ function formatManageSkillResultText(
 ) {
   const lines = [
     `SkillsManager action=${result.action}`,
-    "root=skills",
-    'Use Read/List/Glob/Grep/Write/Edit/Delete with root="skills" and relative paths for files inside enabled Skills. Use SkillsManager actions for Skill creation, local/GitHub/ClawHub installation, validation, packaging, and deletion.',
+    "pathScheme=skill://<baseDir>/...",
+    'Use Read/List/Glob/Grep/Write/Edit/Delete with skill://<baseDir>/... paths for files inside enabled Skills. Use SkillsManager actions for Skill creation, local/GitHub/ClawHub installation, validation, packaging, and deletion.',
   ];
 
   if (result.action === "list") {
@@ -595,7 +598,7 @@ export function createSkillTools(
   const toolSkillsManager: Tool = {
     name: "SkillsManager",
     description:
-      'Read and manage Skills in LiveAgent\'s fixed user Skills root. Use action=read to read a Skill entry file, action=list to inspect the enabled Skills visible to this chat, action=install to import a local directory/archive/HTTP(S) download/GitHub URL, action=clawhub_search to search or browse ClawHub, action=clawhub_install with a ClawHub slug to download and install a Skill from ClawHub, action=create to create a new Skill from a summarized workflow, action=validate to check an enabled managed Skill, action=package to create a .skill archive, and action=delete to permanently delete an installed user Skill. For files referenced inside an enabled Skill, use Read/List/Grep/Glob/Write/Edit/Delete with root="skills" and a root-relative path; this allows maintaining or optimizing enabled Skills. For legacy reads, omitting action and passing path is accepted.',
+      "Read and manage Skills in LiveAgent's fixed user Skills directory. Use action=read to read a Skill entry file, action=list to inspect the enabled Skills visible to this chat, action=install to import a local directory/archive/HTTP(S) download/GitHub URL, action=clawhub_search to search or browse ClawHub, action=clawhub_install with a ClawHub slug to download and install a Skill from ClawHub, action=create to create a new Skill from a summarized workflow, action=validate to check an enabled managed Skill, action=package to create a .skill archive, and action=delete to permanently delete an installed user Skill. For files referenced inside an enabled Skill, use Read/List/Grep/Glob/Write/Edit/Delete with skill://<baseDir>/... paths; this allows maintaining or optimizing enabled Skills.",
     parameters: SKILL_MANAGER_PARAMETERS,
   };
 

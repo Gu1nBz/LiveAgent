@@ -38,6 +38,7 @@ import {
   type DelegateAgentItemResultDetails,
   type DelegateAgentResultDetails,
 } from "../builtinTypes";
+import { ToolPathResolver } from "../pathUtils";
 import {
   DEFAULT_CONCURRENCY,
   DELEGATE_TOOL_NAME,
@@ -112,6 +113,37 @@ import {
   defaultCreateWorktree,
   defaultGetWorktreeStatus,
 } from "./worktree";
+
+async function resolveAgentAllowedOutputPaths(params: {
+  agents: DelegateAgentInput[];
+  workdir: string;
+}): Promise<DelegateAgentInput[]> {
+  const resolver = new ToolPathResolver({ workdir: params.workdir });
+  const resolvedAgents: DelegateAgentInput[] = [];
+  for (const agent of params.agents) {
+    const allowedOutputPaths: string[] = [];
+    for (const rawPath of agent.allowedOutputPaths) {
+      const input = typeof rawPath === "string" ? rawPath.trim() : "";
+      if (!input) continue;
+      const resolved = await resolver.resolvePath(input, {
+        label: `Agent.allowed_output_paths for ${agent.id}`,
+        intent: "write",
+        required: true,
+      });
+      if (resolved.scope !== "workspace") {
+        throw new Error(
+          `Agent.allowed_output_paths must resolve inside the workspace. Received ${JSON.stringify(input)}.`,
+        );
+      }
+      const relativePath = resolved.relativePath ?? "";
+      if (!allowedOutputPaths.includes(relativePath)) {
+        allowedOutputPaths.push(relativePath);
+      }
+    }
+    resolvedAgents.push({ ...agent, allowedOutputPaths });
+  }
+  return resolvedAgents;
+}
 
 export function createDelegateTools(params: {
   providerId: ProviderId;
@@ -251,7 +283,10 @@ export function createDelegateTools(params: {
     }
 
     const args = asObject(toolCall.arguments);
-    const rawAgents = normalizeDelegateAgents(args);
+    const rawAgents = await resolveAgentAllowedOutputPaths({
+      agents: normalizeDelegateAgents(args),
+      workdir: params.workdir,
+    });
     const agents: DelegateAgentInput[] = [];
     const canonicalizationNotes: string[] = [];
     for (const rawTask of rawAgents) {

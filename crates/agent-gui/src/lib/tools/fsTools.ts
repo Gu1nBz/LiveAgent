@@ -6,7 +6,7 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { invoke } from "@tauri-apps/api/core";
-import { type TSchema, Type } from "typebox";
+import { Type } from "typebox";
 import {
   type BuiltinToolBundle,
   type BuiltinToolResultDetails,
@@ -15,7 +15,6 @@ import {
   type DisplayImageItemDetails,
   type DisplayImageResultDetails,
   type EditResultDetails,
-  type FileToolRoot,
   type GlobResultDetails,
   type GrepResultDetails,
   type ListResultDetails,
@@ -28,21 +27,11 @@ import {
 } from "./builtinTypes";
 import type { FileToolState } from "./fileToolState";
 import {
-  buildScopedPathError,
-  formatScopedTarget,
-  normalizeComparablePath,
-  normalizeOptionalScopedRelPath,
-  normalizeRequiredScopedRelPath,
-  normalizeToolFileRoot,
-  relativePathFromAbsolute,
+  formatResolvedTarget,
+  type ResolvedPath,
+  ToolPathResolver,
 } from "./pathUtils";
-import {
-  assertSkillMutationAllowed,
-  assertSkillPathAllowedByPolicy,
-  buildSkillAccessDeniedMessage,
-  isSkillAccessPolicyRestrictive,
-  type SkillAccessPolicy,
-} from "./skillAccessPolicy";
+import type { SkillAccessPolicy } from "./skillAccessPolicy";
 
 type ToolOk<TDetails extends BuiltinToolResultDetails = BuiltinToolResultDetails> = {
   content: (TextContent | ImageContent)[];
@@ -52,15 +41,29 @@ type ToolOk<TDetails extends BuiltinToolResultDetails = BuiltinToolResultDetails
 const MAX_DISPLAY_IMAGE_PATHS = 12;
 const AUTO_EDIT_FULL_READ_MAX_LINES = 5_000;
 
+function strictToolParameters(properties: Record<string, unknown>) {
+  return Type.Object(properties as any, { additionalProperties: false });
+}
+
+function assertKnownArguments(toolName: string, args: unknown, allowed: readonly string[]) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return;
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(args).filter((key) => !allowedSet.has(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `${toolName} received unsupported argument${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`,
+    );
+  }
+}
+
 type DisplayImageSourceType = "path" | "url" | "base64" | "auto";
 
 type DisplayImageSourceInput = {
   source: string;
   sourceType: DisplayImageSourceType;
   mimeType?: string;
-  root?: FileToolRoot;
+  resolvedPath?: ResolvedPath;
   workdir?: string;
-  scopedPath?: string;
 };
 
 type DisplayImageEntry = {
@@ -182,10 +185,6 @@ function formatLineWindow(startLine: number, numLines: number, totalLines: numbe
   return `${startLine}-${endLine} / ${totalLines}`;
 }
 
-function rootArgText(root: FileToolRoot) {
-  return root === "workspace" ? 'root="workspace" (or omit root)' : `root="${root}"`;
-}
-
 function splitRelativeFilePath(path: string) {
   const parts = path.split("/");
   const fileName = parts.pop()?.trim() ?? "";
@@ -196,32 +195,51 @@ function splitRelativeFilePath(path: string) {
   };
 }
 
-function buildScopedToolRuntimeError(params: {
+function pathDetails(resolved: ResolvedPath) {
+  return {
+    path: resolved.displayPath,
+    scope: resolved.scope,
+    absolutePath: resolved.absolutePath,
+    relativePath: resolved.relativePath,
+    displayPath: resolved.displayPath,
+    pathRef: resolved.pathRef,
+  };
+}
+
+function statePathKey(resolved: ResolvedPath) {
+  return {
+    path: resolved.displayPath,
+    absolutePath: resolved.absolutePath,
+    pathRef: resolved.pathRef,
+  };
+}
+
+function backendPath(resolved: ResolvedPath) {
+  return resolved.relativePath || undefined;
+}
+
+function buildPathToolRuntimeError(params: {
   toolName: string;
-  root: FileToolRoot;
-  path?: string;
+  resolved: ResolvedPath;
   error: unknown;
 }) {
-  const pathHint = params.path ? `path="${params.path}"` : "omit path";
   return [
-    `${params.toolName} failed for ${formatScopedTarget(params.root, params.path)}: ${asErrorMessage(params.error)}`,
-    `Retry with ${rootArgText(params.root)}, ${pathHint}.`,
-    "If the target belongs to another tool root, switch root instead of using an absolute path.",
-    "Use List/Glob/Grep with the same root to locate files. Do not use Bash for workspace or Skills file operations.",
+    `${params.toolName} failed for ${formatResolvedTarget(params.resolved)}: ${asErrorMessage(params.error)}`,
+    "Use the exact path, pathRef, or displayPath returned by List/Glob/Grep/Read.",
+    "Do not use Bash for workspace or Skill file operations.",
   ].join(" ");
 }
 
-async function invokeScopedFileCommand<T>(params: {
+async function invokePathFileCommand<T>(params: {
   toolName: string;
-  root: FileToolRoot;
-  path?: string;
+  resolved: ResolvedPath;
   command: string;
   args: Record<string, unknown>;
 }) {
   try {
     return await invoke<T>(params.command, params.args);
   } catch (error) {
-    throw new Error(buildScopedToolRuntimeError({ ...params, error }));
+    throw new Error(buildPathToolRuntimeError({ ...params, error }));
   }
 }
 
@@ -238,49 +256,9 @@ export function createFsTools(params: {
   let cachedSkillsRootDir =
     typeof params.skillsRootDir === "string" ? params.skillsRootDir.trim() : "";
 
-  const rootParameterShape: Record<string, TSchema> = allowSkillsRoot
-    ? {
-        root: Type.Optional(
-          Type.Union([Type.Literal("workspace"), Type.Literal("skills")], {
-            description:
-              'Sandbox the `path` resolves under. Omit (or "workspace") for files in the workspace root — this is the default. Use "skills" ONLY for files inside an installed Skill that is enabled in this conversation. Regardless of which root is selected, `path` MUST stay relative — never expand the root into an absolute path.',
-          }),
-        ),
-      }
-    : {};
-
-  function withFileRootParameters(shape: Record<string, TSchema>) {
-    return Type.Object({
-      ...rootParameterShape,
-      ...shape,
-    });
-  }
-
-  function withImageRootParameters(shape: Record<string, TSchema>) {
-    return Type.Object({
-      ...(allowSkillsRoot
-        ? {
-            root: Type.Optional(
-              Type.Union([Type.Literal("workspace"), Type.Literal("skills")], {
-                description:
-                  'Sandbox for local image path/paths/source/sources resolution. Omit when the image is workspace-relative (default), a URL, base64, or an absolute path OUTSIDE both the workspace and any installed Skill. Set "workspace" or "skills" when the image lives inside one of those roots — the local path must then be RELATIVE to that root, never absolute.',
-              }),
-            ),
-          }
-        : {}),
-      ...shape,
-    });
-  }
-
-  function normalizeRoot(args: any, toolName: string): FileToolRoot {
-    return normalizeToolFileRoot(args?.root, `${toolName}.root`, {
-      allowSkillsRoot,
-    });
-  }
-
   async function resolveSkillsRootDir() {
     if (!allowSkillsRoot) {
-      throw new Error("root=skills is only available when Skills are enabled");
+      throw new Error("Skill paths are only available when Skills are enabled");
     }
     if (cachedSkillsRootDir) return cachedSkillsRootDir;
     const response = await invoke<SystemListSkillFilesResponse>("system_list_skill_files");
@@ -292,49 +270,22 @@ export function createFsTools(params: {
     return cachedSkillsRootDir;
   }
 
-  async function resolveRootWorkdir(root: FileToolRoot) {
-    return root === "skills" ? resolveSkillsRootDir() : workdir;
-  }
-
-  function assertSkillsPathAccess(root: FileToolRoot, path: string, operation: string) {
-    if (root !== "skills") return;
-    assertSkillPathAllowedByPolicy(skillAccessPolicy, path, operation);
-  }
-
-  function assertSkillsPathMutationAccess(root: FileToolRoot, path: string, operation: string) {
-    if (root !== "skills") return;
-    assertSkillPathAllowedByPolicy(skillAccessPolicy, path, operation);
-    assertSkillMutationAllowed(skillAccessPolicy, operation, path);
-  }
-
-  function assertOptionalSkillsPathAccess(
-    root: FileToolRoot,
-    path: string | undefined,
-    operation: string,
-  ) {
-    if (root !== "skills") return;
-    if (path) {
-      assertSkillPathAllowedByPolicy(skillAccessPolicy, path, operation);
-      return;
-    }
-    if (isSkillAccessPolicyRestrictive(skillAccessPolicy)) {
-      throw new Error(
-        buildSkillAccessDeniedMessage({
-          operation,
-          allowedSkillNames: skillAccessPolicy?.allowedSkillNames,
-        }),
-      );
-    }
-  }
+  const pathResolver = new ToolPathResolver({
+    workdir,
+    skillsRootEnabled: allowSkillsRoot,
+    skillsRootDir: cachedSkillsRootDir,
+    skillAccessPolicy,
+    resolveSkillsRootDir,
+  });
 
   const toolRead: Tool = {
     name: "Read",
     description:
-      "Read a text, image, PDF, notebook, Word, Excel/spreadsheet, or archive file from the workspace or an enabled Skill. For text files, use start_line (1-based) and limit for pagination. For PDFs, use page_start and page_limit. For notebooks (.ipynb), use cell_start and cell_limit. Word/Excel/archive files return a best-effort text preview or entry listing. Returns version metadata and may return an `unchanged` stub when content has not changed since the previous read. Use Image instead when the user asks to show, view, render, or display an image in the chat UI. Do not use Markdown image syntax or HTML img tags to display files.",
-    parameters: withFileRootParameters({
+      "Read a text, image, PDF, notebook, Word, Excel/spreadsheet, or archive file from the workspace or an enabled Skill. Pass the path exactly as you see it: workspace-relative, absolute, ~/..., file://, workspace:pathRef, or skill://<enabled-skill>/... are accepted. For text files, use start_line (1-based) and limit for pagination. For PDFs, use page_start and page_limit. For notebooks (.ipynb), use cell_start and cell_limit. Word/Excel/archive files return a best-effort text preview or entry listing. Returns version metadata and may return an `unchanged` stub when content has not changed since the previous read. Use Image instead when the user asks to show, view, render, or display an image in the chat UI. Do not use Markdown image syntax or HTML img tags to display files.",
+    parameters: strictToolParameters({
       path: Type.String({
         description:
-          'Required path to the file, RELATIVE to the selected `root` (NEVER absolute, NEVER starting with "/", "~/", or a drive letter; NEVER containing "../"). Examples: "src/App.tsx", "assets/logo.png" (workspace), or "my-skill/SKILL.md" (with root="skills"). If you have an absolute path that falls inside the workspace or Skills root, strip that root prefix and pass only the remainder.',
+          'Required file path. Accepts workspace-relative paths such as "src/App.tsx", absolute paths inside the workspace, "~/..." or file:// paths, pathRef values returned by tools, and skill://<enabled-skill>/... paths.',
       }),
       start_line: Type.Optional(
         Type.Number({
@@ -378,19 +329,19 @@ export function createFsTools(params: {
   const toolImage: Tool = {
     name: "Image",
     description:
-      'Display one or more images in the chat UI. This is the only supported way for assistant-side image rendering. Call it whenever the user asks to show, view, render, preview, open, or display images, and whenever another tool saves, downloads, screenshots, generates, or returns an image path/URL that the user should see. Supports workspace- or Skills-relative paths, external absolute paths (only when the image lives OUTSIDE both roots), http/https URLs, base64 data URLs, and SVG images (file, data URL, or raw XML). For images inside the workspace or installed Skills, use root="workspace" or root="skills" with path/paths or local source/sources relative to that root; do not expand either root into an absolute path. For remote images, pass url/urls or source/sources directly instead of downloading the image first, unless the user explicitly asks to save it locally. For remote images, pass `url` / `urls` / `source` / `sources` directly — do NOT download first unless the user asked to save it. Do not embed images in final text with Markdown image syntax, HTML img tags, file:// URLs, or local relative image paths.',
-    parameters: withImageRootParameters({
+      "Display one or more images in the chat UI. This is the only supported way for assistant-side image rendering. Call it whenever the user asks to show, view, render, preview, open, or display images, and whenever another tool saves, downloads, screenshots, generates, or returns an image path/URL that the user should see. Supports workspace paths, enabled Skill paths, external absolute paths, http/https URLs, base64 data URLs, and SVG images (file, data URL, or raw XML). Pass local paths exactly as you see them, including absolute paths or pathRef values. For remote images, pass url/urls or source/sources directly instead of downloading the image first, unless the user explicitly asks to save it locally. Do not embed images in final text with Markdown image syntax, HTML img tags, file:// URLs, or local relative image paths.",
+    parameters: strictToolParameters({
       path: Type.Optional(
         Type.String({
           description:
-            'Single local image path. WHEN `root` is "workspace" (or omitted with the image inside the workspace) or "skills": this path MUST be RELATIVE to the selected root — never an absolute path that points into that root. Examples: "uploads/1777533744503/001.jpg", "assets/logo.png" (workspace), or "my-skill/diagram.png" (with root="skills"). An ABSOLUTE local path like "/Users/me/Pictures/photo.png" is allowed ONLY when the image lives OUTSIDE both the workspace and every installed Skill (e.g., a user-attached image elsewhere on disk).',
+            'Single local image path. Accepts workspace-relative paths, absolute paths, ~/..., file://, pathRef values, and skill://<enabled-skill>/... paths.',
         }),
       ),
       paths: Type.Optional(
         Type.Array(
           Type.String({
             description:
-              "Local image path. Same rules as `path`: RELATIVE to the selected `root` when the image is inside the workspace or a Skill; an external ABSOLUTE path only when it lives outside both roots.",
+              "Local image path. Same accepted forms as `path`.",
           }),
           {
             minItems: 1,
@@ -446,14 +397,14 @@ export function createFsTools(params: {
       source: Type.Optional(
         Type.String({
           description:
-            "Single generic image source. Accepted forms: workspace- or Skills-relative path (matching `root`), external absolute path OUTSIDE both roots, http/https URL, data URL, raw base64, or raw SVG XML. Prefer this for mixed or unknown source types. Same relative-path rule as `path`: never pass an absolute path that points into the workspace or a Skill — strip the root prefix instead.",
+            "Single generic image source. Accepted forms: local path/pathRef, http/https URL, data URL, raw base64, or raw SVG XML. Prefer this for mixed or unknown source types.",
         }),
       ),
       sources: Type.Optional(
         Type.Array(
           Type.String({
             description:
-              "Generic image source. Same accepted forms and same relative-path rule as `source` — never an absolute path that points into the workspace or a Skill.",
+              "Generic image source. Same accepted forms as `source`.",
           }),
           {
             minItems: 1,
@@ -469,11 +420,11 @@ export function createFsTools(params: {
   const toolWrite: Tool = {
     name: "Write",
     description:
-      "Create a new text file or fully rewrite an existing text file. There is no append mode — to add content, Read the file first, then either Write the full new content or use Edit to insert. Existing files must have been Read first (under the same root) so the tool can validate version metadata and reject stale rewrites.",
-    parameters: withFileRootParameters({
+      "Create a new text file or fully rewrite an existing workspace or enabled Skill file. There is no append mode — to add content, Read the file first, then either Write the full new content or use Edit to insert. Existing files must have been Read first so the tool can validate version metadata and reject stale rewrites.",
+    parameters: strictToolParameters({
       path: Type.String({
         description:
-          'Required path to the file, RELATIVE to the selected `root` (NEVER absolute, NEVER starting with "/", "~/", or a drive letter; NEVER containing "../"). Examples: "src/new-file.ts", "src/config.json" (workspace), or "my-skill/references/guide.md" (with root="skills"). If you have an absolute path that falls inside the workspace or Skills root, strip that root prefix and pass only the remainder.',
+          'Required file path. Accepts workspace-relative paths, absolute paths inside the workspace, pathRef values, and skill://<enabled-skill>/... paths. External paths outside workspace/enabled Skills are rejected for writes.',
       }),
       content: Type.String({ description: "Entire text content to write" }),
       mode: Type.Optional(
@@ -487,11 +438,11 @@ export function createFsTools(params: {
   const toolEdit: Tool = {
     name: "Edit",
     description:
-      "Perform an exact-string replacement in a file you have already Read under the same root. Validates version metadata before writing and rejects stale edits — if the file changed after the last Read, Read it again before retrying. If `old_string` matches multiple places, either narrow it until unique or set `replace_all=true` explicitly.",
-    parameters: withFileRootParameters({
+      "Perform an exact-string replacement in a file you have already Read. Validates version metadata before writing and rejects stale edits — if the file changed after the last Read, Read it again before retrying. If `old_string` matches multiple places, either narrow it until unique or set `replace_all=true` explicitly.",
+    parameters: strictToolParameters({
       path: Type.String({
         description:
-          'Required path to the file, RELATIVE to the selected `root` (NEVER absolute, NEVER starting with "/", "~/", or a drive letter; NEVER containing "../"). Examples: "src/App.tsx", "src/lib/chat.ts" (workspace), or "my-skill/SKILL.md" (with root="skills"). If you have an absolute path that falls inside the workspace or Skills root, strip that root prefix and pass only the remainder.',
+          'Required file path. Accepts workspace-relative paths, absolute paths inside the workspace, pathRef values, and skill://<enabled-skill>/... paths. External paths outside workspace/enabled Skills are rejected for edits.',
       }),
       old_string: Type.String({ description: "Exact text to replace" }),
       new_string: Type.String({ description: "Replacement text" }),
@@ -514,11 +465,11 @@ export function createFsTools(params: {
   const toolDelete: Tool = {
     name: "Delete",
     description:
-      "Delete a file or directory under the selected root. Directories are removed recursively. Use this instead of Bash rm, rmdir, unlink, or find -delete for workspace or Skill files. Use this instead of Bash `rm` / `rmdir` / `unlink` / `find -delete` for any workspace or Skill file.",
-    parameters: withFileRootParameters({
+      "Delete a workspace or enabled Skill file/directory. Directories are removed recursively. Use this instead of Bash rm, rmdir, unlink, or find -delete for workspace or Skill files.",
+    parameters: strictToolParameters({
       path: Type.String({
         description:
-          'Required path to the file or directory to delete, RELATIVE to the selected `root` (NEVER absolute, NEVER starting with "/", "~/", or a drive letter; NEVER containing "../"). Examples: "src/old-file.ts", "tmp/cache" (workspace), or "my-skill/references/old.md" (with root="skills"). If you have an absolute path that falls inside the workspace or Skills root, strip that root prefix and pass only the remainder.',
+          'Required path to the file or directory. Accepts workspace-relative paths, absolute paths inside the workspace, pathRef values, and skill://<enabled-skill>/... paths. External paths outside workspace/enabled Skills are rejected for deletion.',
       }),
     }),
   };
@@ -526,12 +477,12 @@ export function createFsTools(params: {
   const toolList: Tool = {
     name: "List",
     description:
-      "List files and directories under the selected root using ignore-aware traversal. Supports depth-limited traversal and paginated results. Prefer this over `Bash ls` / `find` for workspace or Skill content.",
-    parameters: withFileRootParameters({
+      "List files and directories under the workspace or an enabled Skill using ignore-aware traversal. Supports depth-limited traversal and paginated results. Prefer this over `Bash ls` / `find` for workspace or Skill content.",
+    parameters: strictToolParameters({
       path: Type.Optional(
         Type.String({
           description:
-            'Optional directory, RELATIVE to the selected `root`. Omit (do NOT pass `.`, `./`, or `.\\`) to list the root itself. Examples: "src/lib", "src" (workspace), or "my-skill/references" (with root="skills"). NEVER pass an absolute path, "../", or "~/". If you have an absolute path inside the workspace or Skills root, strip that root prefix and pass only the remainder.',
+            'Optional directory. Omit to list the workspace root. Accepts workspace-relative paths, absolute paths, pathRef values, and skill://<enabled-skill>/... paths.',
         }),
       ),
       depth: Type.Optional(
@@ -553,7 +504,7 @@ export function createFsTools(params: {
     name: "Glob",
     description:
       "Find files by glob pattern using ignore-aware traversal. Results are paginated and sorted by path. Prefer this over `Bash find` for workspace or Skill content.",
-    parameters: withFileRootParameters({
+    parameters: strictToolParameters({
       pattern: Type.String({
         description:
           'Glob pattern relative to the search root, for example "**/*.tsx" or "src/**/Chat*.ts". Use `/` as the separator (Windows `\\` is auto-normalized).',
@@ -561,7 +512,7 @@ export function createFsTools(params: {
       path: Type.Optional(
         Type.String({
           description:
-            'Optional sub-directory to search under, RELATIVE to the selected `root`. Omit to search from the root itself. Examples: "src", "src/lib" (workspace), or "my-skill" (with root="skills"). NEVER pass an absolute path, "../", or "~/". If you have an absolute path inside the workspace or Skills root, strip that root prefix and pass only the remainder.',
+            'Optional sub-directory to search under. Omit to search from the workspace root. Accepts workspace-relative paths, absolute paths, pathRef values, and skill://<enabled-skill>/... paths.',
         }),
       ),
       offset: Type.Optional(
@@ -585,12 +536,12 @@ export function createFsTools(params: {
     name: "Grep",
     description:
       "Search file contents using a regular expression with ignore-aware traversal. Supports output_mode=content|files|count, pagination, optional surrounding context, and multiline matching. Prefer this over `Bash grep` / `rg` for any workspace or Skill content.",
-    parameters: withFileRootParameters({
+    parameters: strictToolParameters({
       pattern: Type.String({ description: "Regular expression to search for in file contents." }),
       path: Type.Optional(
         Type.String({
           description:
-            'Optional sub-directory to search under, RELATIVE to the selected `root`. Omit to search from the root itself. Examples: "src/lib", "crates/agent-gui" (workspace), or "my-skill" (with root="skills"). NEVER pass an absolute path, "../", or "~/". If you have an absolute path inside the workspace or Skills root, strip that root prefix and pass only the remainder.',
+            'Optional sub-directory to search under. Omit to search from the workspace root. Accepts workspace-relative paths, absolute paths, pathRef values, and skill://<enabled-skill>/... paths.',
         }),
       ),
       file_pattern: Type.Optional(
@@ -639,19 +590,55 @@ export function createFsTools(params: {
     toolGrep,
   ];
 
+  const allowedArgumentsByToolName: Record<string, readonly string[]> = {
+    Read: [
+      "path",
+      "start_line",
+      "limit",
+      "page_start",
+      "page_limit",
+      "cell_start",
+      "cell_limit",
+    ],
+    Image: [
+      "path",
+      "paths",
+      "url",
+      "urls",
+      "base64",
+      "base64s",
+      "mimeType",
+      "source",
+      "sources",
+    ],
+    Write: ["path", "content", "mode"],
+    Edit: ["path", "old_string", "new_string", "expected_replacements", "replace_all"],
+    Delete: ["path"],
+    List: ["path", "depth", "offset", "max_results"],
+    Glob: ["pattern", "path", "offset", "max_results", "sort_by"],
+    Grep: [
+      "pattern",
+      "path",
+      "file_pattern",
+      "ignore_case",
+      "output_mode",
+      "head_limit",
+      "offset",
+      "context",
+      "multiline",
+    ],
+  };
+
   async function execRead(args: any, signal?: AbortSignal): Promise<ToolOk> {
     if (signal?.aborted) throw new Error("Cancelled");
 
-    const root = normalizeRoot(args, "Read");
-    const scopedWorkdir = await resolveRootWorkdir(root);
-    const path = normalizeRequiredScopedRelPath({
-      input: args?.path,
+    const resolved = await pathResolver.resolvePath(args?.path, {
       label: "Read.path",
-      expectedRoot: root,
-      workdir,
-      skillsRootDir: cachedSkillsRootDir,
+      intent: "read",
+      required: true,
     });
-    assertSkillsPathAccess(root, path, 'Read(root="skills")');
+    const path = backendPath(resolved);
+    if (!path) throw new Error("Read.path must identify a file");
     const start_line = typeof args?.start_line === "number" ? args.start_line : undefined;
     const limit = typeof args?.limit === "number" ? args.limit : undefined;
     const page_start = typeof args?.page_start === "number" ? args.page_start : undefined;
@@ -659,13 +646,12 @@ export function createFsTools(params: {
     const cell_start = typeof args?.cell_start === "number" ? args.cell_start : undefined;
     const cell_limit = typeof args?.cell_limit === "number" ? args.cell_limit : undefined;
 
-    const res = await invokeScopedFileCommand<ReadCommandResponse>({
+    const res = await invokePathFileCommand<ReadCommandResponse>({
       toolName: "Read",
-      root,
-      path,
+      resolved,
       command: "fs_read_text",
       args: {
-        workdir: scopedWorkdir,
+        workdir: resolved.workdir,
         path,
         start_line,
         limit,
@@ -679,15 +665,14 @@ export function createFsTools(params: {
     if (res.kind === "image") {
       const baseDetails: ReadImageResultDetails = {
         kind: "read_image",
-        root,
-        path,
+        ...pathDetails(resolved),
         mimeType: String(res.mimeType || "application/octet-stream"),
         sizeBytes: typeof res.sizeBytes === "number" ? res.sizeBytes : 0,
         mtimeMs: res.mtimeMs,
         contentHash: res.contentHash,
         reusedExisting: false,
       };
-      const previous = fileState.getExactImageRead(path, root);
+      const previous = fileState.getExactImageRead(statePathKey(resolved));
       const reusedExisting =
         previous?.kind === "image" &&
         previous.mtimeMs === baseDetails.mtimeMs &&
@@ -703,7 +688,7 @@ export function createFsTools(params: {
           content: [
             {
               type: "text",
-              text: `Read image: ${formatScopedTarget(root, path)}\nThis image is unchanged since the previous Read. Reuse the earlier image result.`,
+              text: `Read image: ${formatResolvedTarget(resolved)}\nThis image is unchanged since the previous Read. Reuse the earlier image result.`,
             },
           ],
           details,
@@ -711,14 +696,14 @@ export function createFsTools(params: {
       }
 
       if (typeof res.data !== "string" || !res.data) {
-        throw new Error(`Read did not return image bytes for ${path}`);
+        throw new Error(`Read did not return image bytes for ${formatResolvedTarget(resolved)}`);
       }
 
       return {
         content: [
           {
             type: "text",
-            text: `Read image: ${formatScopedTarget(root, path)}\nmime=${details.mimeType}\nsizeBytes=${details.sizeBytes}`,
+            text: `Read image: ${formatResolvedTarget(resolved)}\nmime=${details.mimeType}\nsizeBytes=${details.sizeBytes}`,
           },
           {
             type: "image",
@@ -736,8 +721,7 @@ export function createFsTools(params: {
       const totalPages = typeof res.totalPages === "number" ? res.totalPages : 0;
       const baseDetails: ReadPdfResultDetails = {
         kind: "read_pdf",
-        root,
-        path,
+        ...pathDetails(resolved),
         pageStart,
         numPages,
         totalPages,
@@ -747,13 +731,12 @@ export function createFsTools(params: {
         reusedExisting: false,
       };
       const previous = fileState.getExactPdfRead(
-        path,
+        statePathKey(resolved),
         {
           pageStart,
           numPages,
           totalPages,
         },
-        root,
       );
       const reusedExisting =
         previous?.kind === "pdf" &&
@@ -771,7 +754,7 @@ export function createFsTools(params: {
             {
               type: "text",
               text:
-                `Read PDF: ${formatScopedTarget(root, path)}\n` +
+                `Read PDF: ${formatResolvedTarget(resolved)}\n` +
                 `pages=${details.numPages > 0 ? `${details.pageStart}-${details.pageStart + details.numPages - 1}/${details.totalPages}` : `empty/${details.totalPages}`}\n` +
                 "This page range is unchanged since the previous Read. Reuse the earlier content.",
             },
@@ -785,7 +768,7 @@ export function createFsTools(params: {
           {
             type: "text",
             text:
-              `Read PDF: ${formatScopedTarget(root, path)}\n` +
+              `Read PDF: ${formatResolvedTarget(resolved)}\n` +
               `pages=${details.numPages > 0 ? `${details.pageStart}-${details.pageStart + details.numPages - 1}/${details.totalPages}` : `empty/${details.totalPages}`}\n\n` +
               `${typeof res.content === "string" && res.content ? res.content : "(no extractable text)"}`,
           },
@@ -800,8 +783,7 @@ export function createFsTools(params: {
       const totalCells = typeof res.totalCells === "number" ? res.totalCells : 0;
       const baseDetails: ReadNotebookResultDetails = {
         kind: "read_notebook",
-        root,
-        path,
+        ...pathDetails(resolved),
         cellStart,
         numCells,
         totalCells,
@@ -811,13 +793,12 @@ export function createFsTools(params: {
         reusedExisting: false,
       };
       const previous = fileState.getExactNotebookRead(
-        path,
+        statePathKey(resolved),
         {
           cellStart,
           numCells,
           totalCells,
         },
-        root,
       );
       const reusedExisting =
         previous?.kind === "notebook" &&
@@ -835,7 +816,7 @@ export function createFsTools(params: {
             {
               type: "text",
               text:
-                `Read notebook: ${formatScopedTarget(root, path)}\n` +
+                `Read notebook: ${formatResolvedTarget(resolved)}\n` +
                 `cells=${details.numCells > 0 ? `${details.cellStart}-${details.cellStart + details.numCells - 1}/${details.totalCells}` : `empty/${details.totalCells}`}\n` +
                 "This cell range is unchanged since the previous Read. Reuse the earlier content.",
             },
@@ -849,7 +830,7 @@ export function createFsTools(params: {
           {
             type: "text",
             text:
-              `Read notebook: ${formatScopedTarget(root, path)}\n` +
+              `Read notebook: ${formatResolvedTarget(resolved)}\n` +
               `cells=${details.numCells > 0 ? `${details.cellStart}-${details.cellStart + details.numCells - 1}/${details.totalCells}` : `empty/${details.totalCells}`}\n\n` +
               `${typeof res.content === "string" && res.content ? res.content : "(empty notebook)"}`,
           },
@@ -872,8 +853,7 @@ export function createFsTools(params: {
             : res.kind === "spreadsheet"
               ? "read_spreadsheet"
               : "read_archive",
-        root,
-        path,
+        ...pathDetails(resolved),
         truncated: Boolean(res.truncated),
         mimeType: typeof res.mimeType === "string" ? res.mimeType : undefined,
         sizeBytes: typeof res.sizeBytes === "number" ? res.sizeBytes : undefined,
@@ -887,7 +867,7 @@ export function createFsTools(params: {
           {
             type: "text",
             text:
-              `Read ${label}: ${formatScopedTarget(root, path)}\n` +
+              `Read ${label}: ${formatResolvedTarget(resolved)}\n` +
               [
                 details.mimeType ? `mime=${details.mimeType}` : null,
                 typeof details.sizeBytes === "number" ? `sizeBytes=${details.sizeBytes}` : null,
@@ -908,8 +888,7 @@ export function createFsTools(params: {
     const totalLines = typeof res.totalLines === "number" ? res.totalLines : 0;
     const baseDetails: ReadTextResultDetails = {
       kind: "read_text",
-      root,
-      path,
+      ...pathDetails(resolved),
       startLine,
       numLines,
       totalLines,
@@ -920,13 +899,12 @@ export function createFsTools(params: {
       reusedExisting: false,
     };
     const previous = fileState.getExactTextRead(
-      path,
+      statePathKey(resolved),
       {
         startLine,
         numLines,
         totalLines,
       },
-      root,
     );
     const reusedExisting =
       previous?.kind === "text" &&
@@ -944,7 +922,7 @@ export function createFsTools(params: {
           {
             type: "text",
             text:
-              `Read: ${formatScopedTarget(root, path)}\n` +
+              `Read: ${formatResolvedTarget(resolved)}\n` +
               `lines=${formatLineWindow(details.startLine, details.numLines, details.totalLines)}\n` +
               "This range is unchanged since the previous Read. Reuse the earlier content.",
           },
@@ -954,7 +932,7 @@ export function createFsTools(params: {
     }
 
     const header = [
-      `Read: ${formatScopedTarget(root, path)}`,
+      `Read: ${formatResolvedTarget(resolved)}`,
       `lines=${formatLineWindow(details.startLine, details.numLines, details.totalLines)}`,
       details.isPartialView ? "view=partial" : "view=full",
     ].join("\n");
@@ -968,21 +946,21 @@ export function createFsTools(params: {
   }
 
   async function primeFullTextSnapshotForEdit(params: {
-    root: FileToolRoot;
-    path: string;
+    resolved: ResolvedPath;
     signal?: AbortSignal;
   }) {
-    const existingSnapshot = fileState.getLatestFullText(params.path, params.root);
+    const key = statePathKey(params.resolved);
+    const existingSnapshot = fileState.getLatestFullText(key);
     if (existingSnapshot) {
       return { snapshot: existingSnapshot, autoRead: false };
     }
 
-    const latest = fileState.getLatest(params.path, params.root);
+    const latest = fileState.getLatest(key);
     let readLimit = AUTO_EDIT_FULL_READ_MAX_LINES;
     if (latest?.kind === "text" && latest.totalLines > 0) {
       if (latest.totalLines > AUTO_EDIT_FULL_READ_MAX_LINES) {
         throw new Error(
-          `Edit requires a full-file Read first. ${formatScopedTarget(params.root, params.path)} has ${latest.totalLines} lines, which exceeds the automatic full-read limit (${AUTO_EDIT_FULL_READ_MAX_LINES}). Retry with Read using the same root and path and a limit that covers the full file before editing. Do not use Bash for workspace or Skills file operations.`,
+          `Edit requires a full-file Read first. ${formatResolvedTarget(params.resolved)} has ${latest.totalLines} lines, which exceeds the automatic full-read limit (${AUTO_EDIT_FULL_READ_MAX_LINES}). Retry with Read using the same path and a limit that covers the full file before editing. Do not use Bash for workspace or Skill file operations.`,
         );
       }
       readLimit = latest.totalLines;
@@ -990,27 +968,26 @@ export function createFsTools(params: {
 
     await execRead(
       {
-        root: params.root,
-        path: params.path,
+        path: params.resolved.pathRef,
         limit: readLimit,
       },
       params.signal,
     );
 
-    const snapshot = fileState.getLatestFullText(params.path, params.root);
+    const snapshot = fileState.getLatestFullText(key);
     if (snapshot) {
       return { snapshot, autoRead: true };
     }
 
-    const latestAfterRead = fileState.getLatest(params.path, params.root);
+    const latestAfterRead = fileState.getLatest(key);
     if (latestAfterRead?.kind === "text" && latestAfterRead.isPartialView) {
       throw new Error(
-        `Edit requires a full-file Read first. ${formatScopedTarget(params.root, params.path)} has ${latestAfterRead.totalLines} lines, which exceeds the automatic full-read limit (${AUTO_EDIT_FULL_READ_MAX_LINES}). Retry with Read using the same root and path and a limit that covers the full file before editing. Do not use Bash for workspace or Skills file operations.`,
+        `Edit requires a full-file Read first. ${formatResolvedTarget(params.resolved)} has ${latestAfterRead.totalLines} lines, which exceeds the automatic full-read limit (${AUTO_EDIT_FULL_READ_MAX_LINES}). Retry with Read using the same path and a limit that covers the full file before editing. Do not use Bash for workspace or Skill file operations.`,
       );
     }
 
     throw new Error(
-      `Edit requires a full-file text Read first for ${formatScopedTarget(params.root, params.path)}. Retry with Read using the same root and path before editing. Do not use Bash for workspace or Skills file operations.`,
+      `Edit requires a full-file text Read first for ${formatResolvedTarget(params.resolved)}. Retry with Read using the same path before editing. Do not use Bash for workspace or Skill file operations.`,
     );
   }
 
@@ -1032,38 +1009,6 @@ export function createFsTools(params: {
     return value.trim() || undefined;
   }
 
-  function pushImageSources(
-    sources: DisplayImageSourceInput[],
-    rawItems: unknown[],
-    sourceType: DisplayImageSourceType,
-    label: string,
-    mimeType?: string,
-    root?: FileToolRoot,
-    scopedWorkdir?: string,
-    rootExplicit = false,
-  ) {
-    rawItems.forEach((item, index) => {
-      const itemLabel = rawItems.length > 1 ? `${label}[${index}]` : label;
-      const normalized =
-        sourceType === "path"
-          ? normalizeImageLocalPathSource(item, itemLabel, root, scopedWorkdir, rootExplicit)
-          : {
-              source: normalizeRequiredImageSource(item, itemLabel),
-              root: undefined,
-              workdir: undefined,
-              scopedPath: undefined,
-            };
-      sources.push({
-        source: normalized.source,
-        sourceType,
-        mimeType,
-        root: normalized.root,
-        workdir: normalized.workdir,
-        scopedPath: normalized.scopedPath,
-      });
-    });
-  }
-
   function inferGenericImageSourceType(source: string): DisplayImageSourceType {
     if (/^data:image\//i.test(source)) return "base64";
     if (/^https?:\/\//i.test(source)) return "url";
@@ -1079,263 +1024,107 @@ export function createFsTools(params: {
     return /^<\?xml\b/i.test(value) || /^<svg\b/i.test(value);
   }
 
-  function inferHomeDirFromKnownRoot(rootDir: string | undefined) {
-    const value = normalizeComparablePath(rootDir || "");
-    if (!value) return null;
-    const unixHome = value.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
-    if (unixHome) return unixHome[1];
-    const windowsHome = value.match(/^([a-zA-Z]:\/Users\/[^/]+)/);
-    return windowsHome ? windowsHome[1] : null;
-  }
-
-  function expandTildeForKnownRootCheck(value: string) {
-    if (value !== "~" && !value.startsWith("~/") && !value.startsWith("~\\")) {
-      return value;
-    }
-    const suffix = value === "~" ? "" : value.slice(1).replace(/\\/g, "/");
-    const homes = [
-      inferHomeDirFromKnownRoot(cachedSkillsRootDir),
-      inferHomeDirFromKnownRoot(workdir),
-    ].filter((home): home is string => Boolean(home));
-    for (const home of homes) {
-      const expanded = `${home}${suffix}`;
-      if (relativePathFromAbsolute(expanded, workdir) !== null) return expanded;
-      if (cachedSkillsRootDir && relativePathFromAbsolute(expanded, cachedSkillsRootDir) !== null) {
-        return expanded;
-      }
-    }
-    return value;
-  }
-
-  function localPathCandidateForRootCheck(source: string) {
-    const value = source.trim();
-    if (!value) return null;
-    if (/^file:\/\//i.test(value)) {
-      try {
-        const url = new URL(value);
-        if (url.protocol !== "file:") return null;
-        return decodeURIComponent(url.pathname || "");
-      } catch {
-        return value;
-      }
-    }
-    if (/^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("/") || value.startsWith("~")) {
-      return expandTildeForKnownRootCheck(value);
-    }
-    return null;
-  }
-
-  function relativePathFromDefaultLiveAgentSkillsRoot(rawPath: string) {
-    const path = normalizeComparablePath(rawPath);
-    if (!path) return null;
-
-    const tildePrefix = "~/.liveagent/skills";
-    if (path === tildePrefix) return "";
-    if (path.startsWith(`${tildePrefix}/`)) return path.slice(tildePrefix.length + 1);
-
-    const marker = "/.liveagent/skills";
-    const markerIndex = path.toLowerCase().indexOf(marker);
-    if (markerIndex < 0) return null;
-    const suffix = path.slice(markerIndex + marker.length);
-    if (!suffix) return "";
-    return suffix.startsWith("/") ? suffix.slice(1) : null;
-  }
-
-  function buildDefaultSkillsRootPathError(label: string, relativePath: string) {
-    const pathHint = relativePath
-      ? `path="${relativePath}"`
-      : "path=<relative file path inside the enabled Skill>";
-    return [
-      `${label} points inside LiveAgent's fixed Skills root and is blocked in this conversation.`,
-      `Enable the Skill in the chat Skills selector, then retry with root="skills", ${pathHint}.`,
-      "Do not use absolute ~/.liveagent/skills paths or file:// URLs to access installed Skills.",
-    ].join(" ");
-  }
-
-  function scopedRootPathErrorIfKnownRoot(label: string, source: string) {
-    const localPath = localPathCandidateForRootCheck(source);
-    if (!localPath) return null;
-    if (relativePathFromAbsolute(localPath, workdir) !== null) {
-      return buildScopedPathError({
-        label,
-        rawPath: localPath,
-        workdir,
-        skillsRootDir: cachedSkillsRootDir,
-        required: true,
-      });
-    }
-    if (cachedSkillsRootDir && relativePathFromAbsolute(localPath, cachedSkillsRootDir) !== null) {
-      return buildScopedPathError({
-        label,
-        rawPath: localPath,
-        workdir,
-        skillsRootDir: cachedSkillsRootDir,
-        required: true,
-      });
-    }
-    const defaultSkillsRelativePath = relativePathFromDefaultLiveAgentSkillsRoot(localPath);
-    if (defaultSkillsRelativePath !== null) {
-      return buildDefaultSkillsRootPathError(label, defaultSkillsRelativePath);
-    }
-    return null;
-  }
-
-  function normalizeImageLocalPathSource(
+  async function resolveImageLocalPathSource(
     input: unknown,
     label: string,
-    root?: FileToolRoot,
-    scopedWorkdir?: string,
-    rootExplicit = false,
-  ) {
+  ): Promise<DisplayImageSourceInput> {
     const source = normalizeRequiredImageSource(input, label);
-    if (root === "skills" || rootExplicit) {
-      const scopedPath = normalizeRequiredScopedRelPath({
-        input: source,
-        label,
-        expectedRoot: root ?? "workspace",
-        workdir,
-        skillsRootDir: cachedSkillsRootDir,
-      });
-      assertSkillsPathAccess(root ?? "workspace", scopedPath, 'Image(root="skills")');
-      return {
-        source: scopedPath,
-        root,
-        workdir: scopedWorkdir,
-        scopedPath,
-      };
-    }
-
-    const knownRootPathError = scopedRootPathErrorIfKnownRoot(label, source);
-    if (knownRootPathError) {
-      throw new Error(knownRootPathError);
-    }
-
-    if (localPathCandidateForRootCheck(source)) {
-      return {
-        source,
-        root: undefined,
-        workdir: undefined,
-        scopedPath: undefined,
-      };
-    }
-
-    const scopedPath = normalizeRequiredScopedRelPath({
-      input: source,
+    const resolved = await pathResolver.resolvePath(source, {
       label,
-      expectedRoot: "workspace",
-      workdir,
-      skillsRootDir: cachedSkillsRootDir,
+      intent: "image",
+      required: true,
+      allowExternal: true,
     });
-
     return {
-      source: scopedPath,
-      root: "workspace" as const,
-      workdir: scopedWorkdir,
-      scopedPath,
+      source:
+        resolved.scope === "external"
+          ? resolved.absolutePath
+          : (backendPath(resolved) ?? resolved.absolutePath),
+      sourceType: "path",
+      resolvedPath: resolved,
+      workdir: resolved.scope === "external" ? workdir : resolved.workdir,
     };
   }
 
-  function pushGenericImageSources(
+  async function pushImageSources(
+    sources: DisplayImageSourceInput[],
+    rawItems: unknown[],
+    sourceType: DisplayImageSourceType,
+    label: string,
+    mimeType?: string,
+  ) {
+    for (const [index, item] of rawItems.entries()) {
+      const itemLabel = rawItems.length > 1 ? `${label}[${index}]` : label;
+      if (sourceType === "path") {
+        const normalized = await resolveImageLocalPathSource(item, itemLabel);
+        sources.push({
+          ...normalized,
+          mimeType,
+        });
+        continue;
+      }
+      sources.push({
+        source: normalizeRequiredImageSource(item, itemLabel),
+        sourceType,
+        mimeType,
+      });
+    }
+  }
+
+  async function pushGenericImageSources(
     sources: DisplayImageSourceInput[],
     rawItems: unknown[],
     label: string,
     mimeType?: string,
-    root?: FileToolRoot,
-    scopedWorkdir?: string,
-    rootExplicit = false,
   ) {
-    rawItems.forEach((item, index) => {
-      const source = normalizeRequiredImageSource(
-        item,
-        rawItems.length > 1 ? `${label}[${index}]` : label,
-      );
+    for (const [index, item] of rawItems.entries()) {
+      const itemLabel = rawItems.length > 1 ? `${label}[${index}]` : label;
+      const source = normalizeRequiredImageSource(item, itemLabel);
       const sourceType = inferGenericImageSourceType(source);
       const shouldNormalizeAsLocalPath = sourceType === "auto" && !isInlineSvgSource(source);
-      const normalized = shouldNormalizeAsLocalPath
-        ? normalizeImageLocalPathSource(
-            source,
-            rawItems.length > 1 ? `${label}[${index}]` : label,
-            root,
-            scopedWorkdir,
-            rootExplicit,
-          )
-        : { source, root: undefined, workdir: undefined, scopedPath: undefined };
+      if (shouldNormalizeAsLocalPath) {
+        const normalized = await resolveImageLocalPathSource(source, itemLabel);
+        sources.push({
+          ...normalized,
+          sourceType,
+          mimeType,
+        });
+        continue;
+      }
       sources.push({
-        source: normalized.source,
+        source,
         sourceType,
         mimeType,
-        root: normalized.root,
-        workdir: normalized.workdir,
-        scopedPath: normalized.scopedPath,
       });
-    });
+    }
   }
 
-  function normalizeDisplayImageSources(
-    args: any,
-    root: FileToolRoot,
-    scopedWorkdir: string,
-    rootExplicit: boolean,
-  ): DisplayImageSourceInput[] {
+  async function normalizeDisplayImageSources(args: any): Promise<DisplayImageSourceInput[]> {
     const sources: DisplayImageSourceInput[] = [];
     const mimeType = getOptionalMimeType(args);
 
     if (Array.isArray(args?.sources) && args.sources.length > 0) {
-      pushGenericImageSources(
-        sources,
-        args.sources,
-        "Image.sources",
-        mimeType,
-        root,
-        scopedWorkdir,
-        rootExplicit,
-      );
+      await pushGenericImageSources(sources, args.sources, "Image.sources", mimeType);
     } else if (typeof args?.source === "string" && args.source.trim()) {
-      pushGenericImageSources(
-        sources,
-        [args.source],
-        "Image.source",
-        mimeType,
-        root,
-        scopedWorkdir,
-        rootExplicit,
-      );
+      await pushGenericImageSources(sources, [args.source], "Image.source", mimeType);
     }
 
     if (Array.isArray(args?.paths) && args.paths.length > 0) {
-      pushImageSources(
-        sources,
-        args.paths,
-        "path",
-        "Image.paths",
-        undefined,
-        root,
-        scopedWorkdir,
-        rootExplicit,
-      );
+      await pushImageSources(sources, args.paths, "path", "Image.paths");
     } else if (typeof args?.path === "string" && args.path.trim()) {
-      pushImageSources(
-        sources,
-        [args.path],
-        "path",
-        "Image.path",
-        undefined,
-        root,
-        scopedWorkdir,
-        rootExplicit,
-      );
+      await pushImageSources(sources, [args.path], "path", "Image.path");
     }
 
     if (Array.isArray(args?.urls) && args.urls.length > 0) {
-      pushImageSources(sources, args.urls, "url", "Image.urls");
+      await pushImageSources(sources, args.urls, "url", "Image.urls");
     } else if (typeof args?.url === "string" && args.url.trim()) {
-      pushImageSources(sources, [args.url], "url", "Image.url");
+      await pushImageSources(sources, [args.url], "url", "Image.url");
     }
 
     if (Array.isArray(args?.base64s) && args.base64s.length > 0) {
-      pushImageSources(sources, args.base64s, "base64", "Image.base64s", mimeType);
+      await pushImageSources(sources, args.base64s, "base64", "Image.base64s", mimeType);
     } else if (typeof args?.base64 === "string" && args.base64.trim()) {
-      pushImageSources(sources, [args.base64], "base64", "Image.base64", mimeType);
+      await pushImageSources(sources, [args.base64], "base64", "Image.base64", mimeType);
     }
 
     if (sources.length === 0) {
@@ -1392,22 +1181,12 @@ export function createFsTools(params: {
         mime_type: input.mimeType,
       } as any);
     } catch (error) {
-      if (!input.root) {
-        throw new Error(
-          [
-            `Image failed for source="${input.source}": ${asErrorMessage(error)}`,
-            'If this image is inside the workspace or installed Skills, retry with root="workspace" or root="skills" and a relative path.',
-            "Do not use Bash, open, xdg-open, Markdown, HTML, or file:// URLs to display workspace or Skills images.",
-          ].join(" "),
-        );
-      }
       throw new Error(
-        buildScopedToolRuntimeError({
-          toolName: "Image",
-          root: input.root,
-          path: input.scopedPath ?? (input.sourceType === "path" ? input.source : undefined),
-          error,
-        }),
+        [
+          `Image failed for ${input.resolvedPath ? formatResolvedTarget(input.resolvedPath) : `source="${input.source}"`}: ${asErrorMessage(error)}`,
+          "Pass the path exactly as returned by the tool that created or listed it; local paths are resolved automatically.",
+          "Do not use Bash, open, xdg-open, Markdown, HTML, or file:// URLs in final text to display images.",
+        ].join(" "),
       );
     }
 
@@ -1419,7 +1198,8 @@ export function createFsTools(params: {
     }
 
     const mimeType = String(res.mimeType || "application/octet-stream");
-    const displayPath = typeof res.path === "string" && res.path ? res.path : input.source;
+    const displayPath =
+      input.resolvedPath?.displayPath || (typeof res.path === "string" && res.path ? res.path : input.source);
     const sizeBytes = typeof res.sizeBytes === "number" ? res.sizeBytes : 0;
     return {
       content: {
@@ -1428,8 +1208,16 @@ export function createFsTools(params: {
         mimeType,
       },
       details: {
-        ...(input.root === "skills" ? { root: input.root } : {}),
         path: displayPath,
+        ...(input.resolvedPath
+          ? {
+              scope: input.resolvedPath.scope,
+              absolutePath: input.resolvedPath.absolutePath,
+              relativePath: input.resolvedPath.relativePath,
+              displayPath: input.resolvedPath.displayPath,
+              pathRef: input.resolvedPath.pathRef,
+            }
+          : {}),
         sourceType: input.sourceType,
         renderMode: "inline",
         mimeType,
@@ -1446,10 +1234,7 @@ export function createFsTools(params: {
   ): Promise<ToolOk<DisplayImageResultDetails>> {
     if (signal?.aborted) throw new Error("Cancelled");
 
-    const root = normalizeRoot(args, "Image");
-    const scopedWorkdir = await resolveRootWorkdir(root);
-    const rootExplicit = typeof args?.root === "string" && args.root.trim().length > 0;
-    const sources = normalizeDisplayImageSources(args, root, scopedWorkdir, rootExplicit);
+    const sources = await normalizeDisplayImageSources(args);
     const entries: DisplayImageEntry[] = [];
     for (const source of sources) {
       if (signal?.aborted) throw new Error("Cancelled");
@@ -1476,10 +1261,7 @@ export function createFsTools(params: {
       mtimeMs: firstImage?.mtimeMs,
       contentHash: firstImage?.contentHash,
     };
-    const formatImagePath = (image: DisplayImageItemDetails) =>
-      image.root && image.root !== "workspace"
-        ? `root=${image.root} path=${image.path}`
-        : image.path;
+    const formatImagePath = (image: DisplayImageItemDetails) => image.displayPath || image.path;
     const textSummary =
       imageDetails.length === 1
         ? [
@@ -1521,37 +1303,33 @@ export function createFsTools(params: {
   async function execWrite(args: any, signal?: AbortSignal): Promise<ToolOk<WriteResultDetails>> {
     if (signal?.aborted) throw new Error("Cancelled");
 
-    const root = normalizeRoot(args, "Write");
-    const scopedWorkdir = await resolveRootWorkdir(root);
-    const path = normalizeRequiredScopedRelPath({
-      input: args?.path,
+    const resolved = await pathResolver.resolvePath(args?.path, {
       label: "Write.path",
-      expectedRoot: root,
-      workdir,
-      skillsRootDir: cachedSkillsRootDir,
+      intent: "write",
+      required: true,
     });
-    assertSkillsPathMutationAccess(root, path, 'Write(root="skills")');
+    const path = backendPath(resolved);
+    if (!path) throw new Error("Write.path must identify a file");
     const content = typeof args?.content === "string" ? args.content : "";
     const mode = typeof args?.mode === "string" ? args.mode : "rewrite";
     if (mode !== "rewrite") {
       throw new Error("Write.mode only supports rewrite");
     }
 
-    const latest = fileState.getLatest(path, root);
+    const latest = fileState.getLatest(statePathKey(resolved));
     if (latest?.kind === "text" && latest.isPartialView) {
       throw new Error(
-        `Write requires a full-file Read first for existing files: ${formatScopedTarget(root, path)}. Retry with Read using the same root and path before rewriting. Do not use Bash for workspace or Skills file operations.`,
+        `Write requires a full-file Read first for existing files: ${formatResolvedTarget(resolved)}. Retry with Read using the same path before rewriting. Do not use Bash for workspace or Skill file operations.`,
       );
     }
-    const fullSnapshot = fileState.getLatestFullText(path, root);
+    const fullSnapshot = fileState.getLatestFullText(statePathKey(resolved));
 
-    const res = await invokeScopedFileCommand<WriteCommandResponse>({
+    const res = await invokePathFileCommand<WriteCommandResponse>({
       toolName: "Write",
-      root,
-      path,
+      resolved,
       command: "fs_write_text",
       args: {
-        workdir: scopedWorkdir,
+        workdir: resolved.workdir,
         path,
         content,
         mode: "rewrite",
@@ -1562,8 +1340,7 @@ export function createFsTools(params: {
 
     const details: WriteResultDetails = {
       kind: "write",
-      root,
-      path,
+      ...pathDetails(resolved),
       mode: "rewrite",
       existedBefore: Boolean(res.existedBefore),
       bytesWritten: res.bytesWritten,
@@ -1573,8 +1350,7 @@ export function createFsTools(params: {
       preview: previewSnippet(content),
     };
     fileState.recordTextMutation({
-      root,
-      path,
+      ...statePathKey(resolved),
       mtimeMs: res.mtimeMs,
       contentHash: res.contentHash,
       totalLines: res.totalLines,
@@ -1585,7 +1361,7 @@ export function createFsTools(params: {
         {
           type: "text",
           text:
-            `Write: ${formatScopedTarget(root, path)}\n` +
+            `Write: ${formatResolvedTarget(resolved)}\n` +
             `mode=rewrite\n` +
             `target=${details.existedBefore ? "existing" : "new"}\n` +
             `bytesWritten=${details.bytesWritten}`,
@@ -1598,16 +1374,13 @@ export function createFsTools(params: {
   async function execEdit(args: any, signal?: AbortSignal): Promise<ToolOk<EditResultDetails>> {
     if (signal?.aborted) throw new Error("Cancelled");
 
-    const root = normalizeRoot(args, "Edit");
-    const scopedWorkdir = await resolveRootWorkdir(root);
-    const path = normalizeRequiredScopedRelPath({
-      input: args?.path,
+    const resolved = await pathResolver.resolvePath(args?.path, {
       label: "Edit.path",
-      expectedRoot: root,
-      workdir,
-      skillsRootDir: cachedSkillsRootDir,
+      intent: "edit",
+      required: true,
     });
-    assertSkillsPathMutationAccess(root, path, 'Edit(root="skills")');
+    const path = backendPath(resolved);
+    if (!path) throw new Error("Edit.path must identify a file");
     const old_string = typeof args?.old_string === "string" ? args.old_string : "";
     const new_string = typeof args?.new_string === "string" ? args.new_string : "";
     const expected_replacements =
@@ -1619,18 +1392,16 @@ export function createFsTools(params: {
     }
 
     const { snapshot, autoRead } = await primeFullTextSnapshotForEdit({
-      root,
-      path,
+      resolved,
       signal,
     });
 
-    const res = await invokeScopedFileCommand<EditCommandResponse>({
+    const res = await invokePathFileCommand<EditCommandResponse>({
       toolName: "Edit",
-      root,
-      path,
+      resolved,
       command: "fs_edit_text",
       args: {
-        workdir: scopedWorkdir,
+        workdir: resolved.workdir,
         path,
         old_string,
         new_string,
@@ -1643,8 +1414,7 @@ export function createFsTools(params: {
 
     const details: EditResultDetails = {
       kind: "edit",
-      root,
-      path,
+      ...pathDetails(resolved),
       replacements: res.replacements,
       replaceAll: res.replaceAll,
       expectedReplacements: expected_replacements,
@@ -1655,8 +1425,7 @@ export function createFsTools(params: {
       newPreview: previewSnippet(new_string),
     };
     fileState.recordTextMutation({
-      root,
-      path,
+      ...statePathKey(resolved),
       mtimeMs: res.mtimeMs,
       contentHash: res.contentHash,
       totalLines: res.totalLines,
@@ -1667,7 +1436,7 @@ export function createFsTools(params: {
         {
           type: "text",
           text:
-            `Edit: ${formatScopedTarget(root, path)}\n` +
+            `Edit: ${formatResolvedTarget(resolved)}\n` +
             `replacements=${details.replacements}\n` +
             `replaceAll=${details.replaceAll}` +
             (autoRead ? "\nautoRead=full" : ""),
@@ -1680,39 +1449,34 @@ export function createFsTools(params: {
   async function execDelete(args: any, signal?: AbortSignal): Promise<ToolOk<DeleteResultDetails>> {
     if (signal?.aborted) throw new Error("Cancelled");
 
-    const root = normalizeRoot(args, "Delete");
-    const scopedWorkdir = await resolveRootWorkdir(root);
-    const path = normalizeRequiredScopedRelPath({
-      input: args?.path,
+    const resolved = await pathResolver.resolvePath(args?.path, {
       label: "Delete.path",
-      expectedRoot: root,
-      workdir,
-      skillsRootDir: cachedSkillsRootDir,
+      intent: "delete",
+      required: true,
     });
-    assertSkillsPathMutationAccess(root, path, 'Delete(root="skills")');
-    const res = await invokeScopedFileCommand<DeleteCommandResponse>({
+    const path = backendPath(resolved);
+    if (!path) throw new Error("Delete.path must identify a file or directory");
+    const res = await invokePathFileCommand<DeleteCommandResponse>({
       toolName: "Delete",
-      root,
-      path,
+      resolved,
       command: "fs_delete",
       args: {
-        workdir: scopedWorkdir,
+        workdir: resolved.workdir,
         path,
       },
     });
-    fileState.clear(path, root);
+    fileState.clear(statePathKey(resolved));
 
     return {
       content: [
         {
           type: "text",
-          text: `Delete: ${formatScopedTarget(root, path)}\nkind=${res.kind}`,
+          text: `Delete: ${formatResolvedTarget(resolved)}\nkind=${res.kind}`,
         },
       ],
       details: {
         kind: "delete",
-        root,
-        path,
+        ...pathDetails(resolved),
         targetKind: res.kind,
       },
     };
@@ -1721,31 +1485,22 @@ export function createFsTools(params: {
   async function execList(args: any, signal?: AbortSignal): Promise<ToolOk<ListResultDetails>> {
     if (signal?.aborted) throw new Error("Cancelled");
 
-    const root = normalizeRoot(args, "List");
-    const scopedWorkdir = await resolveRootWorkdir(root);
-    const pathArg = args?.path;
-    const path =
-      typeof pathArg === "string"
-        ? normalizeOptionalScopedRelPath({
-            input: pathArg,
-            label: "List.path",
-            expectedRoot: root,
-            workdir,
-            skillsRootDir: cachedSkillsRootDir,
-          })
-        : undefined;
-    assertOptionalSkillsPathAccess(root, path, 'List(root="skills")');
+    const resolved = await pathResolver.resolvePath(args?.path, {
+      label: "List.path",
+      intent: "list",
+      required: false,
+    });
+    const path = backendPath(resolved);
     const depth = typeof args?.depth === "number" ? args.depth : undefined;
     const offset = typeof args?.offset === "number" ? args.offset : undefined;
     const max_results = typeof args?.max_results === "number" ? args.max_results : undefined;
 
-    const res = await invokeScopedFileCommand<ListCommandResponse>({
+    const res = await invokePathFileCommand<ListCommandResponse>({
       toolName: "List",
-      root,
-      path,
+      resolved,
       command: "fs_list",
       args: {
-        workdir: scopedWorkdir,
+        workdir: resolved.workdir,
         path,
         depth,
         offset,
@@ -1755,8 +1510,7 @@ export function createFsTools(params: {
 
     const details: ListResultDetails = {
       kind: "list",
-      root,
-      path: res.path ?? undefined,
+      ...pathDetails(resolved),
       depth: res.depth,
       offset: res.offset,
       maxResults: res.maxResults,
@@ -1775,7 +1529,7 @@ export function createFsTools(params: {
         {
           type: "text",
           text:
-            `List: ${formatScopedTarget(root, path)}\n` +
+            `List: ${formatResolvedTarget(resolved)}\n` +
             `offset=${details.offset} total=${details.total}\n` +
             `${lines.join("\n")}${suffix}`,
         },
@@ -1787,29 +1541,15 @@ export function createFsTools(params: {
   async function execGlob(args: any, signal?: AbortSignal): Promise<ToolOk<GlobResultDetails>> {
     if (signal?.aborted) throw new Error("Cancelled");
 
-    const root = normalizeRoot(args, "Glob");
-    const scopedWorkdir = await resolveRootWorkdir(root);
     const pattern = typeof args?.pattern === "string" ? args.pattern.trim() : "";
     if (!pattern) throw new Error("Glob.pattern is required");
 
-    const pathArg = args?.path;
-    const path =
-      typeof pathArg === "string"
-        ? normalizeOptionalScopedRelPath({
-            input: pathArg,
-            label: "Glob.path",
-            expectedRoot: root,
-            workdir,
-            skillsRootDir: cachedSkillsRootDir,
-          })
-        : undefined;
-    if (root === "skills") {
-      if (path) {
-        assertSkillPathAllowedByPolicy(skillAccessPolicy, path, 'Glob(root="skills")');
-      } else {
-        assertSkillPathAllowedByPolicy(skillAccessPolicy, pattern, 'Glob(root="skills")');
-      }
-    }
+    const resolved = await pathResolver.resolvePath(args?.path, {
+      label: "Glob.path",
+      intent: "search",
+      required: false,
+    });
+    const path = backendPath(resolved);
     const offset = typeof args?.offset === "number" ? args.offset : undefined;
     const max_results = typeof args?.max_results === "number" ? args.max_results : undefined;
     const sort_by = typeof args?.sort_by === "string" ? args.sort_by : undefined;
@@ -1817,13 +1557,12 @@ export function createFsTools(params: {
       throw new Error("Glob.sort_by only supports path");
     }
 
-    const res = await invokeScopedFileCommand<GlobCommandResponse>({
+    const res = await invokePathFileCommand<GlobCommandResponse>({
       toolName: "Glob",
-      root,
-      path,
+      resolved,
       command: "fs_glob",
       args: {
-        workdir: scopedWorkdir,
+        workdir: resolved.workdir,
         path,
         pattern,
         offset,
@@ -1834,8 +1573,7 @@ export function createFsTools(params: {
 
     const details: GlobResultDetails = {
       kind: "glob",
-      root,
-      path: res.path ?? undefined,
+      ...pathDetails(resolved),
       pattern: res.pattern,
       sortBy: res.sortBy,
       offset: res.offset,
@@ -1852,7 +1590,7 @@ export function createFsTools(params: {
           type: "text",
           text:
             `Glob: ${pattern}\n` +
-            `${formatScopedTarget(root, path)} offset=${details.offset} total=${details.total}\n` +
+            `${formatResolvedTarget(resolved)} offset=${details.offset} total=${details.total}\n` +
             `${res.paths.join("\n")}${suffix}`,
         },
       ],
@@ -1863,23 +1601,15 @@ export function createFsTools(params: {
   async function execGrep(args: any, signal?: AbortSignal): Promise<ToolOk<GrepResultDetails>> {
     if (signal?.aborted) throw new Error("Cancelled");
 
-    const root = normalizeRoot(args, "Grep");
-    const scopedWorkdir = await resolveRootWorkdir(root);
     const pattern = typeof args?.pattern === "string" ? args.pattern : "";
     if (!pattern.trim()) throw new Error("Grep.pattern is required");
 
-    const pathArg = args?.path;
-    let path =
-      typeof pathArg === "string"
-        ? normalizeOptionalScopedRelPath({
-            input: pathArg,
-            label: "Grep.path",
-            expectedRoot: root,
-            workdir,
-            skillsRootDir: cachedSkillsRootDir,
-          })
-        : undefined;
-    assertOptionalSkillsPathAccess(root, path, 'Grep(root="skills")');
+    let resolved = await pathResolver.resolvePath(args?.path, {
+      label: "Grep.path",
+      intent: "search",
+      required: false,
+    });
+    let path = backendPath(resolved);
     const file_pattern =
       typeof args?.file_pattern === "string" ? args.file_pattern.trim() : undefined;
     const ignore_case = typeof args?.ignore_case === "boolean" ? args.ignore_case : true;
@@ -1894,13 +1624,12 @@ export function createFsTools(params: {
     let correctedFilePath: string | undefined;
     let res: GrepCommandResponse;
     try {
-      res = await invokeScopedFileCommand<GrepCommandResponse>({
+      res = await invokePathFileCommand<GrepCommandResponse>({
         toolName: "Grep",
-        root,
-        path,
+        resolved,
         command: "fs_grep",
         args: {
-          workdir: scopedWorkdir,
+          workdir: resolved.workdir,
           path,
           pattern,
           file_pattern: effectiveFilePattern,
@@ -1920,17 +1649,24 @@ export function createFsTools(params: {
       if (!split.fileName) {
         throw error;
       }
-      correctedFilePath = path;
-      path = split.parentPath;
+      correctedFilePath = formatResolvedTarget(resolved);
+      const parentRef =
+        resolved.scope === "skill"
+          ? `skill:${split.parentPath ?? ""}`
+          : `workspace:${split.parentPath ?? ""}`;
+      resolved = await pathResolver.resolvePath(parentRef, {
+        label: "Grep.path",
+        intent: "search",
+        required: false,
+      });
+      path = backendPath(resolved);
       effectiveFilePattern = split.fileName;
-      assertOptionalSkillsPathAccess(root, path, 'Grep(root="skills")');
-      res = await invokeScopedFileCommand<GrepCommandResponse>({
+      res = await invokePathFileCommand<GrepCommandResponse>({
         toolName: "Grep",
-        root,
-        path,
+        resolved,
         command: "fs_grep",
         args: {
-          workdir: scopedWorkdir,
+          workdir: resolved.workdir,
           path,
           pattern,
           file_pattern: effectiveFilePattern,
@@ -1946,8 +1682,7 @@ export function createFsTools(params: {
 
     const details: GrepResultDetails = {
       kind: "grep",
-      root,
-      path: res.path ?? undefined,
+      ...pathDetails(resolved),
       pattern: res.pattern,
       filePattern: res.filePattern ?? undefined,
       ignoreCase: res.ignoreCase,
@@ -1986,7 +1721,7 @@ export function createFsTools(params: {
           type: "text",
           text:
             `Grep: ${pattern}\n` +
-            `${formatScopedTarget(root, path)}\n` +
+            `${formatResolvedTarget(resolved)}\n` +
             (correctedFilePath
               ? `autoCorrectedPath=${correctedFilePath} file_pattern=${effectiveFilePattern}\n`
               : "") +
@@ -2008,7 +1743,9 @@ export function createFsTools(params: {
         role: "toolResult",
         toolCallId: toolCall.id,
         toolName: toolCall.name,
-        content: [{ type: "text", text: "Working directory is not configured; cannot run tools." }],
+        content: [
+          { type: "text", text: "Working directory is not configured; cannot run tools." },
+        ],
         details: {},
         isError: true,
         timestamp: now,
@@ -2017,6 +1754,10 @@ export function createFsTools(params: {
 
     try {
       let result: ToolOk;
+      const allowedArguments = allowedArgumentsByToolName[toolCall.name];
+      if (allowedArguments) {
+        assertKnownArguments(toolCall.name, toolCall.arguments, allowedArguments);
+      }
       switch (toolCall.name) {
         case "Read":
           result = await execRead(toolCall.arguments, signal);

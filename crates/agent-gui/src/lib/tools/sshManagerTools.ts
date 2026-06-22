@@ -4,6 +4,7 @@ import { Type } from "typebox";
 
 import type { SshHostConfig } from "../settings";
 import { type BuiltinToolBundle, createBuiltinMetadataMap } from "./builtinTypes";
+import { ToolPathResolver } from "./pathUtils";
 
 type SSHManagerAction =
   | "list_hosts"
@@ -176,7 +177,10 @@ const SSH_MANAGER_TOOL: Tool = {
     ),
     recursive: Type.Optional(Type.Boolean({ description: "Recursive directory transfer/delete." })),
     local_path: Type.Optional(
-      Type.String({ description: "Workspace-relative local path for upload/download." }),
+      Type.String({
+        description:
+          "Local workspace path for upload/download. Accepts workspace-relative paths, absolute paths inside the workspace, ~/..., file://, or workspace:pathRef values.",
+      }),
     ),
     remote_path: Type.Optional(Type.String({ description: "Remote path for upload/download." })),
     transfer_id: Type.Optional(Type.String({ description: "SFTP transfer id." })),
@@ -517,6 +521,23 @@ async function executeSSHManager(
   const args = asArgs(toolCall.arguments);
   let action: SSHManagerAction = "list_hosts";
   try {
+    const resolveLocalTransferPath = async (
+      input: unknown,
+      intent: "read" | "write",
+      label: string,
+    ) => {
+      const pathResolver = new ToolPathResolver({ workdir: params.workdir });
+      const resolved = await pathResolver.resolvePath(input, {
+        label,
+        intent,
+        required: true,
+      });
+      if (resolved.scope !== "workspace") {
+        throw new Error(`${label} must resolve inside the current workspace.`);
+      }
+      return resolved.relativePath ?? "";
+    };
+
     if (signal?.aborted) {
       return errorResult(toolCall, action, "Cancelled");
     }
@@ -852,19 +873,18 @@ async function executeSSHManager(
 
     if (action === "sftp_upload" || action === "sftp_download") {
       const direction = action === "sftp_upload" ? "upload" : "download";
+      const localPath =
+        direction === "upload"
+          ? await resolveLocalTransferPath(args.local_path, "read", "SSHManager.local_path")
+          : await resolveLocalTransferPath(args.local_path, "write", "SSHManager.local_path");
+      const remotePath = requireString(args, "remote_path");
       const result = await invoke("sftp_transfer", {
         session_id: session.session_id,
         project_path_key: params.projectPathKey,
         workdir: params.workdir,
         direction,
-        source_path:
-          direction === "upload"
-            ? requireString(args, "local_path")
-            : requireString(args, "remote_path"),
-        target_path:
-          direction === "upload"
-            ? requireString(args, "remote_path")
-            : requireString(args, "local_path"),
+        source_path: direction === "upload" ? localPath : remotePath,
+        target_path: direction === "upload" ? remotePath : localPath,
         recursive: normalizeBool(args.recursive, false),
         overwrite: normalizeBool(args.overwrite, false),
       });

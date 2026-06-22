@@ -10,8 +10,8 @@ const DEFAULT_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json
 function createDefaultMocks() {
   const typeboxMock = {
     Type: {
-      Object(properties = {}) {
-        return { type: "object", properties };
+      Object(properties = {}, options = {}) {
+        return { type: "object", properties, ...options };
       },
       String(options = {}) {
         return { type: "string", ...options };

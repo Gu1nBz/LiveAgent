@@ -145,10 +145,6 @@ export function summarizeToolCall(
   const args = toolCall.arguments || {};
   const name = toolCall.name;
   const path = summarizeToolArg(args.path);
-  const root =
-    typeof args.root === "string" && args.root.trim()
-      ? `root=${summarizeToolArg(args.root)}`
-      : null;
   const imagePaths = Array.isArray(args.paths)
     ? args.paths
         .map((value) => summarizeToolArg(value))
@@ -167,12 +163,12 @@ export function summarizeToolCall(
   const imageBase64s = Array.isArray(args.base64s)
     ? args.base64s.filter((value) => typeof value === "string" && value.trim()).length
     : 0;
-  const rootPath = "path=<root>";
+  const defaultPath = "path=.";
+  const defaultCwd = "cwd=.";
 
   const parts =
     name === "Image"
       ? [
-          root,
           imageSources.length > 0
             ? `sources=${imageSources.length}${imageSources[0] ? ` first=${imageSources[0]}` : ""}`
             : imagePaths.length > 0
@@ -193,7 +189,6 @@ export function summarizeToolCall(
         ]
       : name === "Read"
         ? [
-            root,
             path ? `path=${path}` : null,
             typeof args.start_line === "number" ? `start=${args.start_line}` : null,
             typeof args.limit === "number" ? `limit=${args.limit}` : null,
@@ -315,7 +310,6 @@ export function summarizeToolCall(
                           ]
                         : name === "Write"
                           ? [
-                              root,
                               path ? `path=${path}` : null,
                               "mode=rewrite",
                               typeof args.content === "string"
@@ -324,7 +318,6 @@ export function summarizeToolCall(
                             ]
                           : name === "Edit"
                             ? [
-                                root,
                                 path ? `path=${path}` : null,
                                 typeof args.expected_replacements === "number"
                                   ? `expected=${args.expected_replacements}`
@@ -339,8 +332,7 @@ export function summarizeToolCall(
                               ]
                             : name === "List"
                               ? [
-                                  root,
-                                  path ? `path=${path}` : rootPath,
+                                  path ? `path=${path}` : defaultPath,
                                   typeof args.depth === "number" ? `depth=${args.depth}` : null,
                                   typeof args.offset === "number" ? `offset=${args.offset}` : null,
                                   typeof args.max_results === "number"
@@ -349,11 +341,10 @@ export function summarizeToolCall(
                                 ]
                               : name === "Glob"
                                 ? [
-                                    root,
                                     typeof args.pattern === "string"
                                       ? `pattern=${summarizeToolArg(args.pattern)}`
                                       : null,
-                                    path ? `path=${path}` : rootPath,
+                                    path ? `path=${path}` : defaultPath,
                                     typeof args.offset === "number"
                                       ? `offset=${args.offset}`
                                       : null,
@@ -363,11 +354,10 @@ export function summarizeToolCall(
                                   ]
                                 : name === "Grep"
                                   ? [
-                                      root,
                                       typeof args.pattern === "string"
                                         ? `pattern=${summarizeToolArg(args.pattern)}`
                                         : null,
-                                      path ? `path=${path}` : rootPath,
+                                      path ? `path=${path}` : defaultPath,
                                       typeof args.file_pattern === "string"
                                         ? `filePattern=${summarizeToolArg(args.file_pattern)}`
                                         : null,
@@ -389,13 +379,12 @@ export function summarizeToolCall(
                                         : null,
                                     ]
                                   : name === "Delete"
-                                    ? [root, path ? `path=${path}` : null]
+                                    ? [path ? `path=${path}` : null]
                                     : name === "Bash"
                                       ? [
-                                          root,
                                           typeof args.cwd === "string"
                                             ? `cwd=${summarizeToolArg(args.cwd)}`
-                                            : rootPath,
+                                            : defaultCwd,
                                           summarizeBashTimeout(args.timeout_ms),
                                           typeof args.command === "string"
                                             ? `command=${summarizeToolArg(args.command)}`
@@ -436,17 +425,6 @@ function summarizeImageArgValue(key: string, value: unknown) {
   return value;
 }
 
-function displayFileToolRoot(root: unknown) {
-  return typeof root === "string" && root.trim() && root.trim() !== "workspace"
-    ? root.trim()
-    : undefined;
-}
-
-function displayFileToolRootEntry(root: unknown) {
-  const displayRoot = displayFileToolRoot(root);
-  return displayRoot ? { root: displayRoot } : {};
-}
-
 export function toolCallArgsForDisplay(toolCall: ToolCall) {
   const args = toolCall.arguments || {};
   const name = toolCall.name;
@@ -454,14 +432,12 @@ export function toolCallArgsForDisplay(toolCall: ToolCall) {
   switch (name) {
     case "Write":
       return {
-        ...displayFileToolRootEntry(args.root),
         path: args.path,
         mode: "rewrite",
         contentChars: typeof args.content === "string" ? args.content.length : undefined,
       };
     case "Edit":
       return {
-        ...displayFileToolRootEntry(args.root),
         path: args.path,
         expected_replacements: args.expected_replacements,
         replace_all: args.replace_all,
@@ -721,28 +697,6 @@ function normalizePlaceholderApplyPolicy(
   return value === "none" || value === "explicit" || value === "auto" ? value : undefined;
 }
 
-function normalizePlaceholderRelativePath(value: string) {
-  const normalized = value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
-  if (
-    !normalized ||
-    /^[a-zA-Z]:\//.test(normalized) ||
-    normalized.startsWith("/") ||
-    normalized.startsWith("//") ||
-    normalized === "." ||
-    normalized === ".."
-  ) {
-    return "";
-  }
-
-  const segments: string[] = [];
-  for (const segment of normalized.split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment === ".." || segment.includes(":")) return "";
-    segments.push(segment);
-  }
-  return segments.join("/");
-}
-
 function normalizePlaceholderPathList(value: unknown): string[] {
   const rawItems = Array.isArray(value)
     ? value
@@ -752,7 +706,7 @@ function normalizePlaceholderPathList(value: unknown): string[] {
   const out: string[] = [];
   for (const raw of rawItems) {
     if (typeof raw !== "string") continue;
-    const normalized = normalizePlaceholderRelativePath(raw);
+    const normalized = raw.trim().replace(/\\/g, "/").replace(/^\.\//, "");
     if (normalized && !out.includes(normalized)) out.push(normalized);
   }
   return out;
@@ -763,7 +717,7 @@ function maybePlaceholderOutputPath(value: string) {
   if (!text || /[*?[\]]/.test(text) || /^https?:\/\//i.test(text)) return "";
   if (/\s/.test(text)) return "";
   if (!/\.[a-z0-9]{1,12}$/i.test(text)) return "";
-  return normalizePlaceholderRelativePath(text);
+  return text.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 function inferPlaceholderAllowedOutputPaths(params: { prompt?: string }): string[] {

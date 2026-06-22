@@ -4859,8 +4859,7 @@ mod tests {
                 "name": "Bash",
                 "arguments": {
                     "command": "printf live",
-                    "cwd": "crates/agent-gateway",
-                    "root": "workspace"
+                    "cwd": "crates/agent-gateway"
                 },
                 "content": [{ "type": "text", "text": "live" }],
                 "isError": false,
@@ -4881,7 +4880,7 @@ mod tests {
 
         let data: Value = serde_json::from_str(&chat_event.data).expect("chat event data");
         assert_eq!(data["arguments"]["command"], "printf live");
-        assert_eq!(data["arguments"]["root"], "workspace");
+        assert_eq!(data["arguments"]["cwd"], "crates/agent-gateway");
     }
 
     #[test]

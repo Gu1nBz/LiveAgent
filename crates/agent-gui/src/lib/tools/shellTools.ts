@@ -12,13 +12,10 @@ import {
 import {
   type BuiltinToolBundle,
   createBuiltinMetadataMap,
-  type FileToolRoot,
 } from "./builtinTypes";
-import { normalizeOptionalScopedRelPath, normalizeToolFileRoot } from "./pathUtils";
+import { formatResolvedTarget, type ResolvedPath, ToolPathResolver } from "./pathUtils";
 import {
   assertSkillPathAllowedByPolicy,
-  buildSkillAccessDeniedMessage,
-  isSkillAccessPolicyRestrictive,
   type SkillAccessPolicy,
 } from "./skillAccessPolicy";
 
@@ -93,6 +90,21 @@ function createShellRunId(toolCallId: string) {
 
 function delay(ms: number) {
   return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
+function strictToolParameters(properties: Record<string, unknown>) {
+  return Type.Object(properties as any, { additionalProperties: false });
+}
+
+function assertKnownArguments(toolName: string, args: unknown, allowed: readonly string[]) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return;
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(args).filter((key) => !allowedSet.has(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `${toolName} received unsupported argument${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`,
+    );
+  }
 }
 
 function requestShellCancel(runId: string) {
@@ -296,7 +308,6 @@ function buildCancelledResult(params: {
   toolCall: ToolCall;
   command?: string;
   cwd?: string;
-  root?: FileToolRoot;
   startedAt: number;
   effectiveTimeoutMs?: number;
   shell?: string;
@@ -318,7 +329,6 @@ function buildCancelledResult(params: {
   const header = [
     "# Shell",
     `shell: ${details.shell}`,
-    params.root && params.root !== "workspace" ? `root: ${params.root}` : null,
     params.cwd ? `cwd: ${params.cwd}` : null,
     "exit_code: -1",
     "cancelled: true",
@@ -361,7 +371,7 @@ export function createShellTools(params: {
 
   async function resolveSkillsRootDir() {
     if (!allowSkillsRoot) {
-      throw new Error("Bash.root root=skills is only available when Skills are enabled");
+      throw new Error("Skill paths are only available when Skills are enabled");
     }
     if (cachedSkillsRootDir) return cachedSkillsRootDir;
     const response = await invoke<SystemListSkillFilesResponse>("system_list_skill_files");
@@ -373,12 +383,16 @@ export function createShellTools(params: {
     return cachedSkillsRootDir;
   }
 
-  async function resolveRootWorkdir(root: FileToolRoot) {
-    return root === "skills" ? resolveSkillsRootDir() : workdir;
-  }
+  const pathResolver = new ToolPathResolver({
+    workdir,
+    skillsRootEnabled: allowSkillsRoot,
+    skillsRootDir: cachedSkillsRootDir,
+    skillAccessPolicy,
+    resolveSkillsRootDir,
+  });
 
-  function normalizeBashRoot(input: unknown) {
-    return normalizeToolFileRoot(input, "Bash.root", { allowSkillsRoot });
+  function backendCwd(resolved: ResolvedPath) {
+    return resolved.scope === "external" ? undefined : resolved.relativePath || undefined;
   }
 
   function normalizeCommandForPolicy(command: string) {
@@ -394,7 +408,7 @@ export function createShellTools(params: {
 
   // True when the command's leading file-read/search verb (cat/ls/grep/...) is
   // pointed directly at an absolute Skills path — these should always be routed
-  // to Read / List / Glob / Grep with root="skills" instead of Bash.
+  // to Read / List / Glob / Grep instead of Bash.
   function commandFileReadVerbAgainstSkillsAbsolute(command: string) {
     const value = normalizeCommandForPolicy(command);
     if (!commandReferencesFixedSkillsRoot(value)) return false;
@@ -465,32 +479,21 @@ export function createShellTools(params: {
     );
   }
 
-  function validateBashSkillAccess(params: { root: FileToolRoot; cwd?: string; command: string }) {
-    if (params.root === "skills") {
-      if (!params.cwd && isSkillAccessPolicyRestrictive(skillAccessPolicy)) {
-        throw new Error(
-          buildSkillAccessDeniedMessage({
-            operation: 'Bash(root="skills")',
-            allowedSkillNames: skillAccessPolicy?.allowedSkillNames,
-          }),
-        );
-      }
-      if (params.cwd) {
-        assertSkillPathAllowedByPolicy(skillAccessPolicy, params.cwd, 'Bash(root="skills")');
-      }
+  function validateBashSkillAccess(params: { cwd: ResolvedPath; command: string }) {
+    if (params.cwd.scope === "skill") {
       if (commandReferencesFixedSkillsRoot(params.command)) {
         throw new Error(
-          'Bash(root="skills") must use relative cwd and command paths. Do not cd into or execute absolute ~/.liveagent/skills paths.',
+          "Bash with a Skill cwd must use paths relative to that cwd. Do not cd into or execute absolute ~/.liveagent/skills paths.",
         );
       }
       if (commandSearchesFilesystemForSkills(params.command)) {
         throw new Error(
-          'Bash(root="skills") cannot run find / to discover Skill files. Use List/Glob/Grep with root="skills" inside an enabled Skill directory.',
+          "Bash with a Skill cwd cannot run find / to discover Skill files. Use List/Glob/Grep inside the enabled Skill path.",
         );
       }
       if (commandEscapesScopedSkillsCwd(params.command)) {
         throw new Error(
-          'Bash(root="skills") cannot use .. or cd .. to move outside the enabled Skill directory. Use a cwd inside the enabled Skill instead.',
+          "Bash with a Skill cwd cannot use .. or cd .. to move outside the enabled Skill directory.",
         );
       }
       return;
@@ -502,22 +505,21 @@ export function createShellTools(params: {
       // and Skill-aware access policy that raw Bash cannot match.
       if (commandFileReadVerbAgainstSkillsAbsolute(params.command)) {
         throw new Error(
-          'Bash cannot access ~/.liveagent/skills or absolute Skills paths. Use Read/List/Glob/Grep with root="skills" instead of cat, head, tail, ls, find, grep, rg, sed, or awk against ~/.liveagent/skills.',
+          "Bash cannot read or search ~/.liveagent/skills or absolute Skill paths. Use Read/List/Glob/Grep with a skill://<enabled-skill>/... path instead of cat, head, tail, ls, find, grep, rg, sed, or awk.",
         );
       }
       if (commandChangesDirectoryToSkillsAbsolute(params.command)) {
         throw new Error(
-          'Bash cannot access ~/.liveagent/skills or absolute Skills paths. To run an installed Skill script, use root="skills" with cwd="<skill-name>/scripts" and a relative command; do not cd into the fixed Skills root.',
+          "Bash cannot cd into the fixed Skills root. To run an installed Skill script, set cwd to skill://<enabled-skill>/scripts and use a relative command, or execute the absolute script path directly when that Skill is enabled.",
         );
       }
-      // Otherwise (directly executing scripts, etc.) treat absolute
-      // Skill paths as a supported alias for root="skills". The substantive
-      // security boundary is the per-Skill access policy: every referenced
-      // Skill must be enabled in this conversation.
+      // Otherwise (directly executing scripts, etc.) treat absolute Skill paths
+      // as supported input. The substantive security boundary is the per-Skill
+      // access policy: every referenced Skill must be enabled in this conversation.
       const referencedSkills = extractSkillBaseDirsFromAbsolutePath(params.command);
       if (referencedSkills.length === 0) {
         throw new Error(
-          'Bash references the ~/.liveagent/skills root without naming a specific installed Skill. Either include a Skill name (~/.liveagent/skills/<skill-name>/...) or switch to root="skills" with a cwd inside that Skill.',
+          "Bash references the ~/.liveagent/skills root without naming a specific installed Skill. Include a Skill name such as ~/.liveagent/skills/<skill-name>/... or set cwd to skill://<enabled-skill>/scripts.",
         );
       }
       for (const baseDir of referencedSkills) {
@@ -527,7 +529,7 @@ export function createShellTools(params: {
     }
     if (commandUsesWorkspaceSkillsGuess(params.command)) {
       throw new Error(
-        'Bash cannot cd into workspace skills/ guesses. Enable the installed Skill, then use root="skills" with cwd="<skill-name>/scripts".',
+        "Bash cannot cd into workspace skills/ guesses. Enable the installed Skill, then set cwd to skill://<enabled-skill>/scripts.",
       );
     }
     if (commandSearchesFilesystemForSkills(params.command)) {
@@ -538,7 +540,7 @@ export function createShellTools(params: {
   }
 
   function buildShellFailureHint(params: {
-    root: FileToolRoot;
+    cwd: ResolvedPath;
     command: string;
     stdout: string;
     stderr: string;
@@ -547,11 +549,11 @@ export function createShellTools(params: {
     const hints: string[] = [];
 
     if (
-      params.root !== "skills" &&
+      params.cwd.scope !== "skill" &&
       /(\.liveagent\/skills|~\/\.liveagent\/skills|\bskills\/[^ \n;&|]+\/scripts\b)/.test(combined)
     ) {
       hints.push(
-        'Hint: Both forms are accepted for running a Skill script — preferred root="skills" + cwd="<skill-name>/scripts" + relative command, or an absolute ~/.liveagent/skills/<skill-name>/... path with the Skill enabled in this conversation. If the Skill is not yet enabled, enable it in the chat Skills selector and retry.',
+        "Hint: To run a Skill script, set cwd to skill://<enabled-skill>/scripts and use a relative command, or execute the absolute script path directly when the Skill is enabled.",
       );
     }
 
@@ -560,18 +562,18 @@ export function createShellTools(params: {
       /(\.liveagent\/skills|~\/\.liveagent\/skills|skills\/)/.test(params.command)
     ) {
       hints.push(
-        'Hint: If you are reading, listing, or searching Skill files, use Read/List/Glob/Grep with root="skills" instead of Bash.',
+        "Hint: If you are reading, listing, or searching Skill files, use Read/List/Glob/Grep with skill://<enabled-skill>/... paths instead of Bash.",
       );
     }
 
     if (
-      params.root === "skills" &&
+      params.cwd.scope === "skill" &&
       /No such file or directory|can't open file|not found|没有那个文件|无法打开文件/i.test(
         combined,
       )
     ) {
       hints.push(
-        'Hint: Use List/Glob with root="skills" and the same skill directory to locate the script or file, then retry Bash with root="skills" and a relative cwd.',
+        "Hint: Use List/Glob with the same skill:// path to locate the script or file, then retry Bash with that Skill cwd.",
       );
     }
 
@@ -581,7 +583,7 @@ export function createShellTools(params: {
       )
     ) {
       hints.push(
-        'Hint: This is an application or script error rather than a path normalization error. Inspect the script help or source with Read(root="skills", ...), then retry with the required arguments or dependency setup.',
+        "Hint: This is an application or script error rather than a path normalization error. Inspect the script help or source with Read, then retry with the required arguments or dependency setup.",
       );
     }
 
@@ -590,25 +592,15 @@ export function createShellTools(params: {
 
   const toolBash: Tool = {
     name: "Bash",
-    description: `Execute a non-interactive shell command on the local machine for builds, tests, package managers, external CLIs, curl/API calls, running Skill scripts, or explicitly requested shell work. Reserve it for commands that truly require a shell — do NOT use Bash for file operations the dedicated tools handle: use Read/List/Glob/Grep instead of cat/ls/find/grep/rg for any workspace or Skill content; use Delete instead of rm/rmdir/unlink/find -delete; use Image instead of open/xdg-open/file paths to show pictures. Use curl with an explicit timeout such as \`--max-time 30\` for endpoint tests. Background commands using \`&\` must detach stdout and stderr first, for example \`nohup command > /tmp/liveagent-task.log 2>&1 < /dev/null &\`; otherwise the tool rejects them because inherited pipes can keep Bash running forever. Running a Skill script: two forms are both supported — (a) preferred, canonical: root="skills" with cwd="<skill-name>/scripts" and a command relative to that cwd; (b) direct absolute script path in command, e.g. \`python ~/.liveagent/skills/<skill-name>/scripts/foo.py\`, without cd into the fixed Skills root — the referenced Skill must be enabled in this conversation. Use / as the path separator; Windows \\ is auto-normalized. ${windowsShellPolicy} macOS prefers zsh, then Bash/sh; Linux prefers Bash. Returns stdout, stderr, and exit_code. For ${timeoutPolicy.providerLabel}, timeout defaults to ${timeoutPolicy.defaultTimeoutMs}ms and is capped at ${timeoutPolicy.maxTimeoutMs}ms; larger timeout_ms values are accepted by the schema but clamped before execution. High risk: use carefully.`,
-    parameters: Type.Object({
-      ...(allowSkillsRoot
-        ? {
-            root: Type.Optional(
-              Type.Union([Type.Literal("workspace"), Type.Literal("skills")], {
-                description:
-                  'Sandbox the `cwd` resolves under. Omit (or "workspace") for commands in the workspace root — this is the default. Use "skills" ONLY when executing a script that ships with an installed, enabled Skill (then `cwd` is typically "<skill-name>/scripts"). `cwd` MUST stay relative regardless of which root is selected.',
-              }),
-            ),
-          }
-        : {}),
+    description: `Execute a non-interactive shell command on the local machine for builds, tests, package managers, external CLIs, curl/API calls, running Skill scripts, or explicitly requested shell work. Reserve it for commands that truly require a shell — do NOT use Bash for file operations the dedicated tools handle: use Read/List/Glob/Grep instead of cat/ls/find/grep/rg for any workspace or Skill content; use Delete instead of rm/rmdir/unlink/find -delete; use Image instead of open/xdg-open/file paths to show pictures. Use curl with an explicit timeout such as \`--max-time 30\` for endpoint tests. Background commands using \`&\` must detach stdout and stderr first, for example \`nohup command > /tmp/liveagent-task.log 2>&1 < /dev/null &\`; otherwise the tool rejects them because inherited pipes can keep Bash running forever. Running a Skill script: set cwd to \`skill://<enabled-skill>/scripts\` and run a relative command, or execute the absolute script path directly when that Skill is enabled. Use / as the path separator; Windows \\ is auto-normalized. ${windowsShellPolicy} macOS prefers zsh, then Bash/sh; Linux prefers Bash. Returns stdout, stderr, and exit_code. For ${timeoutPolicy.providerLabel}, timeout defaults to ${timeoutPolicy.defaultTimeoutMs}ms and is capped at ${timeoutPolicy.maxTimeoutMs}ms; larger timeout_ms values are accepted by the schema but clamped before execution. High risk: use carefully.`,
+    parameters: strictToolParameters({
       command: Type.String({
         description: "Shell command to execute (prefer non-interactive, idempotent commands).",
       }),
       cwd: Type.Optional(
         Type.String({
           description:
-            'Optional working directory, RELATIVE to the selected `root` (NEVER absolute, NEVER starting with "/", "~/", or a drive letter; NEVER containing "../"). Examples: "src-tauri", "src-tauri/src" (workspace), or "my-skill/scripts" (with root="skills"). Omit `cwd` to run in the root itself. If you have an absolute path that falls inside the workspace or Skills root, strip that root prefix and pass only the remainder.',
+            'Optional working directory. Omit to use the workspace root. Accepts workspace-relative paths, absolute paths, ~/..., file://, pathRef values, and skill://<enabled-skill>/... paths.',
         }),
       ),
       timeout_ms: Type.Optional(
@@ -625,7 +617,7 @@ export function createShellTools(params: {
     name: "ManagedProcess",
     description:
       'Start, inspect, read logs for, or stop a long-running local process such as a dev server, watcher, or preview server. Use this instead of `Bash ... &`. action="start" runs a foreground command under LiveAgent process management, redirects stdout/stderr to a log file, and returns immediately with process_id, pid, and log_path. Use action="status" to list or inspect processes, action="read_log" to read recent log output, and action="stop" to terminate the process tree.',
-    parameters: Type.Object({
+    parameters: strictToolParameters({
       action: Type.Union(
         [
           Type.Literal("start"),
@@ -646,7 +638,7 @@ export function createShellTools(params: {
       cwd: Type.Optional(
         Type.String({
           description:
-            'Optional working directory relative to the workspace root for action="start". Omit to use the workspace root.',
+            "Optional working directory for action=\"start\". Omit to use the workspace root. Accepts workspace-relative paths, absolute paths, ~/..., file://, pathRef values, and skill://<enabled-skill>/... paths.",
         }),
       ),
       label: Type.Optional(
@@ -673,12 +665,33 @@ export function createShellTools(params: {
   };
 
   const tools: Tool[] = allowManagedProcess ? [toolBash, toolManagedProcess] : [toolBash];
+  const allowedArgumentsByToolName: Record<string, readonly string[]> = {
+    Bash: ["command", "cwd", "timeout_ms"],
+    ManagedProcess: ["action", "command", "cwd", "label", "process_id", "max_bytes"],
+  };
 
   async function executeManagedProcessToolCall(
     toolCall: ToolCall,
     signal?: AbortSignal,
   ): Promise<ToolResultMessage> {
     const now = Date.now();
+    try {
+      assertKnownArguments(
+        "ManagedProcess",
+        toolCall.arguments,
+        allowedArgumentsByToolName.ManagedProcess,
+      );
+    } catch (err) {
+      return {
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: asErrorMessage(err) }],
+        details: {},
+        isError: true,
+        timestamp: now,
+      };
+    }
     if (signal?.aborted) {
       return {
         role: "toolResult",
@@ -720,22 +733,19 @@ export function createShellTools(params: {
             "ManagedProcess.command must be a foreground command. Remove `&`; ManagedProcess starts it in the background and captures logs automatically.",
           );
         }
-        const cwdRaw = toolCall.arguments?.cwd;
-        const cwd =
-          typeof cwdRaw === "string"
-            ? normalizeOptionalScopedRelPath({
-                input: cwdRaw,
-                label: "ManagedProcess.cwd",
-                expectedRoot: "workspace",
-                workdir,
-              })
-            : undefined;
+        const cwdResolved = await pathResolver.resolvePath(toolCall.arguments?.cwd, {
+          label: "ManagedProcess.cwd",
+          intent: "cwd",
+          required: false,
+          allowExternal: true,
+        });
+        const cwd = backendCwd(cwdResolved);
         const label =
           typeof toolCall.arguments?.label === "string"
             ? toolCall.arguments.label.trim()
             : undefined;
         const response = await invoke<ManagedProcessStartResponse>("managed_process_start", {
-          workdir,
+          workdir: cwdResolved.workdir,
           command,
           cwd: cwd || undefined,
           label: label || undefined,
@@ -859,6 +869,20 @@ export function createShellTools(params: {
       };
     }
 
+    try {
+      assertKnownArguments("Bash", toolCall.arguments, allowedArgumentsByToolName.Bash);
+    } catch (err) {
+      return {
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: asErrorMessage(err) }],
+        details: {},
+        isError: true,
+        timestamp: now,
+      };
+    }
+
     const command =
       typeof toolCall.arguments?.command === "string" ? toolCall.arguments.command.trim() : "";
 
@@ -883,41 +907,16 @@ export function createShellTools(params: {
       };
     }
 
-    let root: FileToolRoot;
-    let effectiveWorkdir: string;
-    try {
-      root = normalizeBashRoot(toolCall.arguments?.root);
-      effectiveWorkdir = await resolveRootWorkdir(root);
-    } catch (err) {
-      return {
-        role: "toolResult",
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        content: [
-          {
-            type: "text",
-            text: `${asErrorMessage(err)}. Use root="workspace" or root="skills" with a relative cwd. Do not use absolute workspace or Skills paths.`,
-          },
-        ],
-        details: {},
-        isError: true,
-        timestamp: now,
-      };
-    }
-
-    const cwdRaw = toolCall.arguments?.cwd;
+    let cwdResolved: ResolvedPath;
     let cwd: string | undefined;
     try {
-      cwd =
-        typeof cwdRaw === "string"
-          ? normalizeOptionalScopedRelPath({
-              input: cwdRaw,
-              label: "Bash.cwd",
-              expectedRoot: root,
-              workdir,
-              skillsRootDir: cachedSkillsRootDir,
-            })
-          : undefined;
+      cwdResolved = await pathResolver.resolvePath(toolCall.arguments?.cwd, {
+        label: "Bash.cwd",
+        intent: "cwd",
+        required: false,
+        allowExternal: true,
+      });
+      cwd = backendCwd(cwdResolved);
     } catch (err) {
       return {
         role: "toolResult",
@@ -936,7 +935,7 @@ export function createShellTools(params: {
     }
 
     try {
-      validateBashSkillAccess({ root, cwd, command });
+      validateBashSkillAccess({ cwd: cwdResolved, command });
     } catch (err) {
       return {
         role: "toolResult",
@@ -978,7 +977,7 @@ export function createShellTools(params: {
         }
       }
       const res = await invoke<ShellRunResponse>("shell_run", {
-        workdir: effectiveWorkdir,
+        workdir: cwdResolved.workdir,
         command,
         cwd: cwd || undefined,
         timeout_ms,
@@ -990,8 +989,7 @@ export function createShellTools(params: {
       const header = [
         `# Shell`,
         `shell: ${res.shell || "unknown"}`,
-        root !== "workspace" ? `root: ${root}` : null,
-        cwd ? `cwd: ${cwd}` : null,
+        `cwd: ${formatResolvedTarget(cwdResolved)}`,
         `exit_code: ${res.exit_code}`,
         res.timed_out ? `timed_out: true` : null,
         res.cancelled ? `cancelled: true` : null,
@@ -1019,7 +1017,7 @@ export function createShellTools(params: {
       const hint =
         res.exit_code !== 0 || res.timed_out || res.cancelled
           ? buildShellFailureHint({
-              root,
+              cwd: cwdResolved,
               command,
               stdout: res.stdout || "",
               stderr: res.stderr || "",
@@ -1044,8 +1042,7 @@ export function createShellTools(params: {
         return buildCancelledResult({
           toolCall,
           command,
-          cwd,
-          root,
+          cwd: formatResolvedTarget(cwdResolved),
           startedAt: now,
           effectiveTimeoutMs: timeout_ms,
           timeoutPolicy,

@@ -13,6 +13,7 @@ import type {
 import { sanitizeLabelPart } from "./utils";
 
 function pathMatchesAllowedOutput(path: string, allowedPath: string) {
+  if (!allowedPath || allowedPath === ".") return true;
   if (allowedPath.includes("*") || allowedPath.includes("?") || allowedPath.includes("[")) {
     return globAllowedOutputPathToRegExp(allowedPath).test(path);
   }

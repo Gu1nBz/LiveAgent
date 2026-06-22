@@ -365,7 +365,7 @@ function createDelegateHarness(options = {}) {
       apiKey: "test-key",
       reasoning: "medium",
     },
-    workdir: "/tmp/liveagent-delegate-test",
+    workdir: options.workdir ?? "/tmp/liveagent-delegate-test",
     sessionId: "parent-session",
     parentConversationId: "conversation-1",
     existingSubagentIdentities: options.existingSubagentIdentities ?? [],
@@ -1266,7 +1266,7 @@ test("Agent upgrades resumed readonly subagents to worktree for later file outpu
     createToolCall({
       id: "writer-a",
       prompt: "请延续之前的分析，并把最终结果写入 docs/answer.md 文件。",
-      allowed_output_paths: ["docs/answer.md"],
+      allowed_output_paths: ["/tmp/liveagent-delegate-test/docs/answer.md"],
     }),
   );
 
@@ -2393,6 +2393,35 @@ test("Agent explicit apply policy applies only allowed output paths", async () =
   assert.equal(result.isError, false);
   assert.equal(agent.taskIntent, "document_generation");
   assert.equal(agent.applyPolicy, "explicit");
+  assert.equal(agent.applyStatus, "applied");
+  assert.deepEqual(agent.allowedOutputPaths, ["docs/final-report.md"]);
+  assert.equal(worktreeApplies.length, 1);
+});
+
+test("Agent explicit apply policy normalizes Windows absolute allowed output paths", async () => {
+  const { bundle, worktreeApplies } = createDelegateHarness({
+    workdir: "C:/Users/Alice/Repo",
+    worktreeStatus: {
+      changed: true,
+      status: "?? docs/final-report.md",
+      diff_stat: " docs/final-report.md | 20 +",
+      diff: "diff --git a/docs/final-report.md b/docs/final-report.md",
+      diff_truncated: false,
+      untracked_files: ["docs/final-report.md"],
+    },
+  });
+
+  const result = await bundle.executeToolCall(
+    createToolCall({
+      prompt: "请生成 docs/final-report.md 文件。",
+      mode: "worktree",
+      apply_policy: "explicit",
+      allowed_output_paths: ["C:\\Users\\Alice\\Repo\\docs\\final-report.md"],
+    }),
+  );
+
+  const agent = result.details.agents[0];
+  assert.equal(result.isError, false);
   assert.equal(agent.applyStatus, "applied");
   assert.deepEqual(agent.allowedOutputPaths, ["docs/final-report.md"]);
   assert.equal(worktreeApplies.length, 1);

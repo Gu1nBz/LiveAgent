@@ -11,7 +11,7 @@ Use this reference when writing or reviewing a LiveAgent-compatible skill.
 
 ## Discovery Model
 
-- LiveAgent discovers skills from the fixed runtime root exposed to file tools as `root="skills"`.
+- LiveAgent discovers runtime skills from the fixed user Skills root managed by `SkillsManager`.
 - `SkillsManager(action=create)` writes runtime skills under that fixed Skills root.
 - The repository source copy for built-in project skills lives under `crates/agent-gui/src-tauri/prompt/skills/<skill-name>`, but that is not the runtime installation root.
 - The runtime scanner accepts `SKILL.md`, `skill.md`, `skill.json`, and fallback `README.md`.
@@ -50,7 +50,7 @@ The `description` is both the trigger text and the UI summary. Write it in Engli
 
 ## Runtime Rules
 
-- Relative paths inside a skill are resolved from the skill base directory. When inspecting or updating enabled skill files, use file tools with `root="skills"` and prefix the path with the skill's `baseDir`.
+- Relative paths inside a skill are resolved from the skill base directory. When inspecting or updating enabled skill files, use file tools with `skill://<baseDir>/...`, an absolute path returned by a tool, or the exact `pathRef` returned by a prior tool.
 - Use `SkillsManager` actions for LiveAgent skill creation, installation, listing, validation, and packaging. Do not bundle Python helper scripts for these core workflows.
 - If the skill needs reference or asset files, mention them from `SKILL.md` with exact relative paths.
 - Keep every generated Markdown document in English. Validation rejects obvious non-English writing-system characters in skill documentation.

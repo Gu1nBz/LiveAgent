@@ -52,10 +52,10 @@ enum FsError {
     #[error("workdir must be an existing absolute directory: {0}")]
     InvalidWorkdir(String),
 
-    #[error("path must be relative and must not contain .., drive letters, or a root path: {0}")]
+    #[error("resolved path segment must not contain .., drive letters, or an absolute root path: {0}")]
     InvalidRelPath(String),
 
-    #[error("Target path is outside the workspace root: {0}")]
+    #[error("Target path is outside the resolved directory: {0}")]
     OutOfBounds(String),
 
     #[error("I/O error: {0}")]

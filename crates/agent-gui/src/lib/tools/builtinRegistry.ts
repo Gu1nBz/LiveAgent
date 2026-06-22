@@ -223,6 +223,7 @@ async function buildBaseBuiltinToolBundles(params: BuildBuiltinBaseToolRegistryP
       currentChatModel: params.currentChatModel,
     }),
     createMcpManagerTools({
+      workdir: params.workdir,
       getMcpSettings: () => currentMcpSettings,
       setMcpSettings: params.updateMcpSettings
         ? (next) => {

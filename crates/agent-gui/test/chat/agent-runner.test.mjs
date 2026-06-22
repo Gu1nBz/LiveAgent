@@ -808,7 +808,6 @@ test("runAssistantWithTools strips repeated historical tool call text without du
   const grepCall = createToolCall("call_00_native_grep", "Grep", {
     pattern: "express",
     file_pattern: "**/*.js",
-    root: "workspace",
     ignore_case: true,
   });
   resetFakeStreams(
@@ -822,7 +821,7 @@ test("runAssistantWithTools strips repeated historical tool call text without du
 
 Historical tool call (read-only, not repeating):
 tool_name: Grep
-arguments: {"pattern": "express", "file_pattern": "**/*.js", "root": "workspace", "ignore_case": true}`,
+arguments: {"pattern": "express", "file_pattern": "**/*.js", "ignore_case": true}`,
         },
         grepCall,
       ],
@@ -930,7 +929,6 @@ arguments:
 
 test("runAssistantWithTools strips malformed historical tool text without guessing execution", async () => {
   const bashCall = createToolCall("call_01_native_bash", "Bash", {
-    root: "workspace",
     command: "ls -la tool-test/",
     cwd: ".",
   });
@@ -946,7 +944,6 @@ tool_call_id: call_00_malformed_bash
 tool_name: Bash
 arguments:
 {
-  "root": "workspace",
   "command": "echo 'Node: $(node --version 2>/dev/null || echo "未安装")'"
 }`,
         },

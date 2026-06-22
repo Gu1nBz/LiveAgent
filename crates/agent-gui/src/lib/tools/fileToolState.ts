@@ -1,15 +1,18 @@
 import type {
-  FileToolRoot,
   ReadImageResultDetails,
   ReadNotebookResultDetails,
   ReadPdfResultDetails,
   ReadTextResultDetails,
 } from "./builtinTypes";
 
+type SnapshotPathKey = {
+  path: string;
+  absolutePath?: string;
+  pathRef?: string;
+};
+
 type FileReadSnapshot =
-  | {
-      root: FileToolRoot;
-      path: string;
+  | (SnapshotPathKey & {
       kind: "text";
       mtimeMs: number;
       contentHash: string;
@@ -17,34 +20,28 @@ type FileReadSnapshot =
       numLines: number;
       totalLines: number;
       isPartialView: boolean;
-    }
-  | {
-      root: FileToolRoot;
-      path: string;
+    })
+  | (SnapshotPathKey & {
       kind: "image";
       mtimeMs: number;
       contentHash: string;
-    }
-  | {
-      root: FileToolRoot;
-      path: string;
+    })
+  | (SnapshotPathKey & {
       kind: "pdf";
       mtimeMs: number;
       contentHash: string;
       pageStart: number;
       numPages: number;
       totalPages: number;
-    }
-  | {
-      root: FileToolRoot;
-      path: string;
+    })
+  | (SnapshotPathKey & {
       kind: "notebook";
       mtimeMs: number;
       contentHash: string;
       cellStart: number;
       numCells: number;
       totalCells: number;
-    };
+    });
 
 type FileSnapshotBucket = {
   latest?: FileReadSnapshot;
@@ -52,20 +49,24 @@ type FileSnapshotBucket = {
   byRangeKey: Map<string, FileReadSnapshot>;
 };
 
-function normalizeRoot(root?: FileToolRoot): FileToolRoot {
-  return root === "skills" ? "skills" : "workspace";
+function buildBucketKey(path: SnapshotPathKey | string) {
+  if (typeof path === "string") return path;
+  return path.absolutePath || path.pathRef || path.path;
 }
 
-function buildBucketKey(root: FileToolRoot | undefined, path: string) {
-  return `${normalizeRoot(root)}\0${path}`;
+function snapshotPathKey(details: SnapshotPathKey): SnapshotPathKey {
+  return {
+    path: details.path,
+    absolutePath: details.absolutePath,
+    pathRef: details.pathRef,
+  };
 }
 
 function getBucket(
   buckets: Map<string, FileSnapshotBucket>,
-  root: FileToolRoot | undefined,
-  path: string,
+  path: SnapshotPathKey | string,
 ): FileSnapshotBucket {
-  const key = buildBucketKey(root, path);
+  const key = buildBucketKey(path);
   let bucket = buckets.get(key);
   if (!bucket) {
     bucket = {
@@ -98,10 +99,8 @@ export function createFileToolState() {
   const buckets = new Map<string, FileSnapshotBucket>();
 
   function recordTextRead(details: ReadTextResultDetails) {
-    const root = normalizeRoot(details.root);
     const snapshot: Extract<FileReadSnapshot, { kind: "text" }> = {
-      root,
-      path: details.path,
+      ...snapshotPathKey(details),
       kind: "text",
       mtimeMs: details.mtimeMs,
       contentHash: details.contentHash,
@@ -110,7 +109,7 @@ export function createFileToolState() {
       totalLines: details.totalLines,
       isPartialView: details.isPartialView,
     };
-    const bucket = getBucket(buckets, root, details.path);
+    const bucket = getBucket(buckets, details);
     bucket.latest = snapshot;
     bucket.byRangeKey.set(buildTextRangeKey(snapshot), snapshot);
     if (!snapshot.isPartialView) {
@@ -119,24 +118,20 @@ export function createFileToolState() {
   }
 
   function recordImageRead(details: ReadImageResultDetails) {
-    const root = normalizeRoot(details.root);
     const snapshot: Extract<FileReadSnapshot, { kind: "image" }> = {
-      root,
-      path: details.path,
+      ...snapshotPathKey(details),
       kind: "image",
       mtimeMs: details.mtimeMs,
       contentHash: details.contentHash,
     };
-    const bucket = getBucket(buckets, root, details.path);
+    const bucket = getBucket(buckets, details);
     bucket.latest = snapshot;
     bucket.byRangeKey.set(buildImageRangeKey(), snapshot);
   }
 
   function recordPdfRead(details: ReadPdfResultDetails) {
-    const root = normalizeRoot(details.root);
     const snapshot: Extract<FileReadSnapshot, { kind: "pdf" }> = {
-      root,
-      path: details.path,
+      ...snapshotPathKey(details),
       kind: "pdf",
       mtimeMs: details.mtimeMs,
       contentHash: details.contentHash,
@@ -144,16 +139,14 @@ export function createFileToolState() {
       numPages: details.numPages,
       totalPages: details.totalPages,
     };
-    const bucket = getBucket(buckets, root, details.path);
+    const bucket = getBucket(buckets, details);
     bucket.latest = snapshot;
     bucket.byRangeKey.set(buildPdfRangeKey(snapshot), snapshot);
   }
 
   function recordNotebookRead(details: ReadNotebookResultDetails) {
-    const root = normalizeRoot(details.root);
     const snapshot: Extract<FileReadSnapshot, { kind: "notebook" }> = {
-      root,
-      path: details.path,
+      ...snapshotPathKey(details),
       kind: "notebook",
       mtimeMs: details.mtimeMs,
       contentHash: details.contentHash,
@@ -161,22 +154,18 @@ export function createFileToolState() {
       numCells: details.numCells,
       totalCells: details.totalCells,
     };
-    const bucket = getBucket(buckets, root, details.path);
+    const bucket = getBucket(buckets, details);
     bucket.latest = snapshot;
     bucket.byRangeKey.set(buildNotebookRangeKey(snapshot), snapshot);
   }
 
-  function recordTextMutation(params: {
-    root?: FileToolRoot;
-    path: string;
+  function recordTextMutation(params: SnapshotPathKey & {
     mtimeMs: number;
     contentHash: string;
     totalLines: number;
   }) {
-    const root = normalizeRoot(params.root);
     const snapshot: Extract<FileReadSnapshot, { kind: "text" }> = {
-      root,
-      path: params.path,
+      ...snapshotPathKey(params),
       kind: "text",
       mtimeMs: params.mtimeMs,
       contentHash: params.contentHash,
@@ -185,33 +174,31 @@ export function createFileToolState() {
       totalLines: params.totalLines,
       isPartialView: false,
     };
-    const bucket = getBucket(buckets, root, params.path);
+    const bucket = getBucket(buckets, params);
     bucket.latest = snapshot;
     bucket.latestFullText = snapshot;
     bucket.byRangeKey.set(buildTextRangeKey(snapshot), snapshot);
   }
 
-  function getLatest(path: string, root?: FileToolRoot) {
-    return buckets.get(buildBucketKey(root, path))?.latest;
+  function getLatest(path: SnapshotPathKey | string) {
+    return buckets.get(buildBucketKey(path))?.latest;
   }
 
-  function getLatestFullText(path: string, root?: FileToolRoot) {
-    return buckets.get(buildBucketKey(root, path))?.latestFullText;
+  function getLatestFullText(path: SnapshotPathKey | string) {
+    return buckets.get(buildBucketKey(path))?.latestFullText;
   }
 
   function getExactTextRead(
-    path: string,
+    path: SnapshotPathKey | string,
     params: {
       startLine: number;
       numLines: number;
       totalLines: number;
     },
-    root?: FileToolRoot,
   ) {
-    return buckets.get(buildBucketKey(root, path))?.byRangeKey.get(
+    return buckets.get(buildBucketKey(path))?.byRangeKey.get(
       buildTextRangeKey({
-        root: normalizeRoot(root),
-        path,
+        path: typeof path === "string" ? path : path.path,
         kind: "text",
         mtimeMs: 0,
         contentHash: "",
@@ -223,23 +210,21 @@ export function createFileToolState() {
     );
   }
 
-  function getExactImageRead(path: string, root?: FileToolRoot) {
-    return buckets.get(buildBucketKey(root, path))?.byRangeKey.get(buildImageRangeKey());
+  function getExactImageRead(path: SnapshotPathKey | string) {
+    return buckets.get(buildBucketKey(path))?.byRangeKey.get(buildImageRangeKey());
   }
 
   function getExactPdfRead(
-    path: string,
+    path: SnapshotPathKey | string,
     params: {
       pageStart: number;
       numPages: number;
       totalPages: number;
     },
-    root?: FileToolRoot,
   ) {
-    return buckets.get(buildBucketKey(root, path))?.byRangeKey.get(
+    return buckets.get(buildBucketKey(path))?.byRangeKey.get(
       buildPdfRangeKey({
-        root: normalizeRoot(root),
-        path,
+        path: typeof path === "string" ? path : path.path,
         kind: "pdf",
         mtimeMs: 0,
         contentHash: "",
@@ -251,18 +236,16 @@ export function createFileToolState() {
   }
 
   function getExactNotebookRead(
-    path: string,
+    path: SnapshotPathKey | string,
     params: {
       cellStart: number;
       numCells: number;
       totalCells: number;
     },
-    root?: FileToolRoot,
   ) {
-    return buckets.get(buildBucketKey(root, path))?.byRangeKey.get(
+    return buckets.get(buildBucketKey(path))?.byRangeKey.get(
       buildNotebookRangeKey({
-        root: normalizeRoot(root),
-        path,
+        path: typeof path === "string" ? path : path.path,
         kind: "notebook",
         mtimeMs: 0,
         contentHash: "",
@@ -273,8 +256,8 @@ export function createFileToolState() {
     );
   }
 
-  function clear(path: string, root?: FileToolRoot) {
-    buckets.delete(buildBucketKey(root, path));
+  function clear(path: SnapshotPathKey | string) {
+    buckets.delete(buildBucketKey(path));
   }
 
   return {

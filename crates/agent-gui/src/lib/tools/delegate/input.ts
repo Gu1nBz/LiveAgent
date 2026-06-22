@@ -60,7 +60,7 @@ function normalizePathList(value: unknown): string[] {
   const out: string[] = [];
   for (const raw of rawItems) {
     if (typeof raw !== "string") continue;
-    const normalized = normalizeRelativePath(raw);
+    const normalized = raw.trim().replace(/\\/g, "/").replace(/^\.\//, "");
     if (normalized && !out.includes(normalized)) out.push(normalized);
   }
   return out;
@@ -71,7 +71,7 @@ function maybeOutputPath(value: string) {
   if (!text || /[*?[\]]/.test(text) || /^https?:\/\//i.test(text)) return "";
   if (/\s/.test(text)) return "";
   if (!/\.[a-z0-9]{1,12}$/i.test(text)) return "";
-  return normalizeRelativePath(text);
+  return text.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 function inferAllowedOutputPaths(params: { prompt?: string }): string[] {

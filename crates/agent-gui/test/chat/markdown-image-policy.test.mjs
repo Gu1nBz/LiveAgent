@@ -165,11 +165,11 @@ test("agent tool rules require Image for chat-visible images", () => {
   );
   assert.match(
     suffix,
-    /For image files inside installed Skills, call Image with root="skills" and a path relative to the fixed Skills root\./,
+    /Local image: pass `path` exactly as seen, including workspace-relative, absolute, pathRef, or skill:\/\/ paths\./,
   );
   assert.match(
     suffix,
-    /Do not use Bash, open, xdg-open, Markdown, HTML, or absolute Skills paths to display Skill images\./,
+    /Do not use Bash, open, xdg-open, Markdown, or HTML to display Skill images\./,
   );
   assert.match(
     suffix,
@@ -217,8 +217,8 @@ test("agent tool rules keep local file discovery on file tools instead of Bash",
     "Bash",
     "SkillsManager",
   ]);
-  assert.match(suffix, /absolute workspace or Skills paths shown in Skill docs/);
-  assert.match(suffix, /Convert them to scoped file-tool calls/);
+  assert.match(suffix, /File tools and Bash accept the path you see/);
+  assert.match(suffix, /For files inside a Skill, call file tools with a path like `skill:\/\/<baseDir>\/references\/guide\.md`/);
   assert.match(suffix, /Do not run Bash cat\/ls\/find\/grep/);
 });
 
@@ -228,11 +228,11 @@ test("agent tool rules keep workspace and Skills deletion on Delete", () => {
     "Bash",
     "SkillsManager",
   ]);
-  assert.match(suffix, /For workspace or Skills deletion, use Delete with the correct root\/path/);
+  assert.match(suffix, /For workspace or Skill deletion, use Delete with the exact path or pathRef/);
   assert.match(suffix, /Do not run Bash rm, rmdir, unlink, or find -delete/);
 });
 
-test("agent tool rules route installed Skill scripts through Bash root=skills", () => {
+test("agent tool rules route installed Skill scripts through skill cwd", () => {
   const suffix = agentRunnerModule.buildToolsSuffix("/workspace", [
     "Bash",
     "SkillsManager",
@@ -240,8 +240,8 @@ test("agent tool rules route installed Skill scripts through Bash root=skills", 
     "List",
     "Glob",
   ]);
-  assert.match(suffix, /Bash\.cwd is relative to the selected Bash root/);
-  assert.match(suffix, /use root="skills" with cwd="<skill-name>\/scripts"/);
+  assert.match(suffix, /Bash\.cwd follows the path rules in \*\*Workspace & Paths\*\*/);
+  assert.match(suffix, /use cwd="skill:\/\/<enabled-skill>\/scripts"/);
   assert.match(suffix, /Do not cd into ~\/\.liveagent\/skills or workspace skills\/ guesses/);
 });
 
@@ -259,7 +259,7 @@ test("fs tool descriptions keep Image as the only display path for images", () =
   );
   assert.match(
     source,
-    /For images inside the workspace or installed Skills, use root="workspace" or root="skills" with path\/paths or local source\/sources relative to that root; do not expand either root into an absolute path\./,
+    /Supports workspace paths, enabled Skill paths, external absolute paths, http\/https URLs, base64 data URLs, and SVG images/,
   );
   assert.match(
     source,

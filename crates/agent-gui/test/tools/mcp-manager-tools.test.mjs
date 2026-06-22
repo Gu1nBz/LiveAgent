@@ -19,6 +19,7 @@ const baseServer = {
 function createMcpBundle({
   settings = { servers: [], selected: [] },
   runtimeScope = "chat",
+  workdir = "/workspace",
   invokeImpl,
   writable = true,
 } = {}) {
@@ -40,6 +41,7 @@ function createMcpBundle({
   });
   const mcpManagerTools = loader.loadModule("src/lib/tools/mcpManagerTools.ts");
   const bundle = mcpManagerTools.createMcpManagerTools({
+    workdir,
     getMcpSettings: () => currentSettings,
     setMcpSettings: writable
       ? (next) => {
@@ -144,6 +146,115 @@ test("McpManager create defaults to enabled without separate selection", async (
       selected: [],
     },
   ]);
+});
+
+test("McpManager resolves local cwd inputs before persisting or testing servers", async () => {
+  const workdir = "/workspace";
+  const created = createMcpBundle({ workdir });
+
+  const createResult = await callMcpManager(created.bundle, {
+    action: "create",
+    server: {
+      id: "demo",
+      transport: "stdio",
+      command: "demo-mcp",
+      cwd: "tools/mcp",
+    },
+  });
+
+  assert.equal(createResult.isError, false);
+  assert.equal(created.updates.at(-1).servers[0].cwd, "/workspace/tools/mcp");
+
+  const updated = createMcpBundle({
+    workdir,
+    settings: { servers: [{ ...baseServer, cwd: "/workspace/tools/mcp" }], selected: ["demo"] },
+    invokeImpl(command, args) {
+      assert.equal(command, "mcp_stop_server");
+      return { serverId: args.server_id, stopped: true };
+    },
+  });
+
+  const updateResult = await callMcpManager(updated.bundle, {
+    action: "update",
+    server_id: "demo",
+    patch: { cwd: "file:///workspace/tools/new-mcp" },
+  });
+
+  assert.equal(updateResult.isError, false);
+  assert.equal(updated.updates.at(-1).servers[0].cwd, "/workspace/tools/new-mcp");
+
+  const tested = createMcpBundle({
+    workdir,
+    invokeImpl(command, args) {
+      assert.equal(command, "mcp_test_server");
+      assert.equal(args.server.cwd, "/workspace/tools/inline-mcp");
+      assert.equal(args.persist, false);
+      return {
+        serverId: args.server.id,
+        ok: true,
+        phase: "tools_list",
+        transport: args.server.transport,
+        durationMs: 1,
+        running: true,
+        initialized: true,
+        toolsCount: 0,
+        tools: [],
+        error: null,
+        stderrTail: null,
+      };
+    },
+  });
+
+  const testResult = await callMcpManager(tested.bundle, {
+    action: "test",
+    server: {
+      id: "inline",
+      transport: "stdio",
+      command: "inline-mcp",
+      cwd: "workspace:tools/inline-mcp",
+    },
+  });
+
+  assert.equal(testResult.isError, false);
+});
+
+test("McpManager normalizes Windows local cwd inputs", async () => {
+  const workdir = "C:/Users/Alice/Repo";
+  const created = createMcpBundle({ workdir });
+
+  const createResult = await callMcpManager(created.bundle, {
+    action: "create",
+    server: {
+      id: "demo",
+      transport: "stdio",
+      command: "demo-mcp",
+      cwd: "C:\\Users\\Alice\\Repo\\tools\\mcp",
+    },
+  });
+
+  assert.equal(createResult.isError, false);
+  assert.equal(created.updates.at(-1).servers[0].cwd, "C:/Users/Alice/Repo/tools/mcp");
+
+  const updated = createMcpBundle({
+    workdir,
+    settings: {
+      servers: [{ ...baseServer, cwd: "C:/Users/Alice/Repo/tools/mcp" }],
+      selected: ["demo"],
+    },
+    invokeImpl(command, args) {
+      assert.equal(command, "mcp_stop_server");
+      return { serverId: args.server_id, stopped: true };
+    },
+  });
+
+  const updateResult = await callMcpManager(updated.bundle, {
+    action: "update",
+    server_id: "demo",
+    patch: { cwd: "file:///C:/Users/Alice/Repo/tools/new-mcp" },
+  });
+
+  assert.equal(updateResult.isError, false);
+  assert.equal(updated.updates.at(-1).servers[0].cwd, "C:/Users/Alice/Repo/tools/new-mcp");
 });
 
 test("McpManager read/list redact env and headers", async () => {

@@ -10,8 +10,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeDisplayImageItem(value: unknown): DisplayImageItemDetails | null {
   if (!isRecord(value)) return null;
   const {
-    root,
     path,
+    scope,
+    absolutePath,
+    relativePath,
+    displayPath,
+    pathRef,
     sourceType,
     renderMode,
     sourceUrl,
@@ -24,8 +28,12 @@ function normalizeDisplayImageItem(value: unknown): DisplayImageItemDetails | nu
     return null;
   }
   return {
-    ...(typeof root === "string" ? { root: root as DisplayImageItemDetails["root"] } : {}),
     path,
+    ...(typeof scope === "string" ? { scope: scope as DisplayImageItemDetails["scope"] } : {}),
+    ...(typeof absolutePath === "string" ? { absolutePath } : {}),
+    ...(typeof relativePath === "string" ? { relativePath } : {}),
+    ...(typeof displayPath === "string" ? { displayPath } : {}),
+    ...(typeof pathRef === "string" ? { pathRef } : {}),
     ...(typeof sourceType === "string"
       ? { sourceType: sourceType as DisplayImageItemDetails["sourceType"] }
       : {}),
@@ -78,8 +86,7 @@ function buildDisplayImageContextText(message: ToolResultMessage<DisplayImageRes
   }
 
   const noun = images.length === 1 ? "image" : "images";
-  const formatPath = (image: DisplayImageItemDetails) =>
-    image.root && image.root !== "workspace" ? `root=${image.root} path=${image.path}` : image.path;
+  const formatPath = (image: DisplayImageItemDetails) => image.displayPath || image.path;
   return [
     `Displayed ${images.length} ${noun} in the chat UI successfully.`,
     ...images.map((image, index) => {

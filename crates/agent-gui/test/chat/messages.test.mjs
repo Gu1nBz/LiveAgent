@@ -987,8 +987,24 @@ test("delegated Agent placeholders are built before individual Agent results arr
   assert.deepEqual(
     placeholders.map((item) => item.arguments.allowed_output_paths),
     [
-      ["docs/answer.md", "docs/notes.md", "docs/summary.md"],
-      ["docs/answer.md", "docs/notes.md", "docs/summary.md"],
+      [
+        "docs/answer.md",
+        "docs/./notes.md",
+        "docs//summary.md",
+        "C:/Users/me/bad.md",
+        "//server/share/bad.md",
+        "safe:name.md",
+        "docs/../secret.md",
+      ],
+      [
+        "docs/answer.md",
+        "docs/./notes.md",
+        "docs//summary.md",
+        "C:/Users/me/bad.md",
+        "//server/share/bad.md",
+        "safe:name.md",
+        "docs/../secret.md",
+      ],
     ],
   );
 
@@ -1286,9 +1302,9 @@ test("tool call summaries and argument display avoid dumping large payloads", ()
       type: "toolCall",
       id: "image-skills",
       name: "Image",
-      arguments: { root: "skills", path: "demo/assets/logo.png" },
+      arguments: { path: "skill://demo/assets/logo.png" },
     }),
-    "Image root=skills path=demo/assets/logo.png",
+    "Image path=skill://demo/assets/logo.png",
   );
   assert.equal(
     uiMessages.summarizeToolCall({
@@ -1323,13 +1339,12 @@ test("tool call summaries and argument display avoid dumping large payloads", ()
       id: "bash-skill",
       name: "Bash",
       arguments: {
-        root: "skills",
-        cwd: "metaphysics-steward/scripts",
+        cwd: "skill://metaphysics-steward/scripts",
         command: "python3 steward.py",
         timeout_ms: 1000,
       },
     }),
-    "Bash root=skills cwd=metaphysics-steward/scripts timeout_ms=1000 command=python3 steward.py",
+    "Bash cwd=skill://metaphysics-steward/scripts timeout_ms=1000 command=python3 steward.py",
   );
   assert.equal(
     uiMessages.summarizeToolCall({
@@ -1546,7 +1561,7 @@ test("seed tool call recovery strips repeated historical tool call text without 
 
 Historical tool call (read-only, not repeating):
 tool_name: Grep
-arguments: {"pattern": "express", "file_pattern": "**/*.js", "root": "workspace", "ignore_case": true}
+arguments: {"pattern": "express", "file_pattern": "**/*.js", "ignore_case": true}
 
 After`,
       },
@@ -1557,7 +1572,6 @@ After`,
         arguments: {
           pattern: "express",
           file_pattern: "**/*.js",
-          root: "workspace",
           ignore_case: true,
         },
       },
@@ -1648,7 +1662,6 @@ tool_call_id: call_00_malformed_bash
 tool_name: Bash
 arguments:
 {
-  "root": "workspace",
   "command": "echo 'Node: $(node --version 2>/dev/null || echo "未安装")'"
 }
 `,
@@ -1658,7 +1671,6 @@ arguments:
         id: "call_01_native_bash",
         name: "Bash",
         arguments: {
-          root: "workspace",
           command: "ls -la tool-test/",
           cwd: ".",
         },

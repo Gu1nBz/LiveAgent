@@ -13,6 +13,7 @@ import {
   createBuiltinMetadataMap,
   type McpManagerResultDetails,
 } from "./builtinTypes";
+import { ToolPathResolver } from "./pathUtils";
 import type { SystemToolRuntimeScope } from "./systemToolOptions";
 
 type McpManagerAction =
@@ -106,7 +107,12 @@ const MCP_SERVER_PARAMETERS = Type.Object(
     ),
     command: Type.Optional(Type.String()),
     args: Type.Optional(Type.Array(Type.String())),
-    cwd: Type.Optional(Type.String()),
+    cwd: Type.Optional(
+      Type.String({
+        description:
+          "Optional local working directory for stdio servers. Accepts workspace-relative paths, absolute paths, ~/..., file://, or workspace:pathRef values.",
+      }),
+    ),
     env: Type.Optional(MCP_STRING_MAP_SCHEMA),
     url: Type.Optional(Type.String()),
     headers: Type.Optional(MCP_STRING_MAP_SCHEMA),
@@ -124,7 +130,12 @@ const MCP_SERVER_PATCH_PARAMETERS = Type.Object(
     ),
     command: Type.Optional(Type.String()),
     args: Type.Optional(Type.Array(Type.String())),
-    cwd: Type.Optional(Type.String()),
+    cwd: Type.Optional(
+      Type.String({
+        description:
+          "Optional local working directory for stdio servers. Accepts workspace-relative paths, absolute paths, ~/..., file://, or workspace:pathRef values.",
+      }),
+    ),
     env: Type.Optional(MCP_STRING_MAP_SCHEMA),
     url: Type.Optional(Type.String()),
     headers: Type.Optional(MCP_STRING_MAP_SCHEMA),
@@ -605,10 +616,35 @@ function detailsForResult(result: McpManagerExecutionResult): McpManagerResultDe
 }
 
 export function createMcpManagerTools(params: {
+  workdir: string;
   getMcpSettings: () => McpSettings;
   setMcpSettings?: (next: McpSettings) => void;
   runtimeScope: SystemToolRuntimeScope;
 }): BuiltinToolBundle {
+  async function resolveMcpCwd(cwd: string | undefined, label: string) {
+    const input = typeof cwd === "string" ? cwd.trim() : "";
+    if (!input) return undefined;
+    const resolver = new ToolPathResolver({ workdir: params.workdir });
+    const resolved = await resolver.resolvePath(input, {
+      label,
+      intent: "cwd",
+      required: true,
+      allowExternal: true,
+    });
+    return resolved.absolutePath;
+  }
+
+  async function resolveServerCwd(server: McpServerConfig, label: string) {
+    const cwd = await resolveMcpCwd(server.cwd, label);
+    return cwd ? { ...server, cwd } : { ...server, cwd: undefined };
+  }
+
+  async function resolvePatchCwd(patch: Partial<McpServerConfig>, label: string) {
+    if (!Object.hasOwn(patch, "cwd")) return patch;
+    const cwd = await resolveMcpCwd(patch.cwd, label);
+    return { ...patch, cwd };
+  }
+
   function currentSettings() {
     return normalizeManagedMcpSettings(params.getMcpSettings());
   }
@@ -656,7 +692,10 @@ export function createMcpManagerTools(params: {
     }
 
     if (action === "create") {
-      const server = normalizeServerForCreate(args.server);
+      const server = await resolveServerCwd(
+        normalizeServerForCreate(args.server),
+        "McpManager.server.cwd",
+      );
       const validation = validateServer(server);
       if (!validation.ok)
         return {
@@ -697,7 +736,7 @@ export function createMcpManagerTools(params: {
     if (action === "update") {
       const serverId = requireServerId(args.server_id);
       const existing = requireExistingServer(settings, serverId);
-      const patch = normalizePatch(args.patch);
+      const patch = await resolvePatchCwd(normalizePatch(args.patch), "McpManager.patch.cwd");
       const updated = normalizeMcpServerConfig({ ...existing, ...patch, id: existing.id });
       const validation = validateServer(updated);
       if (!validation.ok)
@@ -755,7 +794,7 @@ export function createMcpManagerTools(params: {
 
     if (action === "validate") {
       const server = args.server
-        ? normalizeInlineServer(args.server)
+        ? await resolveServerCwd(normalizeInlineServer(args.server), "McpManager.server.cwd")
         : requireExistingServer(settings, requireServerId(args.server_id));
       const validation = validateServer(server, args.server ? undefined : settings);
       return {
@@ -778,7 +817,7 @@ export function createMcpManagerTools(params: {
     if (action === "test" || action === "tools" || action === "restart" || action === "diagnose") {
       const hasInlineServer = Boolean(args.server);
       const server = hasInlineServer
-        ? normalizeInlineServer(args.server)
+        ? await resolveServerCwd(normalizeInlineServer(args.server), "McpManager.server.cwd")
         : requireExistingServer(settings, requireServerId(args.server_id));
       const validation = validateServer(server, hasInlineServer ? undefined : settings);
       let runtime: McpRuntimeStatus | null = null;
