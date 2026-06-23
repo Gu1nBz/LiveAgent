@@ -59,6 +59,7 @@ const GATEWAY_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const GATEWAY_TERMINAL_STREAM_RECONNECT_MIN: Duration = Duration::from_millis(250);
 const GATEWAY_TERMINAL_STREAM_RECONNECT_MAX: Duration = Duration::from_secs(5);
 const GATEWAY_TERMINAL_STREAM_STABLE_AFTER: Duration = Duration::from_secs(30);
+const GATEWAY_TERMINAL_STREAM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 const GATEWAY_CHAT_LEASE_MS: u64 = 15_000;
 const GATEWAY_CHAT_RUNNING_LEASE_MS: u64 = 30 * 60_000;
 const GATEWAY_CHAT_LEASE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
@@ -916,6 +917,7 @@ impl GatewayController {
         let (terminal_tx, terminal_rx) = mpsc::channel::<proto::TerminalStreamFrame>(4096);
 
         let result = async {
+            queue_terminal_stream_handshake_frame(&terminal_tx)?;
             let mut request = tonic::Request::new(ReceiverStream::new(terminal_rx));
             insert_bearer_metadata(request.metadata_mut(), &config.token)?;
             let response = tokio::select! {
@@ -926,17 +928,25 @@ impl GatewayController {
                     return Ok(());
                 }
                 response = client.agent_terminal_connect(request) => {
-                    response.map_err(|error| format!("open gateway terminal stream failed: {error}"))?
+                    response.map_err(|error| {
+                        format_gateway_terminal_stream_rpc_error("open", &error, &config)
+                    })?
                 }
             };
             self.set_terminal_stream_sender(Some(terminal_tx.clone()));
             let mut inbound = response.into_inner();
+            let mut keepalive = tokio::time::interval(GATEWAY_TERMINAL_STREAM_KEEPALIVE_INTERVAL);
+            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            keepalive.tick().await;
             loop {
                 tokio::select! {
                     changed = stop_rx.changed() => {
                         if changed.is_err() || *stop_rx.borrow() {
                             return Ok(());
                         }
+                    }
+                    _ = keepalive.tick() => {
+                        queue_terminal_stream_keepalive_frame(&terminal_tx).await?;
                     }
                     message = inbound.message() => {
                         match message {
@@ -947,7 +957,7 @@ impl GatewayController {
                             }
                             Ok(None) => return Ok(()),
                             Err(error) => {
-                                return Err(format!("gateway terminal stream receive failed: {error}"))
+                                return Err(format_gateway_terminal_stream_rpc_error("receive", &error, &config))
                             }
                         }
                     }
@@ -4795,11 +4805,12 @@ mod tests {
     use super::{
         build_chat_event_envelope, build_endpoint, build_grpc_url,
         build_local_settings_update_event_payload, build_tunnel_upstream_url,
-        history_share_resolve_error_code, merge_settings_sync_snapshot, normalize_tunnel_ttl,
-        proto, required_terminal_project_path_key, set_disconnected_status, tunnel_expires_at,
-        validate_tunnel_target_url, GatewayChatRequestEvent, GatewayController,
-        GatewayStatusSnapshot, RemoteChatInboxRecord, GATEWAY_CHAT_LEASE_MS,
-        GATEWAY_CHAT_RUNNING_LEASE_MS,
+        format_gateway_terminal_stream_rpc_error, history_share_resolve_error_code,
+        merge_settings_sync_snapshot, normalize_tunnel_ttl, proto,
+        queue_terminal_stream_handshake_frame, required_terminal_project_path_key,
+        set_disconnected_status, tunnel_expires_at, validate_tunnel_target_url,
+        GatewayChatRequestEvent, GatewayController, GatewayStatusSnapshot, RemoteChatInboxRecord,
+        GATEWAY_CHAT_LEASE_MS, GATEWAY_CHAT_RUNNING_LEASE_MS,
     };
     use crate::commands::settings::RemoteSettingsPayload;
     use serde_json::{json, Value};
@@ -5226,6 +5237,48 @@ mod tests {
     }
 
     #[test]
+    fn terminal_stream_handshake_frame_is_gateway_noop() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<proto::TerminalStreamFrame>(1);
+
+        queue_terminal_stream_handshake_frame(&sender).expect("queue terminal stream handshake");
+
+        let frame = receiver
+            .try_recv()
+            .expect("terminal stream handshake frame");
+        assert_eq!(frame.kind, "detach");
+        assert!(frame.stream_id.starts_with("desktop-handshake-"));
+        assert!(frame.session_id.is_empty());
+    }
+
+    #[test]
+    fn terminal_stream_h2_error_points_to_grpc_endpoint() {
+        let config = RemoteSettingsPayload {
+            enabled: true,
+            gateway_url: "https://gateway.example.com".to_string(),
+            grpc_port: 443,
+            grpc_endpoint: String::new(),
+            token: "dev-token".to_string(),
+            agent_id: "agent".to_string(),
+            auto_reconnect: true,
+            heartbeat_interval: 30,
+            enable_web_terminal: true,
+            enable_web_ssh_terminal: true,
+            enable_web_git: false,
+            enable_web_tunnels: false,
+        };
+
+        let message = format_gateway_terminal_stream_rpc_error(
+            "receive",
+            &tonic::Status::internal("h2 protocol error: http2 error"),
+            &config,
+        );
+
+        assert!(message.contains("receive failed"));
+        assert!(message.contains("HTTP/2 bidi streams"));
+        assert!(message.contains("https://gateway.example.com"));
+    }
+
+    #[test]
     fn build_chat_event_envelope_preserves_tool_result_arguments() {
         let envelope = build_chat_event_envelope(
             "request-1".to_string(),
@@ -5567,6 +5620,57 @@ fn build_grpc_url(config: &RemoteSettingsPayload) -> Result<String, String> {
     url.set_query(None);
     url.set_fragment(None);
     Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
+fn queue_terminal_stream_handshake_frame(
+    sender: &mpsc::Sender<proto::TerminalStreamFrame>,
+) -> Result<(), String> {
+    // Some HTTP/2 proxies do not fully establish a bidi stream until the client
+    // sends its first DATA frame. `detach` is a gateway no-op and is not forwarded
+    // to browser terminal subscribers.
+    sender
+        .try_send(terminal_stream_noop_frame("desktop-handshake"))
+        .map_err(|error| format!("queue gateway terminal stream handshake failed: {error}"))
+}
+
+async fn queue_terminal_stream_keepalive_frame(
+    sender: &mpsc::Sender<proto::TerminalStreamFrame>,
+) -> Result<(), String> {
+    sender
+        .send(terminal_stream_noop_frame("desktop-keepalive"))
+        .await
+        .map_err(|error| format!("queue gateway terminal stream keepalive failed: {error}"))
+}
+
+fn terminal_stream_noop_frame(prefix: &str) -> proto::TerminalStreamFrame {
+    proto::TerminalStreamFrame {
+        kind: "detach".to_string(),
+        stream_id: format!("{}-{}", prefix.trim(), Uuid::new_v4()),
+        ..Default::default()
+    }
+}
+
+fn format_gateway_terminal_stream_rpc_error(
+    phase: &str,
+    error: &tonic::Status,
+    config: &RemoteSettingsPayload,
+) -> String {
+    let message = error.to_string();
+    if !is_h2_protocol_error(&message) {
+        return format!("gateway terminal stream {phase} failed: {message}");
+    }
+
+    let endpoint = build_grpc_url(config).unwrap_or_else(|_| "invalid endpoint".to_string());
+    format!(
+        "gateway terminal stream {phase} failed: {message}. \
+         The gateway terminal stream requires a gRPC endpoint that supports HTTP/2 bidi streams; \
+         check Remote gRPC Endpoint / gRPC port. Current endpoint: {endpoint}"
+    )
+}
+
+fn is_h2_protocol_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("h2 protocol error") || normalized.contains("http2 error")
 }
 
 fn build_endpoint(grpc_url: &str) -> Result<Endpoint, String> {
