@@ -1,6 +1,7 @@
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
 import type {
   AssistantMessage,
+  AssistantMessageEvent,
   Context,
   Message,
   ToolCall,
@@ -640,6 +641,10 @@ export async function runAssistantWithTools(params: {
     signal?: AbortSignal,
     context?: ToolExecutionEventContext,
   ) => Promise<Message>;
+  preflightToolCall?: (
+    toolCall: ToolCall,
+    signal?: AbortSignal,
+  ) => Promise<{ toolCall?: ToolCall; toolResult: ToolResultMessage } | null>;
   onTurnStart?: (round: number) => void;
   onTextDelta: (delta: string, round: number) => void;
   onThinkingDelta?: (delta: string, round: number) => void;
@@ -712,6 +717,7 @@ export async function runAssistantWithTools(params: {
 
     const toolResultErrorFlags = new Map<string, boolean>();
     const toolCallsById = new Map<string, ToolCall>();
+    const streamPreflightToolResults = new Map<string, ToolResultMessage>();
     const parallelBatchKeyByToolCallId = new Map<string, string>();
     const parallelToolBatches = new Map<string, ParallelToolBatch>();
     const llmTools = params.tools ?? [];
@@ -970,7 +976,9 @@ export async function runAssistantWithTools(params: {
     }
 
     function replaceAgentStateMessage(target: Message, replacement: Message) {
-      const stateMessages = getAgentMessages(agent);
+      const currentAgent = agent;
+      if (!currentAgent) return false;
+      const stateMessages = getAgentMessages(currentAgent);
       let targetIndex = stateMessages.lastIndexOf(target);
       if (targetIndex < 0) {
         for (let index = stateMessages.length - 1; index >= 0; index -= 1) {
@@ -989,7 +997,7 @@ export async function runAssistantWithTools(params: {
         }
       }
       if (targetIndex < 0) return false;
-      agent!.state.messages = [
+      currentAgent.state.messages = [
         ...stateMessages.slice(0, targetIndex),
         replacement,
         ...stateMessages.slice(targetIndex + 1),
@@ -1079,6 +1087,16 @@ export async function runAssistantWithTools(params: {
         });
         toolCallsById.set(toolCall.id, toolCall);
 
+        const preflightToolResult = streamPreflightToolResults.get(toolCall.id);
+        if (preflightToolResult) {
+          streamPreflightToolResults.delete(toolCall.id);
+          toolResultErrorFlags.set(toolCall.id, Boolean(preflightToolResult.isError));
+          return {
+            content: preflightToolResult.content,
+            details: preflightToolResult.details ?? {},
+          };
+        }
+
         if (tool.name === "Bash" || tool.name === "Agent") {
           const batchKey = parallelBatchKeyByToolCallId.get(toolCallId);
           if (batchKey) {
@@ -1126,6 +1144,118 @@ export async function runAssistantWithTools(params: {
     agentTools = [...visibleAgentTools, ...hiddenProviderNativeWebSearchAgentTools];
 
     let streamRound = 0;
+    function getToolCallFromStreamEvent(event: AssistantMessageEvent) {
+      if (
+        event.type !== "toolcall_start" &&
+        event.type !== "toolcall_delta" &&
+        event.type !== "toolcall_end"
+      ) {
+        return null;
+      }
+
+      const toolCall =
+        event.type === "toolcall_end" ? event.toolCall : event.partial.content[event.contentIndex];
+      return toolCall?.type === "toolCall"
+        ? {
+            contentIndex: event.contentIndex,
+            toolCall,
+            partial: event.partial,
+          }
+        : null;
+    }
+
+    function buildPreflightToolUseAssistant(
+      partial: AssistantMessage,
+      contentIndex: number,
+      toolCall: ToolCall,
+    ): AssistantMessage {
+      const content = partial.content.slice();
+      content[contentIndex] = toolCall;
+      return {
+        ...partial,
+        content,
+        stopReason: "toolUse",
+        errorMessage: undefined,
+      };
+    }
+
+    function wrapStreamWithToolPreflight(
+      source: ReturnType<typeof streamSimpleByApi>,
+      signal: AbortSignal | undefined,
+      abortEarly: () => void,
+      cleanup: () => void,
+    ): ReturnType<typeof streamSimpleByApi> {
+      let preflightFinalMessage: AssistantMessage | null = null;
+
+      return {
+        async *[Symbol.asyncIterator]() {
+          const iterator = source[Symbol.asyncIterator]();
+          try {
+            while (true) {
+              const next = await iterator.next();
+              if (next.done) return;
+
+              const event = next.value;
+              const candidate = getToolCallFromStreamEvent(event);
+              const effectiveToolCall = candidate
+                ? normalizeToolCallNameForExecution(candidate.toolCall)
+                : null;
+              if (!candidate || !effectiveToolCall || !params.preflightToolCall) {
+                yield event;
+                continue;
+              }
+
+              const preflight = await params.preflightToolCall(effectiveToolCall, signal);
+
+              if (!preflight) {
+                yield event;
+                continue;
+              }
+
+              const completedToolCall = normalizeToolCallNameForExecution(
+                preflight.toolCall ?? effectiveToolCall,
+              );
+              toolCallsById.set(completedToolCall.id, completedToolCall);
+              streamPreflightToolResults.set(completedToolCall.id, {
+                ...preflight.toolResult,
+                toolCallId: completedToolCall.id,
+                toolName: completedToolCall.name,
+              });
+              preflightFinalMessage = buildPreflightToolUseAssistant(
+                candidate.partial,
+                candidate.contentIndex,
+                completedToolCall,
+              );
+
+              abortEarly();
+              await iterator.return?.();
+
+              yield event;
+              if (event.type !== "toolcall_end") {
+                yield {
+                  type: "toolcall_end",
+                  contentIndex: candidate.contentIndex,
+                  toolCall: completedToolCall,
+                  partial: preflightFinalMessage,
+                };
+              }
+              yield {
+                type: "done",
+                reason: "toolUse",
+                message: preflightFinalMessage,
+              };
+              return;
+            }
+          } finally {
+            cleanup();
+          }
+        },
+        result() {
+          return preflightFinalMessage ? Promise.resolve(preflightFinalMessage) : source.result();
+        },
+      } as unknown as ReturnType<typeof streamSimpleByApi>;
+    }
+
     const streamFn = (streamModel: typeof model, streamContext: Context, options?: any) => {
       const round = ++streamRound;
       const streamTools =
@@ -1149,6 +1279,11 @@ export async function runAssistantWithTools(params: {
       const hostedSearchProbeId = shouldProbeHostedSearch
         ? createHostedSearchProbeId(params.providerId)
         : undefined;
+      const earlyPreflightAbortController = new AbortController();
+      const streamAbortSignal = createLinkedAbortSignal([
+        options?.signal,
+        earlyPreflightAbortController.signal,
+      ]);
       let streamOptions: StreamOptionsEx = {
         ...(options ?? {}),
         apiKey: options?.apiKey ?? params.runtime.apiKey,
@@ -1159,7 +1294,7 @@ export async function runAssistantWithTools(params: {
           },
           hostedSearchProbeId,
         ),
-        signal: options?.signal,
+        signal: streamAbortSignal.signal,
         sessionId: options?.sessionId ?? params.sessionId,
         cacheRetention:
           options?.cacheRetention ??
@@ -1220,7 +1355,13 @@ export async function runAssistantWithTools(params: {
         }),
       );
 
-      return streamSimpleByApi(streamModel, effectiveContext, streamOptions);
+      const sourceStream = streamSimpleByApi(streamModel, effectiveContext, streamOptions);
+      return wrapStreamWithToolPreflight(
+        sourceStream,
+        options?.signal,
+        () => earlyPreflightAbortController.abort(),
+        streamAbortSignal.cleanup,
+      );
     };
 
     agent = new Agent({

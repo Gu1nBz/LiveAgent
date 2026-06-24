@@ -2358,6 +2358,61 @@ pub async fn fs_read_editable_text(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PathStatusResponse {
+    pub path: String,
+    pub exists: bool,
+    pub kind: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub mtime_ms: Option<u64>,
+}
+
+pub(crate) fn fs_path_status_sync(
+    workdir: String,
+    path: String,
+) -> Result<PathStatusResponse, String> {
+    let wd = canonicalize_workdir(&workdir).map_err(|e| e.to_string())?;
+    let rel = sanitize_rel_path(&path).map_err(|e| e.to_string())?;
+    let logical_path = logical_rel_path(&rel);
+    let target = wd.join(&rel);
+
+    match fs::symlink_metadata(&target) {
+        Ok(meta) => {
+            let file_type = meta.file_type();
+            let kind = if file_type.is_symlink() {
+                "symlink"
+            } else if meta.is_file() {
+                "file"
+            } else if meta.is_dir() {
+                "dir"
+            } else {
+                "other"
+            };
+            Ok(PathStatusResponse {
+                path: logical_path,
+                exists: true,
+                kind: Some(kind.to_string()),
+                size_bytes: Some(meta.len()),
+                mtime_ms: Some(metadata_mtime_ms(&meta)),
+            })
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(PathStatusResponse {
+            path: logical_path,
+            exists: false,
+            kind: None,
+            size_bytes: None,
+            mtime_ms: None,
+        }),
+        Err(err) => Err(FsError::Io(err).to_string()),
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn fs_path_status(workdir: String, path: String) -> Result<PathStatusResponse, String> {
+    run_blocking("fs_path_status", move || fs_path_status_sync(workdir, path)).await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WriteTextResponse {
     pub path: String,
     pub mode: String,
@@ -4225,6 +4280,36 @@ mod tests {
             response.content_hash,
             hash_bytes("fn main() {}\n".as_bytes())
         );
+
+        let _ = fs::remove_dir_all(workdir);
+    }
+
+    #[test]
+    fn path_status_reports_existing_file_directory_and_missing_path() {
+        let workdir = unique_test_workdir("path-status");
+        fs::create_dir_all(workdir.join("src")).expect("create workdir");
+        fs::write(workdir.join("src/main.rs"), "fn main() {}\n").expect("write file");
+
+        let file = fs_path_status_sync(workdir.display().to_string(), "src/main.rs".to_string())
+            .expect("file status should succeed");
+        assert_eq!(file.path, "src/main.rs");
+        assert!(file.exists);
+        assert_eq!(file.kind.as_deref(), Some("file"));
+        assert_eq!(file.size_bytes, Some("fn main() {}\n".len() as u64));
+        assert!(file.mtime_ms.unwrap_or_default() > 0);
+
+        let dir = fs_path_status_sync(workdir.display().to_string(), "src".to_string())
+            .expect("dir status should succeed");
+        assert_eq!(dir.kind.as_deref(), Some("dir"));
+        assert!(dir.exists);
+
+        let missing = fs_path_status_sync(workdir.display().to_string(), "new.html".to_string())
+            .expect("missing status should succeed");
+        assert_eq!(missing.path, "new.html");
+        assert!(!missing.exists);
+        assert!(missing.kind.is_none());
+        assert!(missing.size_bytes.is_none());
+        assert!(missing.mtime_ms.is_none());
 
         let _ = fs::remove_dir_all(workdir);
     }

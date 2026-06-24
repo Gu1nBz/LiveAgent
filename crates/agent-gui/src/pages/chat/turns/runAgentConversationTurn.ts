@@ -788,6 +788,8 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
         tools: combinedTools,
         subagentScheduler,
         executeToolCall: combinedExecutor,
+        preflightToolCall: (toolCall, signal) =>
+          builtinRegistry.preflightToolCall(toolCall, signal),
         onTurnStart: (round) => {
           activeAgentRound = round;
           streamedAgentText = "";

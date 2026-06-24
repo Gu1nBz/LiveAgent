@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Type } from "typebox";
 import {
   type BuiltinToolBundle,
+  type BuiltinToolPreflightResult,
   type BuiltinToolResultDetails,
   createBuiltinMetadataMap,
   type DeleteResultDetails,
@@ -105,6 +106,14 @@ type WriteCommandResponse = {
   mtimeMs: number;
   contentHash: string;
   totalLines: number;
+};
+
+type PathStatusCommandResponse = {
+  path: string;
+  exists: boolean;
+  kind?: "file" | "dir" | "symlink" | "other" | null;
+  sizeBytes?: number | null;
+  mtimeMs?: number | null;
 };
 
 type EditCommandResponse = {
@@ -243,6 +252,18 @@ async function invokePathFileCommand<T>(params: {
   }
 }
 
+function buildToolErrorResult(toolCall: ToolCall, text: string): ToolResultMessage {
+  return {
+    role: "toolResult",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    content: [{ type: "text", text }],
+    details: {},
+    isError: true,
+    timestamp: Date.now(),
+  };
+}
+
 export function createFsTools(params: {
   workdir: string;
   fileState: FileToolState;
@@ -277,6 +298,37 @@ export function createFsTools(params: {
     skillAccessPolicy,
     resolveSkillsRootDir,
   });
+  const writePreflightSafePathByToolCallId = new Map<string, string>();
+
+  function buildWriteRequiresFullReadMessage(resolved: ResolvedPath) {
+    return `Write requires a full-file Read first for existing files: ${formatResolvedTarget(resolved)}. Retry with Read using the same path before rewriting. Do not use Bash for workspace or Skill file operations.`;
+  }
+
+  async function readPathStatus(resolved: ResolvedPath, path: string) {
+    return invokePathFileCommand<PathStatusCommandResponse>({
+      toolName: "Write",
+      resolved,
+      command: "fs_path_status",
+      args: {
+        workdir: resolved.workdir,
+        path,
+      },
+    });
+  }
+
+  function completeWriteToolCallForPreflight(toolCall: ToolCall): ToolCall {
+    const args = toolCall.arguments && typeof toolCall.arguments === "object"
+      ? toolCall.arguments
+      : {};
+    if (typeof args.content === "string") return toolCall;
+    return {
+      ...toolCall,
+      arguments: {
+        ...args,
+        content: "",
+      },
+    };
+  }
 
   const toolRead: Tool = {
     name: "Read",
@@ -1318,9 +1370,7 @@ export function createFsTools(params: {
 
     const latest = fileState.getLatest(statePathKey(resolved));
     if (latest?.kind === "text" && latest.isPartialView) {
-      throw new Error(
-        `Write requires a full-file Read first for existing files: ${formatResolvedTarget(resolved)}. Retry with Read using the same path before rewriting. Do not use Bash for workspace or Skill file operations.`,
-      );
+      throw new Error(buildWriteRequiresFullReadMessage(resolved));
     }
     const fullSnapshot = fileState.getLatestFullText(statePathKey(resolved));
 
@@ -1368,6 +1418,67 @@ export function createFsTools(params: {
         },
       ],
       details,
+    };
+  }
+
+  async function preflightWrite(
+    toolCall: ToolCall,
+    signal?: AbortSignal,
+  ): Promise<BuiltinToolPreflightResult | null> {
+    if (signal?.aborted) return null;
+
+    const rawPath = typeof toolCall.arguments?.path === "string" ? toolCall.arguments.path : "";
+    if (!rawPath.trim()) return null;
+
+    const resolved = await pathResolver.resolvePath(rawPath, {
+      label: "Write.path",
+      intent: "write",
+      required: true,
+    });
+    const path = backendPath(resolved);
+    if (!path) {
+      return {
+        toolCall: completeWriteToolCallForPreflight(toolCall),
+        toolResult: buildToolErrorResult(toolCall, "Write.path must identify a file"),
+      };
+    }
+
+    const preflightPathKey = `${resolved.workdir}\0${path}`;
+    if (writePreflightSafePathByToolCallId.get(toolCall.id) === preflightPathKey) {
+      return null;
+    }
+
+    const key = statePathKey(resolved);
+    const latest = fileState.getLatest(key);
+    if (latest?.kind === "text" && latest.isPartialView) {
+      return {
+        toolCall: completeWriteToolCallForPreflight(toolCall),
+        toolResult: buildToolErrorResult(toolCall, buildWriteRequiresFullReadMessage(resolved)),
+      };
+    }
+
+    if (fileState.getLatestFullText(key)) {
+      writePreflightSafePathByToolCallId.set(toolCall.id, preflightPathKey);
+      return null;
+    }
+
+    const status = await readPathStatus(resolved, path);
+    if (!status.exists) {
+      writePreflightSafePathByToolCallId.set(toolCall.id, preflightPathKey);
+      return null;
+    }
+
+    const completedToolCall = completeWriteToolCallForPreflight(toolCall);
+    if (status.kind === "dir") {
+      return {
+        toolCall: completedToolCall,
+        toolResult: buildToolErrorResult(toolCall, "Cannot write to a directory path"),
+      };
+    }
+
+    return {
+      toolCall: completedToolCall,
+      toolResult: buildToolErrorResult(toolCall, buildWriteRequiresFullReadMessage(resolved)),
     };
   }
 
@@ -1817,10 +1928,30 @@ export function createFsTools(params: {
     }
   }
 
+  async function preflightToolCall(
+    toolCall: ToolCall,
+    signal?: AbortSignal,
+  ): Promise<BuiltinToolPreflightResult | null> {
+    try {
+      switch (toolCall.name) {
+        case "Write":
+          return await preflightWrite(toolCall, signal);
+        default:
+          return null;
+      }
+    } catch (err) {
+      return {
+        toolCall: toolCall.name === "Write" ? completeWriteToolCallForPreflight(toolCall) : toolCall,
+        toolResult: buildToolErrorResult(toolCall, asErrorMessage(err)),
+      };
+    }
+  }
+
   return {
     groupId: "fs",
     tools,
     executeToolCall,
+    preflightToolCall,
     metadataByName: createBuiltinMetadataMap([
       [
         "Read",

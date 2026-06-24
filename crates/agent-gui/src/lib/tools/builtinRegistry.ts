@@ -21,6 +21,7 @@ import type {
   BuiltinToolBundle,
   BuiltinToolExecutionContext,
   BuiltinToolMetadata,
+  BuiltinToolPreflightResult,
 } from "./builtinTypes";
 import { createCronTools } from "./cronTools";
 import { createCustomSystemTools } from "./customSystemTools";
@@ -46,6 +47,10 @@ export type BuiltinToolRegistry = {
     signal?: AbortSignal,
     context?: BuiltinToolExecutionContext,
   ) => Promise<ToolResultMessage>;
+  preflightToolCall: (
+    toolCall: ToolCall,
+    signal?: AbortSignal,
+  ) => Promise<BuiltinToolPreflightResult | null>;
   metadataByName: Map<string, BuiltinToolMetadata>;
   hasTool: (toolName: string) => boolean;
 };
@@ -105,6 +110,7 @@ function createBuiltinToolRegistry(bundles: BuiltinToolBundle[]): BuiltinToolReg
   const tools: BuiltinToolBundle["tools"] = [];
   const metadataByName = new Map<string, BuiltinToolMetadata>();
   const executorsByName = new Map<string, BuiltinToolBundle["executeToolCall"]>();
+  const preflightsByName = new Map<string, NonNullable<BuiltinToolBundle["preflightToolCall"]>>();
   const canonicalToolNameByLookupKey = new Map<string, string | null>();
 
   const registerCanonicalToolName = (toolName: string) => {
@@ -131,6 +137,9 @@ function createBuiltinToolRegistry(bundles: BuiltinToolBundle[]): BuiltinToolReg
       }
       tools.push(tool);
       executorsByName.set(tool.name, bundle.executeToolCall);
+      if (bundle.preflightToolCall) {
+        preflightsByName.set(tool.name, bundle.preflightToolCall);
+      }
       registerCanonicalToolName(tool.name);
       const metadata = bundle.metadataByName.get(tool.name);
       if (metadata) {
@@ -171,6 +180,15 @@ function createBuiltinToolRegistry(bundles: BuiltinToolBundle[]): BuiltinToolReg
       const effectiveToolCall =
         resolvedToolName === toolCall.name ? toolCall : { ...toolCall, name: resolvedToolName };
       return execute(effectiveToolCall, signal, context);
+    },
+    async preflightToolCall(toolCall, signal) {
+      const resolvedToolName = resolveToolName(toolCall.name);
+      if (!resolvedToolName) return null;
+      const preflight = preflightsByName.get(resolvedToolName);
+      if (!preflight) return null;
+      const effectiveToolCall =
+        resolvedToolName === toolCall.name ? toolCall : { ...toolCall, name: resolvedToolName };
+      return preflight(effectiveToolCall, signal);
     },
   };
 }

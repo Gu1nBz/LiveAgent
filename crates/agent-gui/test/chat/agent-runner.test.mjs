@@ -1130,6 +1130,110 @@ test("runAssistantWithTools emits streaming tool call argument deltas before fin
   );
 });
 
+test("runAssistantWithTools stops streaming Write content when preflight returns an error", async () => {
+  const finalWriteCall = createToolCall("call_00_preflight_write", "Write", {
+    path: "test6/gobang.html",
+    content: "<html>\nSHOULD_NOT_STREAM\n</html>",
+  });
+  resetFakeStreams(
+    createToolCallDeltaStream(finalWriteCall, [
+      createToolCall(finalWriteCall.id, "Write", {}),
+      createToolCall(finalWriteCall.id, "Write", { path: "test6/gobang.html" }),
+      createToolCall(finalWriteCall.id, "Write", {
+        path: "test6/gobang.html",
+        content: "<html>\nSHOULD_NOT_STREAM",
+      }),
+    ]),
+    createTextAssistant("after read-first reminder"),
+  );
+  const writeTool = {
+    name: "Write",
+    description: "Write files",
+    parameters: { type: "object", properties: {} },
+  };
+  const deltas = [];
+  const toolResults = [];
+  const preflightCalls = [];
+  const { params, executedToolCalls } = createBaseParams({
+    tools: [writeTool],
+    context: {
+      systemPrompt: "Base system prompt",
+      messages: [{ role: "user", content: "Start", timestamp: 1 }],
+      tools: [writeTool],
+    },
+    async preflightToolCall(toolCall) {
+      preflightCalls.push({
+        id: toolCall.id,
+        name: toolCall.name,
+        arguments: { ...(toolCall.arguments ?? {}) },
+      });
+      if (toolCall.name !== "Write" || typeof toolCall.arguments?.path !== "string") {
+        return null;
+      }
+      const completedToolCall = {
+        ...toolCall,
+        arguments: {
+          ...toolCall.arguments,
+          content:
+            typeof toolCall.arguments.content === "string" ? toolCall.arguments.content : "",
+        },
+      };
+      return {
+        toolCall: completedToolCall,
+        toolResult: {
+          role: "toolResult",
+          toolCallId: completedToolCall.id,
+          toolName: completedToolCall.name,
+          content: [
+            {
+              type: "text",
+              text: "Write requires a full-file Read first for existing files: test6/gobang.html.",
+            },
+          ],
+          details: {},
+          isError: true,
+          timestamp: Date.now(),
+        },
+      };
+    },
+    onToolCallDelta: (toolCall) => {
+      deltas.push({
+        id: toolCall.id,
+        name: toolCall.name,
+        arguments: { ...(toolCall.arguments ?? {}) },
+      });
+    },
+    onToolResult: (toolCall, toolResult) => {
+      toolResults.push({ toolCall, toolResult });
+    },
+  });
+
+  const result = await runAssistantWithTools(params);
+
+  assert.deepEqual(
+    deltas.map((delta) => delta.arguments),
+    [{}, { path: "test6/gobang.html" }],
+  );
+  assert.equal(
+    preflightCalls.some((call) => String(call.arguments.content ?? "").includes("SHOULD_NOT_STREAM")),
+    false,
+  );
+  assert.equal(executedToolCalls.length, 0);
+  assert.equal(toolResults.length, 1);
+  assert.equal(toolResults[0].toolResult.isError, true);
+  assert.match(toolResults[0].toolResult.content[0].text, /full-file Read first/);
+  const earlyAssistantToolCall = result.emittedMessages[0].content.find(
+    (block) => block.type === "toolCall",
+  );
+  assert.equal(earlyAssistantToolCall.arguments.path, "test6/gobang.html");
+  assert.equal(earlyAssistantToolCall.arguments.content, "");
+  assert.equal(JSON.stringify(result.emittedMessages[0]).includes("SHOULD_NOT_STREAM"), false);
+  assert.deepEqual(
+    result.emittedMessages.map((message) => message.role),
+    ["assistant", "toolResult", "assistant"],
+  );
+});
+
 test("runAssistantWithTools strips bare tool_name text without duplicate execution", async () => {
   const grepCall = createToolCall("call_00_native_route_grep", "Grep", {
     pattern: "express|route|api",

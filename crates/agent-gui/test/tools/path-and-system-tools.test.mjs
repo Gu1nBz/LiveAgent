@@ -500,6 +500,71 @@ test("file tools allow direct mutations inside enabled Skills when mutation is g
   ]);
 });
 
+test("Write preflight blocks existing files before content streaming but allows new files", async () => {
+  const invocations = [];
+  const fsLoader = createTsModuleLoader({
+    mocks: {
+      "@tauri-apps/api/core": {
+        async invoke(command, args) {
+          invocations.push({ command, args });
+          assert.equal(command, "fs_path_status");
+          return {
+            path: args.path,
+            exists: args.path === "existing.html",
+            kind: args.path === "existing.html" ? "file" : null,
+            sizeBytes: args.path === "existing.html" ? 128 : null,
+            mtimeMs: args.path === "existing.html" ? 44 : null,
+          };
+        },
+      },
+    },
+  });
+  const fsTools = fsLoader.loadModule("src/lib/tools/fsTools.ts");
+  const fileToolState = fsLoader.loadModule("src/lib/tools/fileToolState.ts");
+  const bundle = fsTools.createFsTools({
+    workdir: "/workspace",
+    fileState: fileToolState.createFileToolState(),
+  });
+
+  const blocked = await bundle.preflightToolCall({
+    type: "toolCall",
+    id: "stream-write-existing",
+    name: "Write",
+    arguments: {
+      path: "existing.html",
+    },
+  });
+  const allowed = await bundle.preflightToolCall({
+    type: "toolCall",
+    id: "stream-write-new",
+    name: "Write",
+    arguments: {
+      path: "new.html",
+    },
+  });
+
+  assert.equal(blocked.toolResult.isError, true);
+  assert.match(blocked.toolResult.content[0].text, /full-file Read first/);
+  assert.equal(blocked.toolCall.arguments.content, "");
+  assert.equal(allowed, null);
+  assert.deepEqual(invocations, [
+    {
+      command: "fs_path_status",
+      args: {
+        workdir: "/workspace",
+        path: "existing.html",
+      },
+    },
+    {
+      command: "fs_path_status",
+      args: {
+        workdir: "/workspace",
+        path: "new.html",
+      },
+    },
+  ]);
+});
+
 test("file tools block direct mutations inside built-in Skills", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({

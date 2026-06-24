@@ -41,10 +41,21 @@ export type BuiltinToolExecutor = (
   context?: BuiltinToolExecutionContext,
 ) => Promise<ToolResultMessage>;
 
-export type BuiltinToolBundle<TExtra extends object = {}> = TExtra & {
+export type BuiltinToolPreflightResult = {
+  toolCall?: ToolCall;
+  toolResult: ToolResultMessage;
+};
+
+export type BuiltinToolPreflight = (
+  toolCall: ToolCall,
+  signal?: AbortSignal,
+) => Promise<BuiltinToolPreflightResult | null>;
+
+export type BuiltinToolBundle<TExtra extends object = object> = TExtra & {
   groupId: BuiltinToolGroupId;
   tools: Tool[];
   executeToolCall: BuiltinToolExecutor;
+  preflightToolCall?: BuiltinToolPreflight;
   metadataByName: Map<string, BuiltinToolMetadata>;
 };
 
