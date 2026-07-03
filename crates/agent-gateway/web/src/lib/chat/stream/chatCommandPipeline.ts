@@ -62,6 +62,12 @@ export class ChatCommandPipeline {
     return this.pending.has(conversationId);
   }
 
+  // Conversations with an in-flight submission — activity hydration must not
+  // drop these even when an authoritative snapshot does not list them yet.
+  pendingConversationIds(): Set<string> {
+    return new Set(this.pending.keys());
+  }
+
   async submit(request: ChatCommandRequest): Promise<ChatCommandOutcome> {
     if (request.optimistic !== false) {
       this.hooks.getTranscriptStore(request.conversationId).addOptimisticUserEntry({

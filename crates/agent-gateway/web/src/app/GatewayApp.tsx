@@ -408,7 +408,18 @@ export default function GatewayApp() {
   // Transcript stores (one per conversation), the global activity map, and
   // the command pipeline replace the old live-store registry, running-id
   // unions, and recovery machinery.
-  const transcriptStoreRegistry = useMemo(() => createTranscriptStoreRegistry(), []);
+  // Ref indirection: the registry memo is stable across token changes while
+  // the api client is not, and divergence resyncs must reach the live client.
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const transcriptStoreRegistry = useMemo(
+    () =>
+      createTranscriptStoreRegistry({
+        onDivergence: (divergedConversationId) =>
+          apiRef.current?.resyncConversation(divergedConversationId),
+      }),
+    [],
+  );
   const activityStore = useMemo(() => createActivityStore(), []);
   const pipelineOnBoundRef = useRef<(update: ChatCommandUpdate, pending: PendingChatCommand) => void>(
     () => undefined,
@@ -1469,6 +1480,37 @@ export default function GatewayApp() {
     });
   }, [api, chatCommandPipeline]);
 
+  // Every (re)connect re-baselines the activity store from the gateway's
+  // authoritative registry: chat.activity broadcasts are single-shot, so a
+  // stop that raced a dropped socket would otherwise leave the green dot
+  // (and streaming cursor fallback) stuck until the next history.list.
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+    let cancelled = false;
+    const unsubscribe = api.subscribeConnection((connected) => {
+      if (!connected || cancelled) {
+        return;
+      }
+      void api
+        .listChatActivities()
+        .then((items) => {
+          if (cancelled) {
+            return;
+          }
+          activityStore.hydrate(normalizeActivityHydrationItems(items), {
+            keepConversationIds: chatCommandPipeline.pendingConversationIds(),
+          });
+        })
+        .catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [activityStore, api, chatCommandPipeline]);
+
   const subscribeActivityStore = useCallback(
     (listener: () => void) => activityStore.subscribe(listener),
     [activityStore],
@@ -1529,6 +1571,9 @@ export default function GatewayApp() {
             readEventRunId(event),
             eventClientRequestId || undefined,
           );
+          // Settle the sidebar dot by run identity: the stream's terminal is
+          // authoritative even when the chat.activity broadcast was missed.
+          activityStore.settleRun(targetConversationId, readEventRunId(event));
           const finishedTitle =
             typeof (event as { title?: unknown }).title === "string"
               ? ((event as { title: string }).title ?? "").trim()
@@ -1562,6 +1607,7 @@ export default function GatewayApp() {
       }
     },
     [
+      activityStore,
       applyLiveConversationTitle,
       chatCommandPipeline,
       handleTunnelManagerChatEvent,
@@ -1581,12 +1627,20 @@ export default function GatewayApp() {
           result.activity.runId,
           result.activity.clientRequestId,
         );
+      } else if (!chatCommandPipeline.hasPending(targetConversationId)) {
+        // The authoritative subscribe says nothing is running and no local
+        // submission is in flight: a lingering dot for this conversation is
+        // a missed-stop zombie — settle it by its own run identity.
+        const currentActivity = activityStore.get(targetConversationId);
+        if (currentActivity) {
+          activityStore.settleRun(targetConversationId, currentActivity.runId);
+        }
       }
       for (const event of result.events) {
         observeConversationStreamEvent(targetConversationId, event, { replay: true });
       }
     },
-    [chatCommandPipeline, observeConversationStreamEvent],
+    [activityStore, chatCommandPipeline, observeConversationStreamEvent],
   );
 
   const handleConversationStreamEvent = useCallback(
@@ -1829,11 +1883,15 @@ export default function GatewayApp() {
         return;
       }
       // Authoritative running snapshot: hydrate the activity store (sidebar
-      // dots) and project activity bookkeeping.
+      // dots) and project activity bookkeeping. Conversations with an
+      // in-flight local command are kept — the gateway may not have
+      // registered their run when the snapshot was built.
       const runningConversations = normalizeActivityHydrationItems(
         response.running_conversations,
       );
-      activityStore.hydrate(runningConversations);
+      activityStore.hydrate(runningConversations, {
+        keepConversationIds: chatCommandPipeline.pendingConversationIds(),
+      });
       for (const runningConversation of runningConversations) {
         recordProjectActivity(runningConversation.workdir, runningConversation.updatedAt);
       }
@@ -2013,7 +2071,9 @@ export default function GatewayApp() {
       const runningConversations = normalizeActivityHydrationItems(
         response.running_conversations,
       );
-      activityStore.hydrate(runningConversations);
+      activityStore.hydrate(runningConversations, {
+        keepConversationIds: chatCommandPipeline.pendingConversationIds(),
+      });
       for (const runningConversation of runningConversations) {
         recordProjectActivity(runningConversation.workdir, runningConversation.updatedAt);
       }
@@ -2044,6 +2104,7 @@ export default function GatewayApp() {
   }, [
     activityStore,
     api,
+    chatCommandPipeline,
     commitHistoryListState,
     getHistoryPositionLockedConversationIds,
     recordProjectActivity,

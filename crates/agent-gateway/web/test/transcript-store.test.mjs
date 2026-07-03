@@ -1037,3 +1037,85 @@ test("replace keeps a settled exchange whose persistence lags the fetched window
   );
   assertUniqueKeys(snapshot);
 });
+
+test("a stray run_finished drops the stray turn, keeps activeRun, and fires onDivergence once", () => {
+  let divergences = 0;
+  const store = createTranscriptStore({
+    onDivergence: () => {
+      divergences += 1;
+    },
+  });
+  store.applyEvent(runStarted("run-a", 1));
+  store.applyEvent(token("run-a", 2, "reply a"));
+  store.applyEvent(userMessage("run-b", 3, "queued prompt"));
+  store.flush();
+  assert.equal(
+    allRows(store.getSnapshot()).some((row) => rowText(row) === "queued prompt"),
+    true,
+  );
+
+  store.applyEvent(
+    runFinished("run-b", 4, "failed", { message: "superseded", reason: "superseded" }),
+  );
+  store.flush();
+  const snapshot = store.getSnapshot();
+  assert.equal(snapshot.activeRun?.runId, "run-a", "active run untouched");
+  assert.equal(
+    allRows(snapshot).some((row) => rowText(row) === "queued prompt"),
+    false,
+    "stray turn dropped",
+  );
+  assert.equal(
+    allRows(snapshot).some((row) => rowText(row) === "reply a"),
+    true,
+    "streaming turn untouched",
+  );
+  assert.equal(divergences, 1);
+
+  // A second stray in the same burst is debounced.
+  store.applyEvent(runFinished("run-c", 5, "failed", { message: "also stray" }));
+  store.flush();
+  assert.equal(store.getSnapshot().activeRun?.runId, "run-a");
+  assert.equal(divergences, 1, "one signal per applied sync");
+
+  // The resulting resync re-arms the signal for a later divergence.
+  store.applySync({
+    conversationId: "conv-1",
+    streamEpoch: "epoch-1",
+    latestSeq: 5,
+    reset: false,
+    activity: {
+      runId: "run-a",
+      state: "running",
+      startedSeq: 1,
+      toolStatus: null,
+      toolStatusIsCompaction: false,
+      updatedAt: 1,
+    },
+    snapshot: null,
+    events: [],
+  });
+  store.applyEvent(runFinished("run-d", 6, "failed", { message: "stray again" }));
+  store.flush();
+  assert.equal(divergences, 2, "signal re-armed after the sync");
+});
+
+test("a matching run_finished settles the run without firing onDivergence", () => {
+  let divergences = 0;
+  const store = createTranscriptStore({
+    onDivergence: () => {
+      divergences += 1;
+    },
+  });
+  store.applyEvent(runStarted("run-1", 1));
+  store.applyEvent(token("run-1", 2, "answer"));
+  store.applyEvent(runFinished("run-1", 3));
+  store.flush();
+  const snapshot = store.getSnapshot();
+  assert.equal(snapshot.activeRun, null, "matching terminal settles the run");
+  assert.equal(
+    allRows(snapshot).some((row) => rowText(row) === "answer"),
+    true,
+  );
+  assert.equal(divergences, 0);
+});

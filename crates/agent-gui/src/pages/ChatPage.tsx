@@ -333,6 +333,8 @@ const HISTORY_SWITCH_OVERLAY_MIN_MS = 260;
 const PROJECT_HISTORY_DELETE_PAGE_SIZE = 200;
 const SHARED_HISTORY_LIST_PAGE_SIZE = 200;
 const GATEWAY_RUNTIME_SNAPSHOT_DEBOUNCE_MS = 300;
+// Must stay well below the desktop run ledger's 5-minute active TTL.
+const GATEWAY_RUNTIME_RUN_KEEPALIVE_MS = 60_000;
 
 function appendManagedSkillSelections(current: readonly string[], names: readonly string[]) {
   const out = mergeAlwaysEnabledSkillNames(current);
@@ -3297,6 +3299,26 @@ export function ChatPage(props: ChatPageProps) {
       void queueGatewayRuntimeSnapshotForRun(run, { state: run.state, force: true });
     }
   }, [canShareHistory, remoteRuntimeStatus.connectedSince, remoteRuntimeStatus.sessionId]);
+
+  // Keep-alive: a long silent tool call produces no chat events, and the
+  // desktop run ledger treats an untouched run as lost after its active TTL
+  // (which would surface a spurious failure on remote clients). Re-publishing
+  // the running snapshot refreshes both the ledger and the gateway activity.
+  useEffect(() => {
+    if (!canShareHistory) {
+      return;
+    }
+    const timerId = window.setInterval(() => {
+      for (const run of activeGatewayRuntimeRunsRef.current.values()) {
+        if (run.state === "running") {
+          void queueGatewayRuntimeSnapshotForRun(run, { state: run.state });
+        }
+      }
+    }, GATEWAY_RUNTIME_RUN_KEEPALIVE_MS);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [canShareHistory]);
 
   function applyGatewayBridgeRebase(conversationId: string, baseMessageRef: HistoryMessageRef) {
     const targetConversationId = conversationId.trim();

@@ -16,13 +16,25 @@ export type TranscriptStoreRegistry = {
   clear(): void;
 };
 
-export function createTranscriptStoreRegistry(): TranscriptStoreRegistry {
+export function createTranscriptStoreRegistry(hooks?: {
+  // A store detected run-topology divergence (see createTranscriptStore's
+  // onDivergence); reported with the conversation id the store is currently
+  // registered under so the app can resubscribe that conversation's stream.
+  onDivergence?: (conversationId: string) => void;
+}): TranscriptStoreRegistry {
   const stores = new Map<string, TranscriptStore>();
+  // Mutable identity per store: `move` re-keys a draft store to its real
+  // conversation id, and divergence must report the current key.
+  const storeIds = new WeakMap<TranscriptStore, { conversationId: string }>();
   return {
     get(conversationId) {
       let store = stores.get(conversationId);
       if (!store) {
-        store = createTranscriptStore();
+        const identity = { conversationId };
+        store = createTranscriptStore({
+          onDivergence: () => hooks?.onDivergence?.(identity.conversationId),
+        });
+        storeIds.set(store, identity);
         stores.set(conversationId, store);
       }
       return store;
@@ -37,6 +49,10 @@ export function createTranscriptStoreRegistry(): TranscriptStoreRegistry {
       }
       stores.delete(fromConversationId);
       stores.set(toConversationId, store);
+      const identity = storeIds.get(store);
+      if (identity) {
+        identity.conversationId = toConversationId;
+      }
     },
     remove(conversationId) {
       stores.delete(conversationId);

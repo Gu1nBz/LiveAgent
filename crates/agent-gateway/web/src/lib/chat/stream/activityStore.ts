@@ -11,7 +11,15 @@ export type ConversationActivity = {
   state: RunActivityState;
   workdir: string | null;
   updatedAt: number;
+  // Local receipt time (store clock): lets hydrate distinguish a push that
+  // raced ahead of a list snapshot from a genuinely stale entry.
+  receivedAt: number;
 };
+
+// A push received this recently survives a non-empty hydrate batch that omits
+// it: the batch snapshot may have been built just before the run registered.
+// Stale (stuck) entries are far older than this and still get dropped.
+const RECENT_PUSH_KEEP_MS = 15_000;
 
 export type ActivitySnapshot = {
   activities: ReadonlyMap<string, ConversationActivity>;
@@ -24,8 +32,15 @@ export type ActivityStore = {
   isRunning(conversationId: string): boolean;
   get(conversationId: string): ConversationActivity | null;
   applyActivityEvent(event: ConversationActivityEvent): void;
-  // history.list `running_conversations` hydration: authoritative snapshot of
-  // every active run at response time.
+  // Local settlement by run identity: a run_finished (or an activity-less
+  // subscribe sync) proves the stored run ended even when the chat.activity
+  // "stopped" broadcast was missed. Only the exact run is cleared — a newer
+  // run's entry is never touched.
+  settleRun(conversationId: string, runId: string): void;
+  // history.list / chat.activities hydration: authoritative snapshot of
+  // every active run at response time. Entries absent from the batch are
+  // dropped unless listed in keepConversationIds (locally pending commands
+  // the gateway may not know about yet).
   hydrate(
     items: Array<{
       conversationId: string;
@@ -34,11 +49,13 @@ export type ActivityStore = {
       workdir?: string | null;
       updatedAt?: number;
     }>,
+    options?: { keepConversationIds?: ReadonlySet<string> },
   ): void;
   clear(): void;
 };
 
-export function createActivityStore(): ActivityStore {
+export function createActivityStore(options?: { now?: () => number }): ActivityStore {
+  const now = options?.now ?? Date.now;
   let activities = new Map<string, ConversationActivity>();
   let snapshot: ActivitySnapshot = { activities, revision: 0 };
   const listeners = new Set<() => void>();
@@ -87,6 +104,7 @@ export function createActivityStore(): ActivityStore {
         state: event.state ?? "running",
         workdir: event.workdir,
         updatedAt: event.updatedAt,
+        receivedAt: now(),
       };
       if (
         current &&
@@ -101,22 +119,34 @@ export function createActivityStore(): ActivityStore {
       emit();
     },
 
-    hydrate: (items) => {
+    settleRun: (conversationId, runId) => {
+      if (!runId) {
+        return;
+      }
+      const current = activities.get(conversationId);
+      if (!current || current.runId !== runId) {
+        return;
+      }
+      activities = new Map(activities);
+      activities.delete(conversationId);
+      emit();
+    },
+
+    hydrate: (items, hydrateOptions) => {
+      const nowMs = now();
       const incoming = new Map<string, ConversationActivity>();
-      let newestBatchUpdatedAt = 0;
       for (const item of items) {
         const conversationId = item.conversationId.trim();
         const runId = item.runId.trim();
         if (!conversationId || !runId) {
           continue;
         }
-        const updatedAt = item.updatedAt ?? 0;
-        newestBatchUpdatedAt = Math.max(newestBatchUpdatedAt, updatedAt);
         incoming.set(conversationId, {
           runId,
           state: normalizeState(item.state),
           workdir: item.workdir?.trim() || null,
-          updatedAt,
+          updatedAt: item.updatedAt ?? 0,
+          receivedAt: nowMs,
         });
       }
 
@@ -132,8 +162,11 @@ export function createActivityStore(): ActivityStore {
 
       // The snapshot races the chat.activity pushes: merge per entry with
       // newer-wins (all timestamps come from the gateway clock) so a stale
-      // list response cannot resurrect a run we already saw finish, and only
-      // drop absent entries that are older than the batch itself.
+      // list response cannot resurrect a run we already saw finish. Entries
+      // absent from the authoritative batch are dropped — the gateway says
+      // they are not running — except conversations with a locally pending
+      // command (whose run the gateway may not have registered yet) and
+      // entries whose push arrived after the batch snapshot was built.
       const merged = new Map<string, ConversationActivity>();
       for (const [conversationId, activity] of incoming) {
         const current = activities.get(conversationId);
@@ -142,13 +175,15 @@ export function createActivityStore(): ActivityStore {
           current && current.updatedAt > activity.updatedAt ? current : activity,
         );
       }
+      const keepConversationIds = hydrateOptions?.keepConversationIds;
       for (const [conversationId, current] of activities) {
         if (merged.has(conversationId)) {
           continue;
         }
-        if (current.updatedAt >= newestBatchUpdatedAt) {
-          // Newer than the snapshot: a push that arrived after the list
-          // response was built. Keep it.
+        if (
+          keepConversationIds?.has(conversationId) ||
+          nowMs - current.receivedAt <= RECENT_PUSH_KEEP_MS
+        ) {
           merged.set(conversationId, current);
         }
       }

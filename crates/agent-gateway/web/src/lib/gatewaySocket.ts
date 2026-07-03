@@ -52,6 +52,7 @@ import type {
   HistoryShareStatus,
   HistoryWorkdirsResponse,
   MemoryManagePayload,
+  RunningConversationSummary,
 } from "./gatewayTypes";
 import type {
   TunnelCreateInput,
@@ -1081,6 +1082,8 @@ export class GatewayWebSocketClient {
   private chatQueueListeners = new Set<ChatQueueListener>();
   private chatActivityListeners = new Set<ChatActivityListener>();
   private chatCommandUpdateListeners = new Set<ChatCommandUpdateListener>();
+  private connectionListeners = new Set<(connected: boolean) => void>();
+  private connectionState = false;
   private tunnelStateListeners = new Set<TunnelStateListener>();
   private lastTunnelState: TunnelStateSnapshot | null = null;
   // Server tunnel.state revisions are only monotonic within one gateway
@@ -1334,6 +1337,7 @@ export class GatewayWebSocketClient {
     void this.ensureConnected()
       .then(() => {
         if (this.authenticated) {
+          this.setConnectionState(true);
           this.conversationStreams.handleConnected();
         }
       })
@@ -1348,6 +1352,32 @@ export class GatewayWebSocketClient {
     return () => {
       this.chatActivityListeners.delete(listener);
     };
+  }
+
+  // Authenticated-connection state: `true` fires when auth completes (the
+  // same point conversation streams resume), `false` when the socket drops.
+  // Late subscribers immediately receive the current state.
+  subscribeConnection(listener: (connected: boolean) => void): () => void {
+    this.connectionListeners.add(listener);
+    listener(this.connectionState);
+    return () => {
+      this.connectionListeners.delete(listener);
+    };
+  }
+
+  // On-demand snapshot of every active run (same items as history.list's
+  // running_conversations, without the list).
+  async listChatActivities(): Promise<RunningConversationSummary[]> {
+    const response = await this.requestWithRecovery<{
+      running_conversations?: RunningConversationSummary[];
+    }>("chat.activities", {});
+    return Array.isArray(response?.running_conversations) ? response.running_conversations : [];
+  }
+
+  // Re-issue chat.subscribe for a subscribed conversation from its cursor
+  // (gap-recovery path); no-op when the conversation is not subscribed.
+  resyncConversation(conversationId: string): void {
+    this.conversationStreams.resync(conversationId);
   }
 
   subscribeChatCommandUpdates(listener: ChatCommandUpdateListener): () => void {
@@ -2344,6 +2374,7 @@ export class GatewayWebSocketClient {
             this.authenticated = true;
             this.clearReconnectNoticeTimer();
             this.reconnectAttempt = 0;
+            this.setConnectionState(true);
             this.conversationStreams.handleConnected();
             if (!settled) {
               settled = true;
@@ -2523,6 +2554,7 @@ export class GatewayWebSocketClient {
     }
     this.socket = null;
     this.authenticated = false;
+    this.setConnectionState(false);
 
     const pending = [...this.pending.values()];
     this.pending.clear();
@@ -2562,6 +2594,16 @@ export class GatewayWebSocketClient {
 
   private markInboundActivity() {
     this.lastInboundAt = Date.now();
+  }
+
+  private setConnectionState(connected: boolean) {
+    if (this.connectionState === connected) {
+      return;
+    }
+    this.connectionState = connected;
+    for (const listener of this.connectionListeners) {
+      listener(connected);
+    }
   }
 
   private emitChatQueue(snapshot: ChatQueueSnapshot) {
@@ -2625,6 +2667,9 @@ export type GatewayWebSocketClientLike = {
   subscribeChatQueue(listener: ChatQueueListener): () => void;
   subscribeChatActivity(listener: ChatActivityListener): () => void;
   subscribeChatCommandUpdates(listener: ChatCommandUpdateListener): () => void;
+  subscribeConnection(listener: (connected: boolean) => void): () => void;
+  listChatActivities(): Promise<RunningConversationSummary[]>;
+  resyncConversation(conversationId: string): void;
   subscribeConversationStream(
     conversationId: string,
     handlers: ConversationStreamHandlers,

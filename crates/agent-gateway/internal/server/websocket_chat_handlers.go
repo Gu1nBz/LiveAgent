@@ -103,6 +103,20 @@ func (c *websocketConnection) forwardConversationEvents(
 	}
 }
 
+// handleChatActivities answers from gateway state only — no agent round-trip
+// — so clients can reconcile running conversations while the desktop is
+// offline.
+func (c *websocketConnection) handleChatActivities(req websocketRequest) {
+	var body struct{}
+	if err := decodeWebSocketPayload(req.Payload, &body); err != nil {
+		_ = c.writeError(req.ID, "invalid chat.activities payload")
+		return
+	}
+	_ = c.writeResponse(req.ID, map[string]any{
+		"running_conversations": websocketRunningConversationsPayload(c.sm.ActiveConversationActivities()),
+	})
+}
+
 func (c *websocketConnection) handleChatUnsubscribe(req websocketRequest) {
 	var payload struct {
 		ConversationID string `json:"conversation_id"`

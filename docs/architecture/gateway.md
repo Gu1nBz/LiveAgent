@@ -116,7 +116,9 @@ Terminal metadata 事件仍通过普通 `/ws` 广播，用于同步 `created`、
 |---|---|---|
 | Desktop offline | WebUI 请求返回 agent offline 或状态 offline | `session.Manager` 检测当前 session，WebUI 展示离线/不可用状态。 |
 | WebSocket 断开 | WebUI 自动重连非 Chat 同步；Chat SSE 可按 seq 恢复 | `GatewayWebSocketClient`、SharedWorker 与 fetch SSE client 分别管理重连，Gateway 从 SQLite `chat_events` 补发 seq event。 |
-| gRPC stream 断开 | Agent session close，pending stream 结束 | 桌面端 remote auto reconnect 可重新建立 session。 |
+| gRPC stream 断开 | Agent session close，pending stream 结束 | 桌面端 remote auto reconnect 可重新建立 session；重连后桌面端 republish chat run 台账（active `started` + 未确认终态控制事件），网关幂等收养。 |
+| Chat run 终态信号丢失 | run 已在桌面端结束但网关 activity 未清除 | 桌面端 `ChatRunLedger` 先记账再发送，5s sweeper 重发未送达终态；心跳 `RuntimeStatusEvent.active_runs/finished_runs` 驱动网关对账：finished 报告按真实终态收养，active 报告逐 run 续命，缺席且无事件/续命超过 `runReportLostTimeout`（15s）判 `failed/desktop_run_lost`。 |
+| Chat run 卡死兜底 | 桌面端不再上报某 run | 在线走 `staleRunTimeout`（10min，逐 run 续命，单会话忙碌不屏蔽他会话）；离线走 `offlineRunTimeout`（30min）判 `failed/agent_offline`。 |
 | Chat run 重复提交 | 同一 clientRequestId 重复 | SQLite `chat_command_dedup` 去重，内存索引只是热缓存。 |
 | Chat command 未进入运行态 | 事件流只到 accepted/delivered 后不继续 | HTTP command path 使用 `LIVEAGENT_GATEWAY_CHAT_START_TIMEOUT` 与 `LIVEAGENT_GATEWAY_CHAT_RENDER_START_TIMEOUT` watchdog 写入 `run.failed`，避免 WebUI 无限等待。 |
 | 服务退出 | Ctrl+C 后 HTTP/gRPC shutdown | `cmd/gateway/main.go` 和 `shutdown.go` 控制 graceful/force stop。 |

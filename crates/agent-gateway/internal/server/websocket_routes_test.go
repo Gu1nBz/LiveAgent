@@ -90,6 +90,7 @@ func TestWebsocketRequestHandlersCoverKnownProtocolTypes(t *testing.T) {
 		"provider.models",
 		"chat.subscribe",
 		"chat.unsubscribe",
+		"chat.activities",
 		"chat.command",
 		"chat.cancel",
 		"chat_queue.get",

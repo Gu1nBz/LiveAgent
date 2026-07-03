@@ -141,6 +141,22 @@ func websocketChatActivityPayload(event session.ConversationActivityEvent) map[s
 	return payload
 }
 
+// websocketRunningConversationsPayload is the wire shape for running-run
+// summaries, shared by history.list and chat.activities.
+func websocketRunningConversationsPayload(activities []session.RunActivity) []map[string]any {
+	runningConversations := make([]map[string]any, 0, len(activities))
+	for _, activity := range activities {
+		runningConversations = append(runningConversations, map[string]any{
+			"conversation_id": activity.ConversationID,
+			"run_id":          activity.RunID,
+			"state":           activity.State,
+			"cwd":             activity.Workdir,
+			"updated_at":      activity.UpdatedAt.UnixMilli(),
+		})
+	}
+	return runningConversations
+}
+
 func websocketRunActivityPayload(activity *session.RunActivity) map[string]any {
 	if activity == nil {
 		return nil

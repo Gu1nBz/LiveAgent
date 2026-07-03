@@ -84,7 +84,13 @@ function readEventClientRequestId(event: ConversationStreamEvent): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function createTranscriptStore(): TranscriptStore {
+export function createTranscriptStore(options?: {
+  // A stray run_finished arrived for a non-active run while a run is
+  // streaming: the local view of the run topology diverged from the gateway
+  // log. Fired at most once per applied sync so the app layer can trigger a
+  // resubscribe (which re-arms the signal).
+  onDivergence?: () => void;
+}): TranscriptStore {
   let historyEntries: ChatEntry[] = [];
   let turns: Turn[] = [];
   let activeRun: StreamRunActivity | null = null;
@@ -95,6 +101,10 @@ export function createTranscriptStore(): TranscriptStore {
   // Idempotency cursor: the highest log seq already applied. Re-subscribe
   // replays and snapshot+replay overlaps are dropped below it.
   let lastSeq = 0;
+  // Debounces onDivergence: one signal per applied sync (reset in applySync),
+  // and never twice from the same stream position across syncs.
+  let divergenceSignaled = false;
+  let lastDivergenceSeq = -1;
 
   let snapshot = EMPTY_SNAPSHOT;
   let dirty = false;
@@ -440,6 +450,15 @@ export function createTranscriptStore(): TranscriptStore {
         turns = turns.filter((turn) => turn !== stray);
         schedule(true);
       }
+      // The active run may itself be a zombie (its own run_finished was
+      // lost); let the app resync this conversation to converge. The seq
+      // guard stops a resync loop when a reset replay re-delivers the same
+      // stray on every subscribe.
+      if (!divergenceSignaled && lastSeq !== lastDivergenceSeq) {
+        divergenceSignaled = true;
+        lastDivergenceSeq = lastSeq;
+        options?.onDivergence?.();
+      }
       return;
     }
     const payload = event as { status?: string; message?: string; reason?: string };
@@ -618,6 +637,9 @@ export function createTranscriptStore(): TranscriptStore {
   }
 
   const applySyncLocked = (result: ConversationSubscribeResult) => {
+    // A completed (re)subscribe is the convergence point: re-arm the
+    // divergence signal so a later stray burst can trigger another resync.
+    divergenceSignaled = false;
     if (result.reset) {
       // Seq continuity broke (gateway restart / buffer gap). Folded and
       // settled turns hold finished content with stable ids — fold, never

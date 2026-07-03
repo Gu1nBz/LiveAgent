@@ -25,7 +25,7 @@ func (m *Manager) dispatchFromAgent(expected *AgentSession, env *gatewayv1.Agent
 
 	if runtimeStatus := env.GetRuntimeStatus(); runtimeStatus != nil {
 		m.UpdateRuntimeStatus(session, runtimeStatus)
-		m.convStreams.onRuntimeStatus(runtimeStatus.GetActiveRunCount(), time.Now())
+		m.convStreams.onRuntimeStatus(runtimeStatus, time.Now())
 		return
 	}
 

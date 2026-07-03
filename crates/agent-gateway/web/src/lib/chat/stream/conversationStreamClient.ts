@@ -144,6 +144,18 @@ export class ConversationStreamClient {
     registration.handlers.onEvent(event);
   }
 
+  // App-requested resync (e.g. transcript divergence): re-issue
+  // chat.subscribe from the cursor, exactly like gap recovery. No-op when
+  // the conversation is not subscribed or the socket is down (reconnect
+  // resume covers that case).
+  resync(conversationId: string): void {
+    const registration = this.registrations.get(conversationId.trim());
+    if (!registration || registration.disposed || !this.connected) {
+      return;
+    }
+    void this.sync(registration);
+  }
+
   // Server told us our subscriber overflowed: resume from the cursor.
   handleSubscriptionReset(payload: unknown): void {
     if (!payload || typeof payload !== "object") {

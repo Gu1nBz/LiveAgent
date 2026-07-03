@@ -66,14 +66,14 @@ message GatewayEnvelope {
     SftpRequest sftp_request = 64;
     SettingsResetSshKnownHostRequest settings_reset_ssh_known_host = 72;
     ChatQueueRequest chat_queue = 73;
-    ChatEventReplayRequest chat_event_replay = 74;
     TunnelStateSnapshot tunnel_state = 80;
     TunnelMutation tunnel_mutation = 81;
     TunnelFrame tunnel_frame = 82;
   }
 
-  // Legacy tunnel control/frame payloads (pre-rewrite protocol).
-  reserved 67, 68, 69;
+  // Legacy tunnel control/frame payloads (pre-rewrite protocol) and the
+  // never-wired chat event replay request.
+  reserved 67, 68, 69, 74;
 }
 
 message AgentEnvelope {
@@ -128,7 +128,6 @@ message AgentEnvelope {
     RuntimeStatusEvent runtime_status = 71;
     SettingsResetSshKnownHostResponse settings_reset_ssh_known_host_resp = 72;
     ChatRuntimeSnapshot chat_runtime_snapshot = 77;
-    ChatEventReplayResponse chat_event_replay_resp = 78;
     TunnelDesiredState tunnel_desired = 80;
     TunnelMutationResult tunnel_mutation_result = 81;
     TunnelFrame tunnel_frame = 82;
@@ -136,8 +135,9 @@ message AgentEnvelope {
     ErrorResponse error = 99;
   }
 
-  // Legacy tunnel control/frame payloads (pre-rewrite protocol).
-  reserved 67, 68, 69;
+  // Legacy tunnel control/frame payloads (pre-rewrite protocol) and the
+  // never-wired chat event replay response.
+  reserved 67, 68, 69, 78;
 }
 
 message ChatSelectedModel {
@@ -618,24 +618,17 @@ message RuntimeStatusEvent {
   bool visible = 3;
   uint32 active_run_count = 4;
   int64 timestamp = 5;
+  repeated ChatRunReport active_runs = 6;
+  repeated ChatRunReport finished_runs = 7;
 }
 
-message ChatEventReplayRequest {
+message ChatRunReport {
   string run_id = 1;
   string conversation_id = 2;
-  int64 after_seq = 3;
-}
-
-message ChatEventReplayResponse {
-  string run_id = 1;
-  string conversation_id = 2;
-  repeated ChatReplayEvent events = 3;
-  bool complete = 4;
-}
-
-message ChatReplayEvent {
-  int64 seq = 1;
-  string event_json = 2;
+  string state = 3;
+  string error_code = 4;
+  string message = 5;
+  int64 updated_at = 6;
 }
 
 message CronManageRequest {

@@ -33,6 +33,7 @@ use crate::runtime::terminal::{
     TerminalSessionRecord, TerminalSessionRegistry, TerminalShellOption, TerminalSnapshotResponse,
     TerminalSshCreateResponse, TerminalStreamEventPayload, TerminalStreamSnapshotResponse,
 };
+use crate::services::chat_run_ledger::{ChatRunLedger, ChatRunLedgerEntry, ChatRunLedgerState};
 use crate::services::cron::CronManager;
 use crate::services::gateway_bridge;
 use crate::services::memory::MemoryStore;
@@ -285,6 +286,7 @@ pub struct GatewayController {
     terminal_stream_tx: Mutex<Option<mpsc::Sender<proto::TerminalStreamFrame>>>,
     settings_snapshot: Mutex<Option<Value>>,
     remote_chat_inbox: Mutex<HashMap<String, RemoteChatInboxRecord>>,
+    chat_run_ledger: Mutex<ChatRunLedger>,
     pub(crate) tunnel_store: TunnelStore,
     pub(crate) tunnel_proxy: TunnelProxy,
     pending_chat_queue_requests: Mutex<HashMap<String, oneshot::Sender<proto::ChatQueueResponse>>>,
@@ -329,6 +331,7 @@ impl GatewayController {
             terminal_stream_tx: Mutex::new(None),
             settings_snapshot: Mutex::new(None),
             remote_chat_inbox: Mutex::new(HashMap::new()),
+            chat_run_ledger: Mutex::new(ChatRunLedger::new()),
             tunnel_store,
             tunnel_proxy: TunnelProxy::new(),
             pending_chat_queue_requests: Mutex::new(HashMap::new()),
@@ -414,6 +417,9 @@ impl GatewayController {
                     tokio::time::sleep(GATEWAY_CHAT_LEASE_SWEEP_INTERVAL).await;
                     if let Err(error) = controller.expire_remote_chat_leases().await {
                         eprintln!("expire gateway remote chat leases failed: {error}");
+                    }
+                    if let Err(error) = controller.flush_unsent_chat_run_terminals().await {
+                        eprintln!("flush gateway chat run terminals failed: {error}");
                     }
                 }
             });
@@ -526,11 +532,39 @@ impl GatewayController {
         event: Value,
         worker_id: Option<String>,
     ) -> Result<(), String> {
-        if !self.renew_remote_chat_request_lease(&request_id, worker_id.as_deref(), true)? {
+        // Terminal events must bypass the lease-freshness check: an expired but
+        // still-owned lease may no longer be "current", yet dropping the run's
+        // done/error signal here would leave the WebUI streaming forever.
+        let is_terminal = chat_event_is_terminal(&event);
+        if !self.renew_remote_chat_request_lease(&request_id, worker_id.as_deref(), !is_terminal)? {
             return Ok(());
         }
-        let envelope = build_chat_event_envelope(request_id, event)?;
-        self.send_agent_envelope(envelope).await
+        let conversation_id = chat_event_conversation_id(&event);
+        if is_terminal {
+            let state = if chat_event_type(&event) == Some("done") {
+                ChatRunLedgerState::Completed
+            } else {
+                ChatRunLedgerState::Failed
+            };
+            // Carry the error text into the ledger so a retransmitted terminal
+            // control event still surfaces it after the original send failed.
+            let message = event
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            // Record the terminal before attempting the send so a failed send
+            // is retransmitted by the ledger flush loop.
+            self.ledger_mark_run_terminal(&request_id, &conversation_id, state, "", message)?;
+        } else {
+            self.ledger_touch_run(&request_id, &conversation_id)?;
+        }
+        let envelope = build_chat_event_envelope(request_id.clone(), event)?;
+        let result = self.send_agent_envelope(envelope).await;
+        if is_terminal && result.is_ok() {
+            self.ledger_mark_run_terminal_sent(&request_id)?;
+        }
+        result
     }
 
     pub async fn publish_history_sync(&self, event: GatewayHistorySyncEvent) {
@@ -559,8 +593,31 @@ impl GatewayController {
         &self,
         snapshot: GatewayChatRuntimeSnapshot,
     ) -> Result<(), String> {
+        let run_id = snapshot.run_id.trim().to_string();
+        let conversation_id = snapshot.conversation_id.trim().to_string();
+        let terminal_state = match snapshot.state.trim() {
+            "completed" => Some(ChatRunLedgerState::Completed),
+            "failed" => Some(ChatRunLedgerState::Failed),
+            "cancelled" => Some(ChatRunLedgerState::Cancelled),
+            _ => None,
+        };
+        if !run_id.is_empty() {
+            match terminal_state {
+                Some(state) => {
+                    self.ledger_mark_run_terminal(&run_id, &conversation_id, state, "", "")?;
+                }
+                None if snapshot.state.trim() == "running" => {
+                    self.ledger_touch_run(&run_id, &conversation_id)?;
+                }
+                None => {}
+            }
+        }
         let envelope = build_chat_runtime_snapshot_envelope(snapshot)?;
-        self.send_agent_envelope(envelope).await
+        let result = self.send_agent_envelope(envelope).await;
+        if terminal_state.is_some() && !run_id.is_empty() && result.is_ok() {
+            self.ledger_mark_run_terminal_sent(&run_id)?;
+        }
+        result
     }
 
     pub async fn publish_settings_sync(&self, payload: Value) -> Result<(), String> {
@@ -719,6 +776,9 @@ impl GatewayController {
             }
             if let Err(error) = self.publish_desired_tunnels().await {
                 eprintln!("publish gateway tunnel desired state failed: {error}");
+            }
+            if let Err(error) = self.republish_chat_run_states().await {
+                eprintln!("republish gateway chat run states failed: {error}");
             }
             self.spawn_tunnel_probes(None, false);
 
@@ -981,21 +1041,6 @@ impl GatewayController {
             }
             Some(proto::gateway_envelope::Payload::ChatQueue(request)) => {
                 self.handle_chat_queue_request(request_id, request).await
-            }
-            Some(proto::gateway_envelope::Payload::ChatEventReplay(request)) => {
-                match self.handle_chat_event_replay(request).await {
-                    Ok(response) => {
-                        self.send_agent_envelope(proto::AgentEnvelope {
-                            request_id,
-                            timestamp: now_unix_seconds(),
-                            payload: Some(proto::agent_envelope::Payload::ChatEventReplayResp(
-                                response,
-                            )),
-                        })
-                        .await
-                    }
-                    Err(error) => self.send_error_response(request_id, 500, error).await,
-                }
             }
             Some(proto::gateway_envelope::Payload::CronManage(request)) => {
                 let should_refresh_settings =
@@ -2424,43 +2469,6 @@ impl GatewayController {
         Ok(snapshot)
     }
 
-    async fn handle_chat_event_replay(
-        &self,
-        request: proto::ChatEventReplayRequest,
-    ) -> Result<proto::ChatEventReplayResponse, String> {
-        let conversation_id = request.conversation_id.trim().to_string();
-        if conversation_id.is_empty() {
-            return Err("conversation_id is required".to_string());
-        }
-        let after_seq = request.after_seq;
-
-        let record = chat_history::chat_history_get(conversation_id.clone()).await?;
-        let mut events = Vec::new();
-        let mut seq: i64 = 0;
-
-        for segment in &record.segments {
-            let messages: Vec<Value> =
-                serde_json::from_str(&segment.messages_json).unwrap_or_default();
-            for message in messages {
-                seq += 1;
-                if seq <= after_seq {
-                    continue;
-                }
-                let event_json = serde_json::to_string(&message).unwrap_or_default();
-                if !event_json.is_empty() {
-                    events.push(proto::ChatReplayEvent { seq, event_json });
-                }
-            }
-        }
-
-        Ok(proto::ChatEventReplayResponse {
-            run_id: request.run_id,
-            conversation_id,
-            events,
-            complete: true,
-        })
-    }
-
     async fn handle_chat_command(
         self: &Arc<Self>,
         request_id: String,
@@ -3053,6 +3061,7 @@ impl GatewayController {
                 Some(now + Duration::from_millis(GATEWAY_CHAT_RUNNING_LEASE_MS));
             record.updated_at = now;
         }
+        self.ledger_mark_run_running(&request_id, &conversation_id)?;
         self.send_gateway_chat_control_event(request_id, conversation_id, "started")
             .await
     }
@@ -3067,6 +3076,7 @@ impl GatewayController {
         if request_id.is_empty() || conversation_id.is_empty() {
             return Ok(());
         }
+        self.ledger_mark_run_running(&request_id, &conversation_id)?;
         self.send_gateway_chat_control_event(request_id, conversation_id, "started")
             .await
     }
@@ -3136,8 +3146,18 @@ impl GatewayController {
         if !should_send {
             return Ok(());
         }
-        self.send_gateway_chat_control_event(request_id, conversation_id, "completed")
-            .await
+        // Ledger first: once the inbox record is gone this is the only place
+        // that still knows the run finished, and the send below can fail.
+        self.ledger_mark_run_terminal(
+            &request_id,
+            &conversation_id,
+            ChatRunLedgerState::Completed,
+            "",
+            "",
+        )?;
+        self.send_gateway_chat_control_event(request_id.clone(), conversation_id, "completed")
+            .await?;
+        self.ledger_mark_run_terminal_sent(&request_id)
     }
 
     pub async fn fail_chat_request(
@@ -3152,39 +3172,68 @@ impl GatewayController {
         let request_id = request_id.trim().to_string();
         let worker_id = worker_id.trim().to_string();
         let conversation_id = conversation_id.unwrap_or_default();
-        let should_send = {
+        // None: inbox record already gone; Some(true): accepted; Some(false): rejected.
+        let inbox_outcome = {
             let mut inbox = self
                 .remote_chat_inbox
                 .lock()
                 .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
-            let Some(record) = inbox.get_mut(&request_id) else {
-                return Ok(());
-            };
-            let queued_in_gui = terminal && record.state.trim() == "queued_in_gui";
-            if !queued_in_gui && !Self::remote_chat_record_is_owned_by_worker(record, &worker_id) {
-                return Ok(());
+            match inbox.get_mut(&request_id) {
+                None => None,
+                Some(record) => {
+                    let queued_in_gui = terminal && record.state.trim() == "queued_in_gui";
+                    if !queued_in_gui
+                        && !Self::remote_chat_record_is_owned_by_worker(record, &worker_id)
+                    {
+                        Some(false)
+                    } else {
+                        record.state = if terminal { "failed" } else { "queued" }.to_string();
+                        record.lease_owner = None;
+                        record.lease_expires_at = None;
+                        record.last_error = Some(message.clone());
+                        record.updated_at = Instant::now();
+                        if terminal {
+                            inbox.remove(&request_id);
+                        }
+                        Some(true)
+                    }
+                }
             }
-            record.state = if terminal { "failed" } else { "queued" }.to_string();
-            record.lease_owner = None;
-            record.lease_expires_at = None;
-            record.last_error = Some(message.clone());
-            record.updated_at = Instant::now();
-            if terminal {
-                inbox.remove(&request_id);
-            }
-            true
         };
-        if !should_send {
-            return Ok(());
+        match inbox_outcome {
+            Some(false) => return Ok(()),
+            Some(true) => {}
+            None => {
+                // The inbox record can be gone while the run is still live in
+                // the ledger (e.g. a complete/fail race removed it). Dropping
+                // this terminal would strand the WebUI, so repair via the
+                // ledger instead of returning silently.
+                if !terminal || !self.ledger_has_live_run(&request_id)? {
+                    return Ok(());
+                }
+            }
+        }
+        if terminal {
+            self.ledger_mark_run_terminal(
+                &request_id,
+                &conversation_id,
+                ChatRunLedgerState::Failed,
+                &error_code,
+                &message,
+            )?;
         }
         self.send_gateway_chat_control_event_with_details(
-            request_id,
+            request_id.clone(),
             conversation_id,
             "failed",
             error_code,
             message,
         )
-        .await
+        .await?;
+        if terminal {
+            self.ledger_mark_run_terminal_sent(&request_id)?;
+        }
+        Ok(())
     }
 
     pub async fn cancel_chat_request(
@@ -3214,8 +3263,21 @@ impl GatewayController {
         if !should_send {
             return Ok(());
         }
-        self.send_gateway_chat_control_event(request_id, conversation_id, "cancelled")
-            .await
+        // This "cancelled" is a genuine run terminal, not a cancel-request ack:
+        // the inbox record is removed above so no other terminal will ever be
+        // produced for this request (callers use it to drop queued turns that
+        // never start; running runs terminate via done/error/fail instead).
+        // First-terminal-wins keeps this from clobbering an earlier outcome.
+        self.ledger_mark_run_terminal(
+            &request_id,
+            &conversation_id,
+            ChatRunLedgerState::Cancelled,
+            "",
+            "",
+        )?;
+        self.send_gateway_chat_control_event(request_id.clone(), conversation_id, "cancelled")
+            .await?;
+        self.ledger_mark_run_terminal_sent(&request_id)
     }
 
     pub fn heartbeat_chat_request(
@@ -3228,18 +3290,21 @@ impl GatewayController {
         if request_id.is_empty() || worker_id.is_empty() {
             return Ok(());
         }
-        let mut inbox = self
-            .remote_chat_inbox
-            .lock()
-            .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
-        if let Some(record) = inbox.get_mut(request_id) {
-            if record.lease_owner.as_deref() == Some(worker_id) {
-                let lease_ms = Self::remote_chat_record_lease_ms(record);
-                record.lease_expires_at = Some(Instant::now() + Duration::from_millis(lease_ms));
-                record.updated_at = Instant::now();
+        {
+            let mut inbox = self
+                .remote_chat_inbox
+                .lock()
+                .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+            if let Some(record) = inbox.get_mut(request_id) {
+                if record.lease_owner.as_deref() == Some(worker_id) {
+                    let lease_ms = Self::remote_chat_record_lease_ms(record);
+                    record.lease_expires_at =
+                        Some(Instant::now() + Duration::from_millis(lease_ms));
+                    record.updated_at = Instant::now();
+                }
             }
         }
-        Ok(())
+        self.ledger_touch_run(request_id, "")
     }
 
     pub async fn publish_chat_runtime_status(
@@ -3260,8 +3325,30 @@ impl GatewayController {
             _ => "ready",
         }
         .to_string();
-        let envelope =
-            build_gateway_runtime_status_envelope(worker_id, state, visible, active_run_count);
+        let (active_reports, finished_reports) = {
+            let (now, _now_ms) = chat_run_ledger_now();
+            let ledger = self
+                .chat_run_ledger
+                .lock()
+                .map_err(|_| "gateway chat run ledger lock poisoned".to_string())?;
+            (ledger.active_reports(now), ledger.recent_terminal_reports())
+        };
+        let active_run_count =
+            active_run_count.max(u32::try_from(active_reports.len()).unwrap_or(u32::MAX));
+        let envelope = build_gateway_runtime_status_envelope(
+            worker_id,
+            state,
+            visible,
+            active_run_count,
+            active_reports
+                .iter()
+                .map(chat_run_report_from_entry)
+                .collect(),
+            finished_reports
+                .iter()
+                .map(chat_run_report_from_entry)
+                .collect(),
+        );
         match self.send_agent_envelope(envelope).await {
             Ok(()) => Ok(()),
             Err(error) if error.contains("outbound stream is offline") => Ok(()),
@@ -3332,14 +3419,190 @@ impl GatewayController {
             );
         }
         for (request_id, conversation_id) in failed {
-            self.send_gateway_chat_control_event_with_details(
-                request_id,
+            self.ledger_mark_run_terminal(
+                &request_id,
+                &conversation_id,
+                ChatRunLedgerState::Failed,
+                "desktop_runtime_lease_expired",
+                "Desktop chat runtime stopped before completing the remote request.",
+            )?;
+            // One failed send must not abort the remaining terminals; the
+            // ledger flush loop retries anything that stays unsent.
+            match self
+                .send_gateway_chat_control_event_with_details(
+                    request_id.clone(),
+                    conversation_id,
+                    "failed",
+                    "desktop_runtime_lease_expired".to_string(),
+                    "Desktop chat runtime stopped before completing the remote request."
+                        .to_string(),
+                )
+                .await
+            {
+                Ok(()) => self.ledger_mark_run_terminal_sent(&request_id)?,
+                Err(error) => {
+                    eprintln!("send gateway chat lease-expired terminal failed: {error}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn with_chat_run_ledger<T>(
+        &self,
+        f: impl FnOnce(&mut ChatRunLedger) -> T,
+    ) -> Result<T, String> {
+        let mut ledger = self
+            .chat_run_ledger
+            .lock()
+            .map_err(|_| "gateway chat run ledger lock poisoned".to_string())?;
+        Ok(f(&mut ledger))
+    }
+
+    fn ledger_mark_run_running(&self, run_id: &str, conversation_id: &str) -> Result<(), String> {
+        let (now, now_ms) = chat_run_ledger_now();
+        self.with_chat_run_ledger(|ledger| {
+            ledger.mark_running(run_id, conversation_id, now, now_ms);
+        })
+    }
+
+    fn ledger_touch_run(&self, run_id: &str, conversation_id: &str) -> Result<(), String> {
+        let (now, now_ms) = chat_run_ledger_now();
+        self.with_chat_run_ledger(|ledger| ledger.touch(run_id, conversation_id, now, now_ms))
+    }
+
+    fn ledger_mark_run_terminal(
+        &self,
+        run_id: &str,
+        conversation_id: &str,
+        state: ChatRunLedgerState,
+        error_code: &str,
+        message: &str,
+    ) -> Result<bool, String> {
+        let (now, now_ms) = chat_run_ledger_now();
+        self.with_chat_run_ledger(|ledger| {
+            ledger.mark_terminal(
+                run_id,
                 conversation_id,
-                "failed",
-                "desktop_runtime_lease_expired".to_string(),
-                "Desktop chat runtime stopped before completing the remote request.".to_string(),
+                state,
+                error_code,
+                message,
+                now,
+                now_ms,
             )
-            .await?;
+        })
+    }
+
+    fn ledger_mark_run_terminal_sent(&self, run_id: &str) -> Result<(), String> {
+        self.with_chat_run_ledger(|ledger| ledger.mark_terminal_sent(run_id))
+    }
+
+    fn ledger_has_live_run(&self, run_id: &str) -> Result<bool, String> {
+        self.with_chat_run_ledger(|ledger| {
+            ledger
+                .get(run_id)
+                .map(|entry| !entry.state.is_terminal())
+                .unwrap_or(false)
+        })
+    }
+
+    async fn flush_unsent_chat_run_terminals(&self) -> Result<(), String> {
+        if !self.status().online {
+            return Ok(());
+        }
+        let unsent = {
+            let (now, now_ms) = chat_run_ledger_now();
+            let mut ledger = self
+                .chat_run_ledger
+                .lock()
+                .map_err(|_| "gateway chat run ledger lock poisoned".to_string())?;
+            // Sweep first: runs demoted by the TTL become unsent terminals and
+            // are picked up by this very flush.
+            ledger.sweep(now, now_ms);
+            ledger.unsent_terminals()
+        };
+        for entry in unsent {
+            // The gateway cannot anchor a control event without a conversation
+            // (it drops them at ingress); such entries only age out.
+            if entry.conversation_id.is_empty() {
+                continue;
+            }
+            match self
+                .send_gateway_chat_control_event_with_details(
+                    entry.run_id.clone(),
+                    entry.conversation_id.clone(),
+                    entry.state.as_str(),
+                    entry.error_code.clone(),
+                    entry.message.clone(),
+                )
+                .await
+            {
+                Ok(()) => self.ledger_mark_run_terminal_sent(&entry.run_id)?,
+                Err(error) => {
+                    eprintln!(
+                        "flush gateway chat run terminal {} failed: {error}",
+                        entry.run_id
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn republish_chat_run_states(&self) -> Result<(), String> {
+        let (active, recent_terminals) = {
+            let (now, _now_ms) = chat_run_ledger_now();
+            let ledger = self
+                .chat_run_ledger
+                .lock()
+                .map_err(|_| "gateway chat run ledger lock poisoned".to_string())?;
+            (ledger.active_reports(now), ledger.recent_terminal_reports())
+        };
+        for entry in active {
+            if entry.conversation_id.is_empty() {
+                continue;
+            }
+            // "started" is idempotent on the gateway; replaying it re-anchors
+            // runs the gateway may have lost across a restart.
+            if let Err(error) = self
+                .send_gateway_chat_control_event(
+                    entry.run_id.clone(),
+                    entry.conversation_id.clone(),
+                    "started",
+                )
+                .await
+            {
+                eprintln!(
+                    "republish gateway chat run {} failed: {error}",
+                    entry.run_id
+                );
+            }
+        }
+        // Replay all recent terminals, sent or not: a gateway restart can lose
+        // them, and the control events are idempotent server-side. Unsent
+        // terminals older than the recent window are covered by the periodic
+        // flush a few seconds later.
+        for entry in recent_terminals {
+            if entry.conversation_id.is_empty() {
+                continue;
+            }
+            if let Err(error) = self
+                .send_gateway_chat_control_event_with_details(
+                    entry.run_id.clone(),
+                    entry.conversation_id.clone(),
+                    entry.state.as_str(),
+                    entry.error_code.clone(),
+                    entry.message.clone(),
+                )
+                .await
+            {
+                eprintln!(
+                    "republish gateway chat run terminal {} failed: {error}",
+                    entry.run_id
+                );
+            } else {
+                self.ledger_mark_run_terminal_sent(&entry.run_id)?;
+            }
         }
         Ok(())
     }
@@ -4130,7 +4393,8 @@ fn serialize_settings_sync_payload(payload: &Value) -> Result<String, String> {
 mod tests {
     use super::{
         build_chat_event_envelope, build_chat_runtime_snapshot_envelope, build_endpoint,
-        build_grpc_url, build_local_settings_update_event_payload,
+        build_gateway_runtime_status_envelope, build_grpc_url,
+        build_local_settings_update_event_payload, chat_event_is_terminal,
         format_gateway_terminal_stream_rpc_error, history_share_resolve_error_code,
         merge_settings_sync_snapshot, proto, queue_terminal_stream_handshake_frame,
         required_terminal_project_path_key, set_disconnected_status, GatewayChatRequestEvent,
@@ -4807,6 +5071,89 @@ mod tests {
         assert_eq!(data["uploaded_files"][0]["kind"], "text");
         assert_eq!(data["execution_mode"], "agent");
     }
+
+    #[test]
+    fn chat_event_terminal_detection_covers_done_and_error_only() {
+        assert!(chat_event_is_terminal(&json!({ "type": "done" })));
+        assert!(chat_event_is_terminal(
+            &json!({ "type": "error", "message": "boom" })
+        ));
+        assert!(chat_event_is_terminal(&json!({ "type": " done " })));
+        assert!(!chat_event_is_terminal(
+            &json!({ "type": "token", "text": "hi" })
+        ));
+        assert!(!chat_event_is_terminal(&json!({ "type": "tool_call" })));
+        assert!(!chat_event_is_terminal(&json!({ "kind": "done" })));
+        assert!(!chat_event_is_terminal(&json!("done")));
+    }
+
+    #[test]
+    fn runtime_status_envelope_carries_run_reports() {
+        let active_run = proto::ChatRunReport {
+            run_id: "run-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
+            state: "running".to_string(),
+            error_code: String::new(),
+            message: String::new(),
+            updated_at: 1_772_000_000_000,
+        };
+        let finished_run = proto::ChatRunReport {
+            run_id: "run-2".to_string(),
+            conversation_id: "conversation-2".to_string(),
+            state: "failed".to_string(),
+            error_code: "desktop_run_lost".to_string(),
+            message: "The desktop runtime stopped reporting this run.".to_string(),
+            updated_at: 1_772_000_000_500,
+        };
+
+        let envelope = build_gateway_runtime_status_envelope(
+            "worker-1".to_string(),
+            "busy".to_string(),
+            true,
+            2,
+            vec![active_run],
+            vec![finished_run],
+        );
+
+        let status = match envelope.payload.expect("payload") {
+            super::proto::agent_envelope::Payload::RuntimeStatus(status) => status,
+            _ => panic!("expected runtime status payload"),
+        };
+        assert_eq!(status.worker_id, "worker-1");
+        assert_eq!(status.state, "busy");
+        assert!(status.visible);
+        assert_eq!(status.active_run_count, 2);
+        assert_eq!(status.active_runs.len(), 1);
+        assert_eq!(status.active_runs[0].run_id, "run-1");
+        assert_eq!(status.active_runs[0].state, "running");
+        assert_eq!(status.active_runs[0].updated_at, 1_772_000_000_000);
+        assert_eq!(status.finished_runs.len(), 1);
+        assert_eq!(status.finished_runs[0].run_id, "run-2");
+        assert_eq!(status.finished_runs[0].state, "failed");
+        assert_eq!(status.finished_runs[0].error_code, "desktop_run_lost");
+        assert_eq!(
+            status.finished_runs[0].message,
+            "The desktop runtime stopped reporting this run."
+        );
+    }
+}
+
+fn chat_event_type(event: &Value) -> Option<&str> {
+    event.get("type").and_then(Value::as_str).map(str::trim)
+}
+
+fn chat_event_is_terminal(event: &Value) -> bool {
+    matches!(chat_event_type(event), Some("done") | Some("error"))
+}
+
+fn chat_event_conversation_id(event: &Value) -> String {
+    event
+        .as_object()
+        .and_then(|object| {
+            optional_string_field(object, "conversation_id")
+                .or_else(|| optional_string_field(object, "conversationId"))
+        })
+        .unwrap_or_default()
 }
 
 fn build_chat_event_envelope(
@@ -4988,6 +5335,8 @@ fn build_gateway_runtime_status_envelope(
     state: String,
     visible: bool,
     active_run_count: u32,
+    active_runs: Vec<proto::ChatRunReport>,
+    finished_runs: Vec<proto::ChatRunReport>,
 ) -> proto::AgentEnvelope {
     proto::AgentEnvelope {
         request_id: format!("runtime-status-{}", worker_id.trim()),
@@ -4999,8 +5348,21 @@ fn build_gateway_runtime_status_envelope(
                 visible,
                 active_run_count,
                 timestamp: now_unix_seconds(),
+                active_runs,
+                finished_runs,
             },
         )),
+    }
+}
+
+fn chat_run_report_from_entry(entry: &ChatRunLedgerEntry) -> proto::ChatRunReport {
+    proto::ChatRunReport {
+        run_id: entry.run_id.clone(),
+        conversation_id: entry.conversation_id.clone(),
+        state: entry.state.as_str().to_string(),
+        error_code: entry.error_code.clone(),
+        message: entry.message.clone(),
+        updated_at: entry.updated_at_ms,
     }
 }
 
@@ -5251,6 +5613,17 @@ pub(crate) fn now_unix_seconds() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0));
     i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+}
+
+pub(crate) fn now_unix_millis() -> i64 {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0));
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+}
+
+fn chat_run_ledger_now() -> (Instant, i64) {
+    (Instant::now(), now_unix_millis())
 }
 
 fn string_field(object: &serde_json::Map<String, Value>, key: &str) -> Result<String, String> {

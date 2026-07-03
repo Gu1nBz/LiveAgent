@@ -612,7 +612,7 @@ func TestSubscriberOverflowClosesAndResumes(t *testing.T) {
 	}
 }
 
-func TestReaperSparesSilentRunsWhileRuntimeReportsBusy(t *testing.T) {
+func TestReaperSparesSilentRunsWhileReportsVouch(t *testing.T) {
 	m := NewManager()
 	m.convStreams.staleRunTimeout = 10 * time.Millisecond
 	m.SetSession(&AgentSession{
@@ -624,19 +624,23 @@ func TestReaperSparesSilentRunsWhileRuntimeReportsBusy(t *testing.T) {
 	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
 	time.Sleep(20 * time.Millisecond)
 
-	// A silent long tool call: no events, but the runtime heartbeat says busy.
-	m.convStreams.onRuntimeStatus(1, time.Now())
+	// A silent long tool call: no events, but the run report vouches for it.
+	m.convStreams.onRuntimeStatus(&gatewayv1.RuntimeStatusEvent{
+		ActiveRuns: []*gatewayv1.ChatRunReport{
+			{RunId: "run-1", ConversationId: "conv-1", State: "running"},
+		},
+	}, time.Now())
 	m.convStreams.reap(time.Now())
 	if activities := m.ActiveConversationActivities(); len(activities) != 1 {
-		t.Fatalf("busy runtime must spare the silent run, activities=%d", len(activities))
+		t.Fatalf("vouched silent run must be spared, activities=%d", len(activities))
 	}
 
-	// Once the runtime stops vouching for it, the run is reaped after the
+	// Once the reports stop vouching for it, the run is reaped after the
 	// timeout elapses again.
 	time.Sleep(20 * time.Millisecond)
 	m.convStreams.reap(time.Now())
 	if activities := m.ActiveConversationActivities(); len(activities) != 0 {
-		t.Fatalf("stale run must be reaped once the runtime goes idle, activities=%d", len(activities))
+		t.Fatalf("stale run must be reaped once vouching stops, activities=%d", len(activities))
 	}
 }
 

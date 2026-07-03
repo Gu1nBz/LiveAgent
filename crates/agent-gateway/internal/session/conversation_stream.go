@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 )
 
 // The conversation stream store is the authoritative relay state for chat:
@@ -29,10 +30,14 @@ const (
 	conversationMaxEventBytes     = 8 << 20
 	conversationIdleRetention     = 30 * time.Minute
 	conversationStaleRunTimeout   = 10 * time.Minute
+	conversationOfflineRunTimeout = 30 * time.Minute
 	conversationReaperInterval    = time.Minute
 	conversationFinishedRunMemory = 8
 	conversationSubscriberBuffer  = 256
 	pendingChatRunRetention       = 5 * time.Minute
+	// conversationRunReportLostTimeout is the grace window before a run absent
+	// from the desktop's run reports is finalized as lost.
+	conversationRunReportLostTimeout = 15 * time.Second
 )
 
 const (
@@ -194,36 +199,36 @@ type conversationStreamStore struct {
 
 	activityHub *chatActivityHub
 
-	// lastRuntimeBusyAt is the last time the agent reported a non-zero
-	// active-run count; while it stays fresh, silent runs are never reaped.
-	lastRuntimeBusyAt time.Time
-
 	reaperOnce sync.Once
 	isOnline   func() bool
 
 	// tunable in tests
-	eventRetention  time.Duration
-	maxEvents       int
-	maxEventBytes   int
-	idleRetention   time.Duration
-	staleRunTimeout time.Duration
-	reaperInterval  time.Duration
+	eventRetention       time.Duration
+	maxEvents            int
+	maxEventBytes        int
+	idleRetention        time.Duration
+	staleRunTimeout      time.Duration
+	offlineRunTimeout    time.Duration
+	runReportLostTimeout time.Duration
+	reaperInterval       time.Duration
 }
 
 func newConversationStreamStore(isOnline func() bool) *conversationStreamStore {
 	return &conversationStreamStore{
-		streams:          make(map[string]*conversationStream),
-		pendingRuns:      make(map[string]*pendingChatRun),
-		runs:             make(map[string]*chatRunRecord),
-		commandWatchers:  make(map[string][]chan ChatCommandUpdate),
-		activityHub:     newChatActivityHub(),
-		isOnline:        isOnline,
-		eventRetention:  conversationEventRetention,
-		maxEvents:       conversationMaxEvents,
-		maxEventBytes:   conversationMaxEventBytes,
-		idleRetention:   conversationIdleRetention,
-		staleRunTimeout: conversationStaleRunTimeout,
-		reaperInterval:  conversationReaperInterval,
+		streams:              make(map[string]*conversationStream),
+		pendingRuns:          make(map[string]*pendingChatRun),
+		runs:                 make(map[string]*chatRunRecord),
+		commandWatchers:      make(map[string][]chan ChatCommandUpdate),
+		activityHub:          newChatActivityHub(),
+		isOnline:             isOnline,
+		eventRetention:       conversationEventRetention,
+		maxEvents:            conversationMaxEvents,
+		maxEventBytes:        conversationMaxEventBytes,
+		idleRetention:        conversationIdleRetention,
+		staleRunTimeout:      conversationStaleRunTimeout,
+		offlineRunTimeout:    conversationOfflineRunTimeout,
+		runReportLostTimeout: conversationRunReportLostTimeout,
+		reaperInterval:       conversationReaperInterval,
 	}
 }
 
@@ -980,14 +985,61 @@ func (m *Manager) ForceFinishRun(runID string, status string, errorCode string, 
 
 // --- maintenance -----------------------------------------------------------
 
-// onRuntimeStatus feeds the agent's reported active-run count into staleness
-// tracking: while the runtime keeps reporting busy, silent runs (a long tool
-// call producing no events) must never be reaped.
-func (s *conversationStreamStore) onRuntimeStatus(activeRunCount uint32, now time.Time) {
+// onRuntimeStatus reconciles the desktop's run ledger with tracked
+// activities: active reports vouch per run, finished reports adopt terminal
+// signals the gateway missed, and a run absent from both is finalized once
+// nothing has vouched for it within the grace window. Every vouch bumps
+// activity.UpdatedAt, so its staleness measures continuous absence.
+func (s *conversationStreamStore) onRuntimeStatus(event *gatewayv1.RuntimeStatusEvent, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if activeRunCount > 0 {
-		s.lastRuntimeBusyAt = now
+
+	activeSet := make(map[string]bool, len(event.GetActiveRuns()))
+	for _, report := range event.GetActiveRuns() {
+		activeSet[report.GetRunId()] = true
+	}
+	finished := make(map[string]*gatewayv1.ChatRunReport, len(event.GetFinishedRuns()))
+	for _, report := range event.GetFinishedRuns() {
+		finished[report.GetRunId()] = report
+	}
+
+	// Reconcile only tracked activities; finished reports never resurrect a
+	// stream for a run this store is not tracking.
+	for _, stream := range s.streams {
+		if stream.activity == nil {
+			continue
+		}
+		runID := stream.activity.RunID
+		if stream.activity.State == RunActivityQueued {
+			// The accepted-command startup watchdog owns the queued phase;
+			// the desktop may not know the run yet.
+			continue
+		}
+		if activeSet[runID] {
+			stream.activity.UpdatedAt = now
+			continue
+		}
+		if report, ok := finished[runID]; ok {
+			state := report.GetState()
+			errorCode := report.GetErrorCode()
+			switch state {
+			case "completed", "failed", "cancelled":
+			default:
+				state = "failed"
+				errorCode = "desktop_run_lost"
+			}
+			s.runFinishedLocked(stream, runID, state, errorCode, report.GetMessage(),
+				map[string]any{"reason": "desktop_reported"}, now)
+			continue
+		}
+		// Stream events vouch too: never finalize a run whose events are still
+		// flowing through the relay (mirrors the reaper's lastAlive logic).
+		eventsQuiet := stream.lastEventAt.IsZero() ||
+			now.Sub(stream.lastEventAt) >= s.runReportLostTimeout
+		if eventsQuiet && now.Sub(stream.activity.UpdatedAt) >= s.runReportLostTimeout {
+			s.runFinishedLocked(stream, runID, "failed", "desktop_run_lost",
+				"The desktop runtime stopped reporting this run.", nil, now)
+		}
 	}
 }
 
@@ -1016,21 +1068,22 @@ func (s *conversationStreamStore) reap(now time.Time) {
 	for conversationID, stream := range s.streams {
 		s.evictStreamLocked(stream, now)
 
-		if stream.activity != nil && online {
+		if stream.activity != nil {
 			// A run is stale only when NOTHING vouches for it: no stream
-			// events, no runtime-busy heartbeat, and no activity transition
-			// within the timeout. A silent long tool call keeps the runtime
-			// busy heartbeat fresh and is never reaped.
+			// events and no activity transition/report-vouch within the
+			// timeout (onRuntimeStatus bumps UpdatedAt for reported runs).
 			lastAlive := stream.lastEventAt
-			if s.lastRuntimeBusyAt.After(lastAlive) {
-				lastAlive = s.lastRuntimeBusyAt
-			}
 			if stream.activity.UpdatedAt.After(lastAlive) {
 				lastAlive = stream.activity.UpdatedAt
 			}
-			if !lastAlive.IsZero() && now.Sub(lastAlive) > s.staleRunTimeout {
-				s.runFinishedLocked(stream, stream.activity.RunID, "failed", "stale_run",
-					"The desktop runtime stopped reporting this run.", nil, now)
+			if online {
+				if !lastAlive.IsZero() && now.Sub(lastAlive) > s.staleRunTimeout {
+					s.runFinishedLocked(stream, stream.activity.RunID, "failed", "stale_run",
+						"The desktop runtime stopped reporting this run.", nil, now)
+				}
+			} else if !lastAlive.IsZero() && now.Sub(lastAlive) > s.offlineRunTimeout {
+				s.runFinishedLocked(stream, stream.activity.RunID, "failed", "agent_offline",
+					"The desktop agent went offline during this run.", nil, now)
 			}
 		}
 
