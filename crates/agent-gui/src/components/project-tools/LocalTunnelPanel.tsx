@@ -211,6 +211,11 @@ function normalizeProjectPathKey(value: string | undefined) {
   return workspaceProjectPathKey(value ?? "");
 }
 
+function projectNameFromPathKey(pathKey: string) {
+  const segments = pathKey.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? "";
+}
+
 export function LocalTunnelPanel({
   client,
   enabled,
@@ -1040,13 +1045,19 @@ export function LocalTunnelPanel({
                               </span>
                             </span>
                             {scope === "global" ? (
-                              <span className="shrink-0 rounded-full bg-muted/80 px-1.5 py-px text-[10px]">
-                                {t(
-                                  tunnelProjectPathKey
-                                    ? "projectTools.tunnelScopeProjectBadge"
-                                    : "projectTools.tunnelScopeGlobalBadge",
-                                )}
-                              </span>
+                              tunnelProjectPathKey ? (
+                                <span
+                                  title={tunnelProjectPathKey}
+                                  className="min-w-0 max-w-[120px] truncate rounded-full bg-muted/80 px-1.5 py-px text-[10px]"
+                                >
+                                  {projectNameFromPathKey(tunnelProjectPathKey) ||
+                                    t("projectTools.tunnelScopeProjectBadge")}
+                                </span>
+                              ) : (
+                                <span className="shrink-0 rounded-full bg-muted/80 px-1.5 py-px text-[10px]">
+                                  {t("projectTools.tunnelScopeGlobalBadge")}
+                                </span>
+                              )
                             ) : null}
                           </div>
                           <div className="flex shrink-0 items-center gap-0.5">
