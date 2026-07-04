@@ -41,6 +41,7 @@ type RightDockPanelProps = {
   projectPathKey: string;
   cwd: string;
   sessions?: TerminalSession[];
+  sessionsLoaded?: boolean;
   width: number;
   theme: "light" | "dark";
   disabledMessage?: string;
@@ -311,6 +312,7 @@ export function RightDockPanel(props: RightDockPanelProps) {
     projectPathKey,
     cwd,
     sessions: externalSessions,
+    sessionsLoaded: externalSessionsLoaded,
     width,
     theme,
     disabledMessage,
@@ -361,7 +363,7 @@ export function RightDockPanel(props: RightDockPanelProps) {
     activeSession,
     clearPendingCloseSession,
     closeSession,
-    closingSessionId,
+    closingSessionIds,
     createTerminal,
     creating,
     error,
@@ -375,6 +377,7 @@ export function RightDockPanel(props: RightDockPanelProps) {
     pendingCloseSessionId,
     reconcileSshSessions,
     rememberTerminalSnapshot,
+    sessionsLoaded,
     setError,
     shellOptions,
     sshSessions,
@@ -382,6 +385,7 @@ export function RightDockPanel(props: RightDockPanelProps) {
     client,
     cwd,
     externalSessions,
+    externalSessionsLoaded,
     isOpen,
     onProjectStateChange,
     onSessionsChange,
@@ -409,6 +413,7 @@ export function RightDockPanel(props: RightDockPanelProps) {
     onProjectStateChange,
     projectPathKey,
     projectState,
+    sessionsLoaded,
     tunnelAvailable,
   });
 
@@ -540,7 +545,7 @@ export function RightDockPanel(props: RightDockPanelProps) {
                     currentActiveTab={currentActiveTab}
                     activeSession={activeSession}
                     pendingCloseSessionId={pendingCloseSessionId}
-                    closingSessionId={closingSessionId}
+                    closingSessionIds={closingSessionIds}
                     draggingTabId={draggingTabId}
                     renderTabDragHandle={renderTabDragHandle}
                     consumeSuppressedTabClick={consumeSuppressedTabClick}
@@ -602,7 +607,7 @@ export function RightDockPanel(props: RightDockPanelProps) {
                   variant="destructive"
                   size="sm"
                   className="h-7 shrink-0 px-2.5 text-xs"
-                  disabled={closingSessionId === pendingCloseSession.id}
+                  disabled={closingSessionIds.has(pendingCloseSession.id)}
                   onClick={() => closeSession(pendingCloseSession)}
                 >
                   {t("projectTools.close")}

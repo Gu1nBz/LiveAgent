@@ -127,24 +127,29 @@ export type ChatSidebarSettings = {
   recentCollapsed: boolean;
 };
 
-export type RightDockTabKind = "terminal" | "fileTree" | "gitReview" | "tunnel" | "sshTunnel";
+export const RIGHT_DOCK_TOOL_KINDS = ["fileTree", "gitReview", "tunnel", "sshTunnel"] as const;
 
-export type RightDockTabInstance = {
-  id: string;
-  kind: RightDockTabKind;
-  projectPathKey: string;
-  title?: string;
-  createdAt: number;
-  params?: Record<string, unknown>;
+export type RightDockToolKind = (typeof RIGHT_DOCK_TOOL_KINDS)[number];
+
+export type RightDockTabKind = RightDockToolKind | "terminal";
+
+export type RightDockToolTab = {
+  openedAt: number;
   uiState?: Record<string, unknown>;
 };
 
+// Persisted dock state is user intent only: terminal tab existence is derived
+// from live sessions at render time, so tabOrder may contain session ids that
+// are dead or not yet loaded — they are preserved here and lazily collected on
+// user gestures once the session list is known.
 export type RightDockProjectState = {
   activeTabId?: string;
   tabOrder: string[];
-  tabs: Record<string, RightDockTabInstance>;
+  tools: Partial<Record<RightDockToolKind, RightDockToolTab>>;
   openVersion: number;
   stateVersion: number;
+  writerId: string;
+  lastUsedAt: number;
 };
 
 export type RightDockSettings = {
@@ -1713,7 +1718,20 @@ export const RIGHT_DOCK_SINGLETON_TAB_IDS = {
   gitReview: "tool:gitReview",
   tunnel: "tool:tunnel",
   sshTunnel: "tool:sshTunnel",
-} as const satisfies Record<Exclude<RightDockTabKind, "terminal">, string>;
+} as const satisfies Record<RightDockToolKind, string>;
+
+const RIGHT_DOCK_TOOL_KIND_BY_TAB_ID = new Map<string, RightDockToolKind>(
+  RIGHT_DOCK_TOOL_KINDS.map((kind) => [RIGHT_DOCK_SINGLETON_TAB_IDS[kind], kind]),
+);
+
+export function rightDockToolKindForTabId(tabId: string): RightDockToolKind | undefined {
+  return RIGHT_DOCK_TOOL_KIND_BY_TAB_ID.get(tabId);
+}
+
+// Empty buckets whose tools were closed act as tombstones so a stale snapshot
+// cannot resurrect them through merge; they expire after this window.
+const RIGHT_DOCK_TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const MAX_RIGHT_DOCK_PROJECTS = 100;
 
 export const DEFAULT_RIGHT_DOCK_FILE_TREE_STATE: RightDockFileTreeState = {
   query: "",
@@ -1765,16 +1783,6 @@ export function normalizeRightDockTabOrder(input: unknown): string[] {
   return order;
 }
 
-function isRightDockTabKind(input: unknown): input is RightDockTabKind {
-  return (
-    input === "terminal" ||
-    input === "fileTree" ||
-    input === "gitReview" ||
-    input === "tunnel" ||
-    input === "sshTunnel"
-  );
-}
-
 function normalizeRightDockRecord(input: unknown): Record<string, unknown> | undefined {
   if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
   const output: Record<string, unknown> = {};
@@ -1795,59 +1803,61 @@ function normalizeRightDockRecord(input: unknown): Record<string, unknown> | und
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
-function normalizeRightDockTabInstance(input: unknown, projectPathKey: string) {
-  const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
-  const id = typeof obj.id === "string" ? obj.id.trim() : "";
-  if (!id || id.length > 160) return null;
-  if (!isRightDockTabKind(obj.kind)) return null;
-  const normalizedProjectPathKey = workspaceProjectPathKey(obj.projectPathKey) || projectPathKey;
-  if (normalizedProjectPathKey !== projectPathKey) return null;
-  const params = normalizeRightDockRecord(obj.params);
-  const uiState =
-    obj.kind === "fileTree"
-      ? normalizeRightDockFileTreeState(obj.uiState)
-      : normalizeRightDockRecord(obj.uiState);
-  return {
-    id,
-    kind: obj.kind,
-    projectPathKey,
-    ...(typeof obj.title === "string" && obj.title.trim()
-      ? { title: obj.title.trim().slice(0, 120) }
-      : {}),
-    createdAt: normalizeIntegerInRange(obj.createdAt, 0, Number.MAX_SAFE_INTEGER, Date.now()),
-    ...(params ? { params } : {}),
-    ...(uiState ? { uiState } : {}),
-  } satisfies RightDockTabInstance;
+function normalizeRightDockToolUiState(
+  kind: RightDockToolKind,
+  input: unknown,
+): Record<string, unknown> | undefined {
+  if (kind === "fileTree") {
+    return normalizeRightDockFileTreeState(input);
+  }
+  return normalizeRightDockRecord(input);
 }
 
-export function normalizeRightDockProjectState(
-  input: unknown,
-  projectPathKey: string,
-): RightDockProjectState {
+function normalizeRightDockToolTab(kind: RightDockToolKind, input: unknown): RightDockToolTab {
   const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
-  const normalizedProjectPathKey = workspaceProjectPathKey(projectPathKey);
-  const rawTabs = (
+  const uiState = normalizeRightDockToolUiState(kind, obj.uiState);
+  return {
+    openedAt: normalizeIntegerInRange(obj.openedAt, 0, Number.MAX_SAFE_INTEGER, Date.now()),
+    ...(uiState ? { uiState } : {}),
+  };
+}
+
+// Accepts both the current shape ({ tools }) and the legacy persisted shape
+// ({ tabs } keyed by tab id, including now-derived terminal entries which are
+// dropped). tabOrder keeps unknown ids: they are terminal session ids.
+export function normalizeRightDockProjectState(input: unknown): RightDockProjectState {
+  const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const rawTools = (
+    obj.tools && typeof obj.tools === "object" && !Array.isArray(obj.tools) ? obj.tools : {}
+  ) as Record<string, unknown>;
+  const legacyTabs = (
     obj.tabs && typeof obj.tabs === "object" && !Array.isArray(obj.tabs) ? obj.tabs : {}
   ) as Record<string, unknown>;
-  const tabs: Record<string, RightDockTabInstance> = {};
-  for (const [rawId, rawTab] of Object.entries(rawTabs)) {
-    const tab = normalizeRightDockTabInstance(rawTab, normalizedProjectPathKey);
-    if (!tab || tab.id !== rawId) continue;
-    tabs[tab.id] = tab;
-    if (Object.keys(tabs).length >= 128) break;
+  const tools: Partial<Record<RightDockToolKind, RightDockToolTab>> = {};
+  for (const kind of RIGHT_DOCK_TOOL_KINDS) {
+    const raw = rawTools[kind] ?? legacyTabs[RIGHT_DOCK_SINGLETON_TAB_IDS[kind]];
+    if (!raw || typeof raw !== "object") continue;
+    const legacy = raw as Record<string, unknown>;
+    tools[kind] = normalizeRightDockToolTab(
+      kind,
+      "openedAt" in legacy ? legacy : { ...legacy, openedAt: legacy.createdAt },
+    );
   }
-  const tabOrder = normalizeRightDockTabOrder(obj.tabOrder).filter((id) => tabs[id]);
-  for (const id of Object.keys(tabs)) {
-    if (!tabOrder.includes(id)) tabOrder.push(id);
+  const tabOrder = normalizeRightDockTabOrder(obj.tabOrder);
+  for (const kind of RIGHT_DOCK_TOOL_KINDS) {
+    const tabId = RIGHT_DOCK_SINGLETON_TAB_IDS[kind];
+    if (tools[kind] && !tabOrder.includes(tabId)) tabOrder.push(tabId);
   }
-  const activeTabId =
-    typeof obj.activeTabId === "string" && tabs[obj.activeTabId] ? obj.activeTabId : tabOrder[0];
+  const rawActiveTabId = typeof obj.activeTabId === "string" ? obj.activeTabId.trim() : "";
+  const activeTabId = rawActiveTabId && rawActiveTabId.length <= 160 ? rawActiveTabId : undefined;
   return {
     ...(activeTabId ? { activeTabId } : {}),
     tabOrder,
-    tabs,
+    tools,
     openVersion: normalizeIntegerInRange(obj.openVersion, 0, Number.MAX_SAFE_INTEGER, 0),
     stateVersion: normalizeIntegerInRange(obj.stateVersion, 0, Number.MAX_SAFE_INTEGER, 0),
+    writerId: typeof obj.writerId === "string" ? obj.writerId.trim().slice(0, 32) : "",
+    lastUsedAt: normalizeIntegerInRange(obj.lastUsedAt, 0, Number.MAX_SAFE_INTEGER, 0),
   };
 }
 
@@ -1858,22 +1868,33 @@ export function normalizeRightDockSettings(input: unknown): RightDockSettings {
       ? obj.projects
       : {}
   ) as Record<string, unknown>;
+  const now = Date.now();
   const projects: Record<string, RightDockProjectState> = {};
-  const canonicalKeys = new Set<string>();
   for (const [pathKey, projectState] of Object.entries(rawProjects)) {
     const normalizedPathKey = workspaceProjectPathKey(pathKey);
-    if (!normalizedPathKey || canonicalKeys.has(normalizedPathKey)) continue;
-    const normalizedProject = normalizeRightDockProjectState(projectState, normalizedPathKey);
-    if (
-      Object.keys(normalizedProject.tabs).length === 0 &&
-      normalizedProject.openVersion === 0 &&
-      normalizedProject.stateVersion === 0
-    ) {
+    if (!normalizedPathKey || projects[normalizedPathKey]) continue;
+    const project = normalizeRightDockProjectState(projectState);
+    const isEmpty = Object.keys(project.tools).length === 0;
+    if (isEmpty && project.openVersion === 0 && project.stateVersion === 0) continue;
+    if (isEmpty) {
+      // Tombstone: start (or continue) the expiry clock, drop once elapsed.
+      const tombstonedAt = project.lastUsedAt > 0 ? project.lastUsedAt : now;
+      if (now - tombstonedAt > RIGHT_DOCK_TOMBSTONE_TTL_MS) continue;
+      projects[normalizedPathKey] = { ...project, lastUsedAt: tombstonedAt };
       continue;
     }
-    projects[normalizedPathKey] = normalizedProject;
-    canonicalKeys.add(normalizedPathKey);
-    if (Object.keys(projects).length >= 100) break;
+    projects[normalizedPathKey] = project;
+  }
+  const keys = Object.keys(projects);
+  if (keys.length > MAX_RIGHT_DOCK_PROJECTS) {
+    // Keep the most recently used buckets instead of the first-inserted ones.
+    keys.sort((a, b) => {
+      const byRecency = (projects[b]?.lastUsedAt ?? 0) - (projects[a]?.lastUsedAt ?? 0);
+      return byRecency !== 0 ? byRecency : a.localeCompare(b);
+    });
+    for (const key of keys.slice(MAX_RIGHT_DOCK_PROJECTS)) {
+      delete projects[key];
+    }
   }
   return {
     width: normalizeIntegerInRange(obj.width, 320, 1280, 420),
@@ -2139,8 +2160,54 @@ export function updateCustomSettings(
   });
 }
 
-function rightDockProjectStateEqual(left: RightDockProjectState, right: RightDockProjectState) {
-  return JSON.stringify(left) === JSON.stringify(right);
+const RIGHT_DOCK_WRITER_ID_STORAGE_KEY = "liveagent.client-id";
+
+let cachedRightDockWriterId = "";
+
+function generateRightDockWriterId(): string {
+  const uuid =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  return uuid.replace(/-/g, "").slice(0, 12);
+}
+
+// Stable per-client id used to break stateVersion ties deterministically in
+// mergeSyncedRightDockSettings: both sides of a merge evaluate the same
+// (stateVersion, writerId) order, so concurrent writers converge without the
+// old "+2 beats the echo" version-bump tricks.
+export function getRightDockWriterId(): string {
+  if (cachedRightDockWriterId) return cachedRightDockWriterId;
+  let stored = "";
+  try {
+    stored = globalThis.localStorage?.getItem(RIGHT_DOCK_WRITER_ID_STORAGE_KEY) ?? "";
+  } catch {
+    stored = "";
+  }
+  const normalized = stored.trim().slice(0, 32);
+  if (normalized) {
+    cachedRightDockWriterId = normalized;
+    return normalized;
+  }
+  const generated = generateRightDockWriterId();
+  try {
+    globalThis.localStorage?.setItem(RIGHT_DOCK_WRITER_ID_STORAGE_KEY, generated);
+  } catch {
+    // Ephemeral id for environments without storage (e.g. tests).
+  }
+  cachedRightDockWriterId = generated;
+  return generated;
+}
+
+// Version fields are stamped centrally by updateRightDockProjectState; content
+// is everything a user can observe or reorder.
+function rightDockProjectContentKey(state: RightDockProjectState): string {
+  return JSON.stringify({
+    activeTabId: state.activeTabId ?? "",
+    tabOrder: state.tabOrder,
+    tools: RIGHT_DOCK_TOOL_KINDS.map((kind) => [kind, state.tools[kind] ?? null]),
+    openVersion: state.openVersion,
+  });
 }
 
 function rightDockFileTreeStateEqual(
@@ -2164,7 +2231,6 @@ export function getRightDockProjectState(
   const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
   return normalizeRightDockProjectState(
     normalizedPathKey ? customSettings.rightDock.projects[normalizedPathKey] : {},
-    normalizedPathKey,
   );
 }
 
@@ -2179,6 +2245,9 @@ export function updateRightDockWidth(prev: AppSettings, width: number): AppSetti
   });
 }
 
+// All persisted dock mutations funnel through here: the updater describes
+// content only, and version stamping (stateVersion / writerId / lastUsedAt)
+// happens centrally so no call site can get the merge bookkeeping wrong.
 export function updateRightDockProjectState(
   prev: AppSettings,
   projectPathKey: string,
@@ -2187,64 +2256,66 @@ export function updateRightDockProjectState(
   const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
   if (!normalizedPathKey) return prev;
   const current = getRightDockProjectState(prev.customSettings, normalizedPathKey);
-  const next = normalizeRightDockProjectState(updater(current), normalizedPathKey);
-  if (rightDockProjectStateEqual(current, next)) return prev;
+  const next = normalizeRightDockProjectState(updater(current));
+  if (rightDockProjectContentKey(current) === rightDockProjectContentKey(next)) return prev;
   return updateCustomSettings(prev, {
     rightDock: {
       ...prev.customSettings.rightDock,
       projects: {
         ...prev.customSettings.rightDock.projects,
-        [normalizedPathKey]: next,
+        [normalizedPathKey]: {
+          ...next,
+          stateVersion: current.stateVersion + 1,
+          writerId: getRightDockWriterId(),
+          lastUsedAt: Date.now(),
+        },
       },
     },
   });
 }
 
-function createRightDockSingletonTab(
-  projectPathKey: string,
-  kind: Exclude<RightDockTabKind, "terminal">,
-): RightDockTabInstance {
+export function createRightDockToolTab(kind: RightDockToolKind): RightDockToolTab {
   return {
-    id: RIGHT_DOCK_SINGLETON_TAB_IDS[kind],
-    kind,
-    projectPathKey,
-    createdAt: Date.now(),
+    openedAt: Date.now(),
     ...(kind === "fileTree" ? { uiState: DEFAULT_RIGHT_DOCK_FILE_TREE_STATE } : {}),
+  };
+}
+
+export function openRightDockToolTabState(
+  current: RightDockProjectState,
+  kind: RightDockToolKind,
+): RightDockProjectState {
+  const tabId = RIGHT_DOCK_SINGLETON_TAB_IDS[kind];
+  const alreadyOpen = Boolean(current.tools[kind]);
+  if (alreadyOpen && current.activeTabId === tabId && current.tabOrder.includes(tabId)) {
+    return current;
+  }
+  return {
+    ...current,
+    activeTabId: tabId,
+    tabOrder: current.tabOrder.includes(tabId) ? current.tabOrder : [...current.tabOrder, tabId],
+    tools: alreadyOpen ? current.tools : { ...current.tools, [kind]: createRightDockToolTab(kind) },
+    openVersion: current.openVersion + (alreadyOpen ? 0 : 1),
   };
 }
 
 export function openRightDockSingletonTab(
   prev: AppSettings,
   projectPathKey: string,
-  kind: Exclude<RightDockTabKind, "terminal">,
+  kind: RightDockToolKind,
 ): AppSettings {
-  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
-  if (!normalizedPathKey) return prev;
-  const tabId = RIGHT_DOCK_SINGLETON_TAB_IDS[kind];
-  return updateRightDockProjectState(prev, normalizedPathKey, (current) => {
-    const tab = current.tabs[tabId] ?? createRightDockSingletonTab(normalizedPathKey, kind);
-    const tabs = { ...current.tabs, [tabId]: tab };
-    const tabOrder = current.tabOrder.includes(tabId)
-      ? current.tabOrder
-      : [...current.tabOrder, tabId];
-    return {
-      ...current,
-      activeTabId: tabId,
-      tabOrder,
-      tabs,
-      openVersion: current.openVersion + (current.tabs[tabId] ? 0 : 1),
-      stateVersion: current.stateVersion + 1,
-    };
-  });
+  return updateRightDockProjectState(prev, projectPathKey, (current) =>
+    openRightDockToolTabState(current, kind),
+  );
 }
 
 export function isRightDockSingletonTabOpen(
   customSettings: CustomSettings,
   projectPathKey: string,
-  kind: Exclude<RightDockTabKind, "terminal">,
+  kind: RightDockToolKind,
 ): boolean {
   const state = getRightDockProjectState(customSettings, projectPathKey);
-  return Boolean(state.tabs[RIGHT_DOCK_SINGLETON_TAB_IDS[kind]]);
+  return Boolean(state.tools[kind]);
 }
 
 export function removeRightDockProjectState(
@@ -2263,18 +2334,20 @@ export function removeRightDockProjectState(
   );
   if (!hasRightDockProject && !hasSshProjectAssociation) return prev;
   const currentRightDockProject = getRightDockProjectState(prev.customSettings, normalizedPathKey);
-  const hasRightDockTabs = Object.keys(currentRightDockProject.tabs).length > 0;
-  if (hasRightDockProject && !hasRightDockTabs && !hasSshProjectAssociation) return prev;
+  const hasRightDockTools = Object.keys(currentRightDockProject.tools).length > 0;
+  if (hasRightDockProject && !hasRightDockTools && !hasSshProjectAssociation) return prev;
 
   const projects = hasRightDockProject
     ? { ...prev.customSettings.rightDock.projects }
     : prev.customSettings.rightDock.projects;
-  if (hasRightDockProject && hasRightDockTabs) {
+  if (hasRightDockProject && hasRightDockTools) {
     projects[normalizedPathKey] = {
       tabOrder: [],
-      tabs: {},
+      tools: {},
       openVersion: currentRightDockProject.openVersion + 1,
       stateVersion: currentRightDockProject.stateVersion + 1,
+      writerId: getRightDockWriterId(),
+      lastUsedAt: Date.now(),
     };
   }
   const projectHostAssociations = hasSshProjectAssociation
@@ -2303,7 +2376,7 @@ export function getRightDockFileTreeState(
   projectPathKey: string,
 ): RightDockFileTreeState {
   const projectState = getRightDockProjectState(customSettings, projectPathKey);
-  const state = projectState.tabs[RIGHT_DOCK_SINGLETON_TAB_IDS.fileTree]?.uiState;
+  const state = projectState.tools.fileTree?.uiState;
   return state ? normalizeRightDockFileTreeState(state) : DEFAULT_RIGHT_DOCK_FILE_TREE_STATE;
 }
 
@@ -2341,19 +2414,13 @@ export function updateRightDockFileTreeState(
   };
   if (rightDockFileTreeStateEqual(current, next)) return prev;
   return updateRightDockProjectState(prev, normalizedPathKey, (projectState) => {
-    const tabId = RIGHT_DOCK_SINGLETON_TAB_IDS.fileTree;
-    const tab =
-      projectState.tabs[tabId] ?? createRightDockSingletonTab(normalizedPathKey, "fileTree");
+    const tab = projectState.tools.fileTree ?? createRightDockToolTab("fileTree");
     return {
       ...projectState,
-      tabs: {
-        ...projectState.tabs,
-        [tabId]: {
-          ...tab,
-          uiState: next,
-        },
+      tools: {
+        ...projectState.tools,
+        fileTree: { ...tab, uiState: next },
       },
-      stateVersion: projectState.stateVersion + 1,
     };
   });
 }

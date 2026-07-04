@@ -731,6 +731,7 @@ export function ChatPage(props: ChatPageProps) {
     useState<WorkspaceSshTerminalOpenRequest | null>(null);
   const workspaceSshTerminalRequestIdRef = useRef(0);
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
+  const [terminalSessionsLoaded, setTerminalSessionsLoaded] = useState(false);
   const [remoteRuntimeStatus, setRemoteRuntimeStatus] = useState<GatewayRuntimeStatus>(() =>
     buildFallbackGatewayStatus(settings.remote),
   );
@@ -1688,6 +1689,7 @@ export function ChatPage(props: ChatPageProps) {
     workspaceFilePreviewMounted,
   ]);
   useEffect(() => {
+    setTerminalSessionsLoaded(false);
     if (!terminalProjectPathKey) {
       setTerminalSessions([]);
       return;
@@ -1703,6 +1705,11 @@ export function ChatPage(props: ChatPageProps) {
       .catch(() => {
         if (!cancelled) {
           setTerminalSessions([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setTerminalSessionsLoaded(true);
         }
       });
     return () => {
@@ -5870,6 +5877,7 @@ export function ChatPage(props: ChatPageProps) {
         projectPathKey={terminalProjectPathKey}
         cwd={terminalProjectPath}
         sessions={terminalSessions}
+        sessionsLoaded={terminalSessionsLoaded}
         width={settings.customSettings.rightDock.width}
         theme={effectiveTheme}
         disabledMessage={terminalDisabledMessage}

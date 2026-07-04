@@ -12,7 +12,7 @@ type RightDockTabStripProps = {
   currentActiveTab: RightDockTabKind;
   activeSession: TerminalSession | null;
   pendingCloseSessionId: string;
-  closingSessionId: string;
+  closingSessionIds: ReadonlySet<string>;
   draggingTabId: string;
   renderTabDragHandle: (tabId: string, label: string) => ReactNode;
   consumeSuppressedTabClick: (tabId: string) => boolean;
@@ -43,7 +43,7 @@ export function RightDockTabStrip(props: RightDockTabStripProps) {
     currentActiveTab,
     activeSession,
     pendingCloseSessionId,
-    closingSessionId,
+    closingSessionIds,
     draggingTabId,
     renderTabDragHandle,
     consumeSuppressedTabClick,
@@ -127,7 +127,7 @@ export function RightDockTabStrip(props: RightDockTabStripProps) {
 
         const session = tab.session;
         const isPendingClose = pendingCloseSessionId === session.id;
-        const isClosing = closingSessionId === session.id;
+        const isClosing = closingSessionIds.has(session.id);
         const sessionTitle = formatTerminalSessionTitle(
           session.title,
           t("projectTools.terminalTitle"),

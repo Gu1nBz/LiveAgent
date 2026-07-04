@@ -734,6 +734,19 @@ function applySyncedSshPatch(
   }).ssh;
 }
 
+// Per-project last-writer-wins ordered by (stateVersion, writerId): both
+// sides of a sync evaluate the same total order, so concurrent writers
+// converge deterministically instead of relying on tie-break direction.
+function rightDockIncomingWins(
+  incoming: { stateVersion: number; writerId: string },
+  current: { stateVersion: number; writerId: string },
+): boolean {
+  if (incoming.stateVersion !== current.stateVersion) {
+    return incoming.stateVersion > current.stateVersion;
+  }
+  return incoming.writerId > current.writerId;
+}
+
 function mergeSyncedRightDockSettings(
   current: AppSettings["customSettings"]["rightDock"],
   incoming: unknown,
@@ -748,23 +761,22 @@ function mergeSyncedRightDockSettings(
       projects[pathKey] = incomingProject;
       continue;
     }
-    const source =
-      incomingProject.stateVersion >= currentProject.stateVersion
-        ? incomingProject
-        : currentProject;
+    const winner = rightDockIncomingWins(incomingProject, currentProject)
+      ? incomingProject
+      : currentProject;
     projects[pathKey] = {
-      activeTabId: source.activeTabId,
-      tabOrder: source.tabOrder,
-      tabs: source.tabs,
+      ...winner,
       openVersion: Math.max(currentProject.openVersion, incomingProject.openVersion),
       stateVersion: Math.max(currentProject.stateVersion, incomingProject.stateVersion),
+      lastUsedAt: Math.max(currentProject.lastUsedAt, incomingProject.lastUsedAt),
     };
   }
 
-  return {
+  // Width stays device-local; re-normalizing applies the LRU project cap.
+  return normalizeRightDockSettings({
     width: currentState.width,
     projects,
-  };
+  });
 }
 
 export function buildGatewaySettingsSyncPayload(

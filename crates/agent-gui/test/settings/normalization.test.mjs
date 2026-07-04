@@ -183,12 +183,9 @@ test("settings normalization canonicalizes project keyed maps with Windows path 
   assert.deepEqual(normalized.customSettings.rightDock.projects["c:/repo"], {
     activeTabId: RIGHT_DOCK_TAB_IDS.fileTree,
     tabOrder: [RIGHT_DOCK_TAB_IDS.gitReview, RIGHT_DOCK_TAB_IDS.fileTree],
-    tabs: {
-      [RIGHT_DOCK_TAB_IDS.fileTree]: {
-        id: RIGHT_DOCK_TAB_IDS.fileTree,
-        kind: "fileTree",
-        projectPathKey: "c:/repo",
-        createdAt: 1,
+    tools: {
+      fileTree: {
+        openedAt: 1,
         uiState: {
           query: "legacy",
           selectedPath: "src/main.ts",
@@ -197,15 +194,14 @@ test("settings normalization canonicalizes project keyed maps with Windows path 
           stateVersion: 0,
         },
       },
-      [RIGHT_DOCK_TAB_IDS.gitReview]: {
-        id: RIGHT_DOCK_TAB_IDS.gitReview,
-        kind: "gitReview",
-        projectPathKey: "c:/repo",
-        createdAt: 2,
+      gitReview: {
+        openedAt: 2,
       },
     },
     openVersion: 0,
     stateVersion: 0,
+    writerId: "",
+    lastUsedAt: 0,
   });
 });
 
@@ -616,12 +612,9 @@ test("gateway settings sync payload redacts provider api keys", () => {
       "/workspace/a": {
         activeTabId: RIGHT_DOCK_TAB_IDS.tunnel,
         tabOrder: [RIGHT_DOCK_TAB_IDS.tunnel, RIGHT_DOCK_TAB_IDS.fileTree],
-        tabs: {
-          [RIGHT_DOCK_TAB_IDS.fileTree]: {
-            id: RIGHT_DOCK_TAB_IDS.fileTree,
-            kind: "fileTree",
-            projectPathKey: "/workspace/a",
-            createdAt: 1,
+        tools: {
+          fileTree: {
+            openedAt: 1,
             uiState: {
               query: "src",
               selectedPath: "src/main.ts",
@@ -630,29 +623,27 @@ test("gateway settings sync payload redacts provider api keys", () => {
               stateVersion: 0,
             },
           },
-          [RIGHT_DOCK_TAB_IDS.tunnel]: {
-            id: RIGHT_DOCK_TAB_IDS.tunnel,
-            kind: "tunnel",
-            projectPathKey: "/workspace/a",
-            createdAt: 2,
+          tunnel: {
+            openedAt: 2,
           },
         },
         openVersion: 3,
         stateVersion: 4,
+        writerId: "",
+        lastUsedAt: 0,
       },
       "/workspace/b": {
         activeTabId: RIGHT_DOCK_TAB_IDS.gitReview,
         tabOrder: [RIGHT_DOCK_TAB_IDS.gitReview],
-        tabs: {
-          [RIGHT_DOCK_TAB_IDS.gitReview]: {
-            id: RIGHT_DOCK_TAB_IDS.gitReview,
-            kind: "gitReview",
-            projectPathKey: "/workspace/b",
-            createdAt: 3,
+        tools: {
+          gitReview: {
+            openedAt: 3,
           },
         },
         openVersion: 2,
         stateVersion: 2,
+        writerId: "",
+        lastUsedAt: 0,
       },
     },
   });
@@ -946,30 +937,15 @@ test("normalizes right dock from current settings", () => {
     "/workspace/app",
   ]);
   assert.deepEqual(currentShape.customSettings.rightDock.projects["/workspace/app"], {
-    activeTabId: "terminal-2",
+    // Unknown active ids are user intent (e.g. a session not loaded yet) and
+    // must never be reset by normalization.
+    activeTabId: "missing",
+    // Terminal session ids stay in tabOrder even though terminal tabs are now
+    // derived from live sessions instead of persisted entries.
     tabOrder: ["terminal-2", "terminal-1", RIGHT_DOCK_TAB_IDS.fileTree],
-    tabs: {
-      "terminal-1": {
-        id: "terminal-1",
-        kind: "terminal",
-        projectPathKey: "/workspace/app",
-        title: "Terminal 1",
-        createdAt: 2,
-        params: {
-          sessionId: "terminal-1",
-        },
-      },
-      "terminal-2": {
-        id: "terminal-2",
-        kind: "terminal",
-        projectPathKey: "/workspace/app",
-        createdAt: 1,
-      },
-      [RIGHT_DOCK_TAB_IDS.fileTree]: {
-        id: RIGHT_DOCK_TAB_IDS.fileTree,
-        kind: "fileTree",
-        projectPathKey: "/workspace/app",
-        createdAt: 3,
+    tools: {
+      fileTree: {
+        openedAt: 3,
         uiState: {
           query: "src",
           selectedPath: "src/main.ts",
@@ -981,6 +957,8 @@ test("normalizes right dock from current settings", () => {
     },
     openVersion: 6,
     stateVersion: 7,
+    writerId: "",
+    lastUsedAt: 0,
   });
 });
 
@@ -994,10 +972,13 @@ test("opens right dock singleton tabs and updates file tree state per project", 
 
   assert.equal(openedState.activeTabId, RIGHT_DOCK_TAB_IDS.gitReview);
   assert.deepEqual(openedState.tabOrder, [RIGHT_DOCK_TAB_IDS.gitReview]);
-  assert.equal(openedState.tabs[RIGHT_DOCK_TAB_IDS.gitReview].kind, "gitReview");
-  assert.equal(openedState.tabs[RIGHT_DOCK_TAB_IDS.gitReview].projectPathKey, "/workspace/app");
+  assert.deepEqual(Object.keys(openedState.tools), ["gitReview"]);
+  assert.equal(typeof openedState.tools.gitReview.openedAt, "number");
+  assert.ok(openedState.tools.gitReview.openedAt > 0);
   assert.equal(openedState.openVersion, 1);
   assert.equal(openedState.stateVersion, 1);
+  assert.equal(openedState.writerId, settings.getRightDockWriterId());
+  assert.ok(openedState.lastUsedAt > 0);
 
   const updated = settings.updateRightDockFileTreeState(opened, "/workspace/app", {
     query: "x".repeat(250),
@@ -1099,12 +1080,15 @@ test("removes right dock state when a workspace project is deleted", () => {
   assert.deepEqual(cleaned.ssh.projectHostAssociations, {
     "/workspace/other": ["host-b"],
   });
-  assert.deepEqual(cleaned.customSettings.rightDock.projects["/workspace/app"], {
-    tabOrder: [],
-    tabs: {},
-    openVersion: 4,
-    stateVersion: 5,
-  });
+  const tombstone = cleaned.customSettings.rightDock.projects["/workspace/app"];
+  assert.deepEqual(tombstone.tabOrder, []);
+  assert.deepEqual(tombstone.tools, {});
+  assert.equal(tombstone.activeTabId, undefined);
+  assert.equal(tombstone.openVersion, 4);
+  assert.equal(tombstone.stateVersion, 5);
+  assert.equal(tombstone.writerId, settings.getRightDockWriterId());
+  assert.equal(typeof tombstone.lastUsedAt, "number");
+  assert.ok(tombstone.lastUsedAt > 0);
   assert.deepEqual(cleaned.customSettings.rightDock.projects["/workspace/other"].tabOrder, [
     RIGHT_DOCK_TAB_IDS.gitReview,
   ]);
@@ -1119,15 +1103,11 @@ test("settings reload uses persisted right dock state only", () => {
         width: 720,
         projects: {
           "/workspace/app": {
+            activeTabId: "terminal-1",
             tabOrder: ["terminal-1"],
-            tabs: {
-              "terminal-1": {
-                id: "terminal-1",
-                kind: "terminal",
-                projectPathKey: "/workspace/app",
-                createdAt: 1,
-              },
-            },
+            tools: {},
+            openVersion: 1,
+            stateVersion: 1,
           },
         },
       },
@@ -1136,9 +1116,17 @@ test("settings reload uses persisted right dock state only", () => {
 
   assert.equal(reloaded.locale, "en-US");
   assert.equal(reloaded.customSettings.rightDock.width, 720);
-  assert.deepEqual(reloaded.customSettings.rightDock.projects["/workspace/app"].tabOrder, [
-    "terminal-1",
-  ]);
+  const project = reloaded.customSettings.rightDock.projects["/workspace/app"];
+  // Terminal tabs are derived from live sessions; only the session id order,
+  // the active id, and the version bookkeeping are persisted.
+  assert.deepEqual(project.tabOrder, ["terminal-1"]);
+  assert.equal(project.activeTabId, "terminal-1");
+  assert.deepEqual(project.tools, {});
+  assert.equal(project.openVersion, 1);
+  assert.equal(project.stateVersion, 1);
+  // A tools-less bucket without a timestamp starts its tombstone clock at now.
+  assert.ok(project.lastUsedAt > 0);
+  assert.ok(project.lastUsedAt <= Date.now());
 });
 
 test("gateway settings sync keeps right dock width local and syncs project state", () => {
@@ -1304,12 +1292,14 @@ test("gateway settings sync uses right dock tombstones for deleted projects", ()
     },
   });
 
-  assert.deepEqual(staleSynced.customSettings.rightDock.projects["/workspace/deleted"], {
-    tabOrder: [],
-    tabs: {},
-    openVersion: 5,
-    stateVersion: 5,
-  });
+  const tombstone = staleSynced.customSettings.rightDock.projects["/workspace/deleted"];
+  assert.deepEqual(tombstone.tabOrder, []);
+  assert.deepEqual(tombstone.tools, {});
+  assert.equal(tombstone.activeTabId, undefined);
+  assert.equal(tombstone.openVersion, 5);
+  assert.equal(tombstone.stateVersion, 5);
+  assert.equal(tombstone.writerId, settings.getRightDockWriterId());
+  assert.ok(tombstone.lastUsedAt > 0);
 
   const newerSynced = sync.applyGatewaySettingsSyncPayload(staleSynced, {
     customSettings: {

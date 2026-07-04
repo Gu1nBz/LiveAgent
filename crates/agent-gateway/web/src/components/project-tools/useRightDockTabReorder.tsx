@@ -12,7 +12,7 @@ import {
   autoScrollTabsForPointer,
   getReorderedTabIdsFromPointer,
   reorderTabIdsByKeyboard,
-  tabOrderIdsEqual,
+  sameStringArray,
 } from "./rightDockModel";
 
 type TabDragState = {
@@ -136,7 +136,7 @@ export function useRightDockTabReorder(options: UseRightDockTabReorderOptions) {
         dragState.draggedId,
         event.clientX,
       );
-      if (!nextOrder || tabOrderIdsEqual(nextOrder, dragState.order)) return;
+      if (!nextOrder || sameStringArray(nextOrder, dragState.order)) return;
       dragState.order = nextOrder;
       onDraftTabOrderChange(nextOrder);
     },

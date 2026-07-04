@@ -58,6 +58,7 @@ export function useProjectToolsRuntime(params: UseProjectToolsRuntimeParams) {
     useState<WorkspaceSshTerminalOpenRequest | null>(null);
   const workspaceSshTerminalRequestIdRef = useRef(0);
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>([]);
+  const [terminalSessionsLoaded, setTerminalSessionsLoaded] = useState(false);
   const terminalSessionsVersionRef = useRef(0);
   const terminalStatusSessionIdRef = useRef("");
 
@@ -208,6 +209,10 @@ export function useProjectToolsRuntime(params: UseProjectToolsRuntimeParams) {
   }, []);
 
   useEffect(() => {
+    // Loaded flips false whenever the gates or the gateway session identity
+    // change, and true only once list() settles below — RightDockPanel uses it
+    // to defer terminal-tab GC until the session list is actually known.
+    setTerminalSessionsLoaded(false);
     if (!terminalClient) {
       terminalSessionsVersionRef.current += 1;
       setTerminalSessions([]);
@@ -245,7 +250,12 @@ export function useProjectToolsRuntime(params: UseProjectToolsRuntimeParams) {
           setTerminalSessions(sortTerminalSessions(sessions));
         }
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) {
+          setTerminalSessionsLoaded(true);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -309,6 +319,7 @@ export function useProjectToolsRuntime(params: UseProjectToolsRuntimeParams) {
     terminalSessionsVersionRef.current += 1;
     terminalStatusSessionIdRef.current = "";
     setTerminalSessions([]);
+    setTerminalSessionsLoaded(false);
   }, []);
 
   return {
@@ -324,6 +335,7 @@ export function useProjectToolsRuntime(params: UseProjectToolsRuntimeParams) {
     workspaceSshTerminalOpen,
     workspaceSshTerminalOpenRequest,
     terminalSessions,
+    terminalSessionsLoaded,
     setTerminalSessions,
     terminalSessionsVersionRef,
     terminalStatusSessionIdRef,

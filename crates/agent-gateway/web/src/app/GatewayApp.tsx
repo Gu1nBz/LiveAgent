@@ -3736,6 +3736,7 @@ export default function GatewayApp() {
     workspaceSshTerminalOpen,
     workspaceSshTerminalOpenRequest,
     terminalSessions,
+    terminalSessionsLoaded,
     setTerminalSessions,
     terminalSessionsVersionRef,
     terminalStatusSessionIdRef,
@@ -4608,6 +4609,7 @@ export default function GatewayApp() {
             projectPathKey={terminalProjectPathKey}
             cwd={terminalProjectPath}
             sessions={terminalSessions}
+            sessionsLoaded={terminalSessionsLoaded}
             width={settings.customSettings.rightDock.width}
             theme={effectiveTheme}
             disabledMessage={projectToolsDisabledMessage}

@@ -1,8 +1,10 @@
 import {
   RIGHT_DOCK_SINGLETON_TAB_IDS,
+  RIGHT_DOCK_TOOL_KINDS,
   type RightDockProjectState,
-  type RightDockTabInstance,
   type RightDockTabKind,
+  type RightDockToolKind,
+  rightDockToolKindForTabId,
   workspaceProjectPathKey,
 } from "../../lib/settings";
 import type { TerminalSession } from "../../lib/terminal/types";
@@ -19,14 +21,10 @@ export const TUNNEL_TAB_ID = RIGHT_DOCK_SINGLETON_TAB_IDS.tunnel;
 export const SSH_TUNNEL_TAB_ID = RIGHT_DOCK_SINGLETON_TAB_IDS.sshTunnel;
 export const PROJECT_TOOLS_RESIZE_END_EVENT = "liveagent:project-tools-resize-end";
 
-export type RightDockSingletonTabKind = Exclude<RightDockTabKind, "terminal">;
+export type RightDockSingletonTabKind = RightDockToolKind;
 
-export const RIGHT_DOCK_SINGLETON_TAB_KINDS: readonly RightDockSingletonTabKind[] = [
-  "fileTree",
-  "gitReview",
-  "tunnel",
-  "sshTunnel",
-];
+export const RIGHT_DOCK_SINGLETON_TAB_KINDS: readonly RightDockSingletonTabKind[] =
+  RIGHT_DOCK_TOOL_KINDS;
 
 export type RightDockVisibleTab =
   | {
@@ -44,36 +42,7 @@ export function sortSessions(sessions: TerminalSession[]) {
 }
 
 export function areSessionsEqual(left: TerminalSession[], right: TerminalSession[]) {
-  if (left.length !== right.length) return false;
-  return left.every((session, index) => {
-    const other = right[index];
-    return (
-      other &&
-      session.id === other.id &&
-      session.projectPathKey === other.projectPathKey &&
-      session.cwd === other.cwd &&
-      session.shell === other.shell &&
-      session.title === other.title &&
-      session.kind === other.kind &&
-      (session.ssh?.hostId ?? "") === (other.ssh?.hostId ?? "") &&
-      (session.ssh?.hostName ?? "") === (other.ssh?.hostName ?? "") &&
-      (session.ssh?.username ?? "") === (other.ssh?.username ?? "") &&
-      (session.ssh?.host ?? "") === (other.ssh?.host ?? "") &&
-      (session.ssh?.port ?? 0) === (other.ssh?.port ?? 0) &&
-      (session.ssh?.authType ?? "") === (other.ssh?.authType ?? "") &&
-      (session.ssh?.status ?? "") === (other.ssh?.status ?? "") &&
-      (session.ssh?.reconnectAttempt ?? 0) === (other.ssh?.reconnectAttempt ?? 0) &&
-      (session.ssh?.reconnectMaxAttempts ?? 0) === (other.ssh?.reconnectMaxAttempts ?? 0) &&
-      session.pid === other.pid &&
-      session.cols === other.cols &&
-      session.rows === other.rows &&
-      session.createdAt === other.createdAt &&
-      session.updatedAt === other.updatedAt &&
-      session.finishedAt === other.finishedAt &&
-      session.exitCode === other.exitCode &&
-      session.running === other.running
-    );
-  });
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function formatTerminalSessionTitle(title: string, terminalLabel: string) {
@@ -105,7 +74,7 @@ export function expandedPathsForFileTreePath(path: string) {
   return ["", ...dirs.map((_, index) => parts.slice(0, index + 1).join("/"))];
 }
 
-export function tabOrderIdsEqual(left: readonly string[], right: readonly string[]) {
+export function sameStringArray(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
@@ -140,29 +109,39 @@ export function getRightDockVisibleTabs(options: {
   tunnelAvailable: boolean;
 }) {
   const { localSessions, projectPathKey, projectState, tunnelAvailable } = options;
-  const terminalTabs: RightDockVisibleTab[] = localSessions.map((session) => ({
+  const nextTabs: RightDockVisibleTab[] = localSessions.map((session) => ({
     id: session.id,
     kind: "terminal",
     session,
   }));
-  const nextTabs: RightDockVisibleTab[] = [...terminalTabs];
   for (const kind of RIGHT_DOCK_SINGLETON_TAB_KINDS) {
-    const id = rightDockSingletonTabId(kind);
-    const tab = projectState.tabs[id];
-    if (!tab) continue;
+    if (!projectState.tools[kind]) continue;
     if (kind === "tunnel" && !tunnelAvailable) continue;
     if (rightDockTabRequiresProject(kind) && !projectPathKey) continue;
-    nextTabs.push({ id, kind });
+    nextTabs.push({ id: rightDockSingletonTabId(kind), kind });
   }
   return nextTabs;
 }
 
-export function getCurrentRightDockActiveTab(
+// Render-time resolution of the persisted activeTabId. Never written back:
+// a session id that is merely not loaded yet must not be "corrected", or the
+// correction would race the session list and broadcast to other clients.
+export function resolveEffectiveActiveTabId(
   activeTabId: string | undefined,
+  orderedVisibleTabIds: readonly string[],
+  sessionsLoaded: boolean,
+): string | null {
+  if (activeTabId && orderedVisibleTabIds.includes(activeTabId)) return activeTabId;
+  if (activeTabId && !sessionsLoaded && !rightDockToolKindForTabId(activeTabId)) return null;
+  return orderedVisibleTabIds[0] ?? null;
+}
+
+export function getCurrentRightDockActiveTab(
+  effectiveActiveTabId: string | null,
   visibleTabs: readonly RightDockVisibleTab[],
 ): RightDockTabKind {
-  if (!activeTabId) return "terminal";
-  return visibleTabs.find((tab) => tab.id === activeTabId)?.kind ?? "terminal";
+  if (!effectiveActiveTabId) return "terminal";
+  return visibleTabs.find((tab) => tab.id === effectiveActiveTabId)?.kind ?? "terminal";
 }
 
 export function getReorderedTabIdsFromPointer(
@@ -240,61 +219,41 @@ export function reorderTabIdsByKeyboard(tabIds: readonly string[], tabId: string
   return nextTabIds;
 }
 
-export function createRightDockSingletonTab(
-  kind: Exclude<RightDockTabKind, "terminal">,
-  projectPathKey: string,
-): RightDockTabInstance {
-  return {
-    id: RIGHT_DOCK_SINGLETON_TAB_IDS[kind],
-    kind,
-    projectPathKey,
-    createdAt: Date.now(),
-  };
-}
-
-export function rightDockSingletonTabId(kind: Exclude<RightDockTabKind, "terminal">) {
+export function rightDockSingletonTabId(kind: RightDockSingletonTabKind) {
   return RIGHT_DOCK_SINGLETON_TAB_IDS[kind];
 }
 
-export function createRightDockTerminalTab(
-  session: TerminalSession,
-  projectPathKey: string,
-): RightDockTabInstance {
-  return {
-    id: session.id,
-    kind: "terminal",
-    projectPathKey,
-    title: session.title,
-    createdAt: session.createdAt,
-    params: {
-      sessionId: session.id,
-    },
-  };
+// Choose the tab to activate after `closingTabId` disappears: nearest
+// neighbour to the right, else to the left.
+export function rightDockNeighborTabId(
+  orderedVisibleTabIds: readonly string[],
+  closingTabId: string,
+): string | null {
+  const remaining = orderedVisibleTabIds.filter((id) => id !== closingTabId);
+  if (remaining.length === 0) return null;
+  const index = orderedVisibleTabIds.indexOf(closingTabId);
+  if (index < 0) return remaining[0] ?? null;
+  return remaining[Math.min(index, remaining.length - 1)] ?? null;
 }
 
-export function sameRightDockOrder(left: readonly string[], right: readonly string[]) {
-  return left.length === right.length && left.every((item, index) => item === right[index]);
-}
-
-export function removeRightDockTabFromState(
+export function closeRightDockToolTabState(
   state: RightDockProjectState,
-  tabId: string,
+  kind: RightDockSingletonTabKind,
+  fallbackActiveTabId: string | null,
 ): RightDockProjectState {
-  if (!state.tabs[tabId]) return state;
-  const tabs = { ...state.tabs };
-  delete tabs[tabId];
-  const tabOrder = state.tabOrder.filter((id) => id !== tabId && tabs[id]);
+  if (!state.tools[kind]) return state;
+  const tabId = rightDockSingletonTabId(kind);
+  const tools = { ...state.tools };
+  delete tools[kind];
   const activeTabId =
-    state.activeTabId === tabId
-      ? tabOrder[0]
-      : state.activeTabId && tabs[state.activeTabId]
-        ? state.activeTabId
-        : tabOrder[0];
+    state.activeTabId === tabId ? (fallbackActiveTabId ?? undefined) : state.activeTabId;
   return {
-    openVersion: state.openVersion,
     ...(activeTabId ? { activeTabId } : {}),
-    tabOrder,
-    tabs,
-    stateVersion: state.stateVersion + 1,
+    tabOrder: state.tabOrder.filter((id) => id !== tabId),
+    tools,
+    openVersion: state.openVersion,
+    stateVersion: state.stateVersion,
+    writerId: state.writerId,
+    lastUsedAt: state.lastUsedAt,
   };
 }
