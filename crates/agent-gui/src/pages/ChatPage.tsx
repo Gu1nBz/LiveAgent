@@ -1723,6 +1723,7 @@ export function ChatPage(props: ChatPageProps) {
   } = usePendingUploads({
     isAgentMode,
     workdir: displayedConversationWorkdir,
+    conversationId: currentConversationId,
     currentConversationIdRef,
     composerRef,
     setErrorMessage,
@@ -3314,9 +3315,8 @@ export function ChatPage(props: ChatPageProps) {
 
   useEffect(() => {
     currentConversationIdRef.current = currentConversationId;
-    setPendingUploadedFiles(
-      pendingUploadsByConversationRef.current.get(currentConversationId) ?? [],
-    );
+    // Per-conversation pending uploads are restored inside usePendingUploads
+    // when its conversationId param changes.
   }, [currentConversationId]);
 
   useEffect(() => {

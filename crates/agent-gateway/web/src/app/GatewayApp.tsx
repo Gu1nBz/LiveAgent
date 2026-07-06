@@ -297,6 +297,11 @@ export default function GatewayApp() {
   // Per-conversation runtime workdir (drafts have no persisted summary yet).
   const conversationWorkdirsRef = useRef<Map<string, string>>(new Map());
   const displayedConversationWorkdirRef = useRef("");
+  const pendingUploadContextRef = useRef<{
+    conversationId: string;
+    workdir: string;
+    executionMode: string;
+  } | null>(null);
   const displayedConversationBusyRef = useRef(false);
   const historyLoadSequenceRef = useRef(0);
   const visibleConversationRevisionRef = useRef(0);
@@ -3070,6 +3075,34 @@ export default function GatewayApp() {
     currentConversationRuntimeWorkdir ||
     (isAgentMode ? activeWorkspaceProjectPath || settings.system.workdir.trim() : "");
   displayedConversationWorkdirRef.current = displayedConversationWorkdir;
+  // Pending uploads live under their conversation's workdir uploads/ tree.
+  // Switching conversations keeps every conversation's uploads, but a workdir
+  // change within the same conversation (a draft switching projects) makes its
+  // relative paths stale, and a mode flip away from tools invalidates all of
+  // them — mirroring the GUI-side rule in usePendingUploads.
+  useEffect(() => {
+    const executionMode = settings.system.executionMode;
+    const previous = pendingUploadContextRef.current;
+    pendingUploadContextRef.current = {
+      conversationId: displayedConversationId,
+      workdir: displayedConversationWorkdir,
+      executionMode,
+    };
+    if (!previous) return;
+    if (previous.executionMode !== executionMode) {
+      clearPendingUploads();
+      return;
+    }
+    if (previous.conversationId !== displayedConversationId) return;
+    if (previous.workdir === displayedConversationWorkdir) return;
+    setPendingUploadsForConversation(displayedConversationId, []);
+  }, [
+    clearPendingUploads,
+    displayedConversationId,
+    displayedConversationWorkdir,
+    settings.system.executionMode,
+    setPendingUploadsForConversation,
+  ]);
   useEffect(() => {
     if (!api || !displayedConversationId) {
       queuedChatTurnsRef.current = [];
@@ -3517,6 +3550,7 @@ export default function GatewayApp() {
           ref={fileInputRef}
           type="file"
           multiple
+          aria-label={translate("chat.upload.selectFiles", settings.locale)}
           className="gateway-hidden-file-input"
           onChange={(event) => {
             const files = Array.from(event.currentTarget.files ?? []);

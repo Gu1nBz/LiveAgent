@@ -22,6 +22,7 @@ type SystemUploadedReadableFileInput = {
 type UsePendingUploadsParams = {
   isAgentMode: boolean;
   workdir: string;
+  conversationId: string;
   currentConversationIdRef: MutableRefObject<string>;
   composerRef: MutableRefObject<MentionComposerHandle | null>;
   setErrorMessage: (message: string | null) => void;
@@ -53,6 +54,7 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
   const {
     isAgentMode,
     workdir,
+    conversationId,
     currentConversationIdRef,
     composerRef,
     setErrorMessage,
@@ -61,7 +63,11 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
   const [pendingUploadedFiles, setPendingUploadedFiles] = useState<PendingUploadedFile[]>([]);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   const activeUploadTasksRef = useRef(0);
-  const uploadContextRef = useRef<{ isAgentMode: boolean; workdir: string } | null>(null);
+  const uploadContextRef = useRef<{
+    isAgentMode: boolean;
+    workdir: string;
+    conversationId: string;
+  } | null>(null);
   const pendingUploadsByConversationRef = useRef(new Map<string, PendingUploadedFile[]>());
   const pendingUploadedFilesRef = useRef(pendingUploadedFiles);
 
@@ -79,16 +85,6 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
       }
     };
   }, []);
-
-  useEffect(() => {
-    const previous = uploadContextRef.current;
-    uploadContextRef.current = { isAgentMode, workdir };
-    if (!previous) return;
-    if (previous.isAgentMode === isAgentMode && previous.workdir === workdir) return;
-    pendingUploadsByConversationRef.current.clear();
-    pendingUploadedFilesRef.current = [];
-    setPendingUploadedFiles([]);
-  }, [isAgentMode, workdir]);
 
   const getPendingUploadsForConversation = useCallback(
     (conversationId: string) => {
@@ -125,6 +121,36 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     },
     [currentConversationIdRef],
   );
+
+  useEffect(() => {
+    const targetConversationId = conversationId.trim();
+    const nextFiles = targetConversationId
+      ? (pendingUploadsByConversationRef.current.get(targetConversationId) ?? [])
+      : [];
+    pendingUploadedFilesRef.current = nextFiles;
+    setPendingUploadedFiles(nextFiles);
+  }, [conversationId]);
+
+  useEffect(() => {
+    const previous = uploadContextRef.current;
+    uploadContextRef.current = { isAgentMode, workdir, conversationId };
+    if (!previous) return;
+    if (previous.isAgentMode !== isAgentMode) {
+      // Attachments are only usable in tools mode; a mode flip invalidates
+      // every conversation's pending uploads.
+      pendingUploadsByConversationRef.current.clear();
+      pendingUploadedFilesRef.current = [];
+      setPendingUploadedFiles([]);
+      return;
+    }
+    // Switching conversations must not invalidate any conversation's
+    // uploads — each entry is relative to its own workdir. Only a workdir
+    // change within the same conversation (a draft switching projects)
+    // makes that conversation's relative paths stale.
+    if (previous.conversationId !== conversationId) return;
+    if (previous.workdir === workdir) return;
+    setPendingUploadsForConversation(conversationId, []);
+  }, [isAgentMode, workdir, conversationId, setPendingUploadsForConversation]);
 
   const captureUploadTarget = useCallback(() => {
     const targetConversationId = currentConversationIdRef.current.trim();
