@@ -9,11 +9,11 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-import iconSimpleUrl from "../../../../src-tauri/icons/icon-simple.png";
-import { Copy, Settings } from "../../../components/icons";
+import { Copy } from "../../../components/icons";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { useLocale } from "../../../i18n";
 import { resolveScrollViewport } from "../utils/chatScrollViewport";
+import { ChatEmptyState } from "./ChatEmptyState";
 import { TranscriptHistory } from "./TranscriptHistory";
 import { TranscriptLiveState } from "./TranscriptLiveState";
 import { HistorySwitchLoadingOverlay } from "./TranscriptLoadingStates";
@@ -48,8 +48,9 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
     setCopiedMessageKey,
     onResendFromEdit,
     onOpenSettings,
+    onSuggestionSelect,
   } = props;
-  const { t, locale } = useLocale();
+  const { locale } = useLocale();
   const showNoModelsState = !hasModels;
   const showStartChatState = hasModels && historyItems.length === 0 && !isSending;
   const shouldReserveTranscriptBottomSpace = !(showNoModelsState || showStartChatState);
@@ -155,58 +156,13 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
     >
       <ScrollArea ref={scrollAreaRef} className="h-full">
         <div className="mx-auto w-full max-w-[768px] px-5 py-4">
-          {showNoModelsState ? (
+          {showNoModelsState || showStartChatState ? (
             <div className="flex min-h-[calc(100vh-220px)] flex-col items-center justify-center">
-              <div className="relative flex flex-col items-center">
-                <div className="hero-entrance hero-icon-float mb-5 flex h-24 w-24 items-center justify-center">
-                  <img
-                    src={iconSimpleUrl}
-                    alt=""
-                    aria-hidden="true"
-                    draggable={false}
-                    className="h-[72px] w-[72px] select-none object-contain"
-                  />
-                </div>
-                <h2 className="hero-entrance-delay-1 mb-2 bg-gradient-to-b from-foreground to-foreground/65 bg-clip-text text-2xl font-semibold leading-tight tracking-tight text-transparent">
-                  {t("chat.welcome")}
-                </h2>
-                <p className="hero-entrance-delay-2 mb-1 text-sm text-muted-foreground">
-                  {t("chat.noModelSelected")}
-                </p>
-                <p className="hero-entrance-delay-2 mb-7 text-sm text-muted-foreground">
-                  {t("chat.configureModel")}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => onOpenSettings("providers")}
-                  className="hero-entrance-delay-3 group inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/65 px-5 py-2 text-sm font-medium text-foreground/85 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,0.85)] backdrop-blur-xl transition-all duration-200 hover:-translate-y-[1px] hover:bg-white/80 hover:text-foreground hover:shadow-[0_2px_4px_rgba(0,0,0,0.05),0_12px_32px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.9)] active:translate-y-0 active:shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-white/[0.1] dark:bg-white/[0.06] dark:text-foreground/90 dark:shadow-[0_1px_2px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.06)] dark:hover:bg-white/[0.1]"
-                >
-                  <Settings className="h-3.5 w-3.5 text-foreground/55 transition-colors group-hover:text-foreground/80" />
-                  {t("chat.goToSettings")}
-                </button>
-              </div>
-            </div>
-          ) : showStartChatState ? (
-            <div className="flex min-h-[calc(100vh-220px)] flex-col items-center justify-center">
-              <div className="relative flex flex-col items-center">
-                <div className="hero-entrance hero-icon-float mb-5 flex h-24 w-24 items-center justify-center">
-                  <img
-                    src={iconSimpleUrl}
-                    alt=""
-                    aria-hidden="true"
-                    draggable={false}
-                    className="h-[72px] w-[72px] select-none object-contain"
-                  />
-                </div>
-
-                <h2 className="hero-entrance-delay-1 mb-2 bg-gradient-to-b from-foreground to-foreground/65 bg-clip-text text-2xl font-semibold leading-tight tracking-tight text-transparent">
-                  {t("chat.startChat")}
-                </h2>
-
-                <p className="hero-entrance-delay-2 max-w-[280px] text-center text-sm leading-relaxed text-muted-foreground">
-                  {t("chat.startChatDesc")}
-                </p>
-              </div>
+              <ChatEmptyState
+                variant={showNoModelsState ? "no-models" : "start-chat"}
+                onOpenSettings={onOpenSettings}
+                onSuggestionSelect={onSuggestionSelect}
+              />
             </div>
           ) : null}
 

@@ -1471,6 +1471,9 @@ export function ChatPage(props: ChatPageProps) {
     composerRef.current?.insertGitFileMention(file);
     composerRef.current?.focus();
   }, []);
+  const handleEmptyStateSuggestion = useCallback((text: string) => {
+    composerRef.current?.typeText(text);
+  }, []);
   const hideWorkspaceSshTerminalOverlay = useCallback(() => {
     setWorkspaceSshTerminalOpen(false);
   }, []);
@@ -5489,6 +5492,7 @@ export function ChatPage(props: ChatPageProps) {
                 setCopiedMessageKey={setCopiedMessageKey}
                 onResendFromEdit={handleResendFromEdit}
                 onOpenSettings={onOpenSettings}
+                onSuggestionSelect={handleEmptyStateSuggestion}
               />
 
               <ChatComposerBar

@@ -121,6 +121,8 @@ export interface MentionComposerHandle {
   insertGitFileMention: (file: MentionComposerGitFileMention) => void;
   clear: () => void;
   focus: () => void;
+  /** Clear the composer and type `text` in with a typewriter animation. */
+  typeText: (text: string) => void;
 }
 
 export type MentionComposerLargePaste = {
@@ -212,6 +214,8 @@ const CARET_ANCHOR_TEXT = "\u200B";
 const CARET_SPACER_TEXT = "\u00A0";
 const IME_ENTER_SUPPRESS_WINDOW_MS = 300;
 const IME_COMPOSITION_END_ENTER_TAIL_MS = 80;
+// Must match the .composer-typewriter-char animation duration in index.css.
+const TYPEWRITER_CHAR_FADE_MS = 220;
 const GITHUB_ICON_SVG =
   '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.6 7.6 0 0 1 8 3.86c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
 
@@ -1980,6 +1984,28 @@ export const MentionComposer = memo(
       applyEmptyState(editorTextIsEmpty(el));
     }, [applyEmptyState]);
 
+    // ---- Typewriter (typeText) ----
+    const typewriterRef = useRef<{ timer: number; finish: () => void } | null>(null);
+
+    const cancelTypewriter = useCallback(() => {
+      const active = typewriterRef.current;
+      if (!active) return;
+      typewriterRef.current = null;
+      window.clearTimeout(active.timer);
+    }, []);
+
+    // Any user keystroke or paste completes the animation instantly so the
+    // user's input always lands after the full suggestion text.
+    const finishTypewriter = useCallback(() => {
+      const active = typewriterRef.current;
+      if (!active) return;
+      typewriterRef.current = null;
+      window.clearTimeout(active.timer);
+      active.finish();
+    }, []);
+
+    useEffect(() => cancelTypewriter, [cancelTypewriter]);
+
     const buildDraft = useCallback((): MentionComposerDraft => {
       const el = editorRef.current;
       if (!el) {
@@ -2128,6 +2154,7 @@ export const MentionComposer = memo(
         setText: (text: string) => {
           const el = editorRef.current;
           if (!el) return;
+          cancelTypewriter();
           el.innerHTML = "";
           largePastesRef.current.clear();
           closeCommitTooltip();
@@ -2143,6 +2170,7 @@ export const MentionComposer = memo(
         setDraft: (draft: MentionComposerDraft) => {
           const el = editorRef.current;
           if (!el) return;
+          cancelTypewriter();
           el.innerHTML = "";
           largePastesRef.current.clear();
           closeCommitTooltip();
@@ -2177,6 +2205,7 @@ export const MentionComposer = memo(
         insertFileMention: (path: string, kind: "file" | "dir") => {
           const el = editorRef.current;
           if (!el) return;
+          finishTypewriter();
           el.focus();
           const chip = createFileMentionChip(path, kind);
           if (!chip) return;
@@ -2187,6 +2216,7 @@ export const MentionComposer = memo(
         insertCommitMention: (commit: MentionComposerCommitMention) => {
           const el = editorRef.current;
           if (!el) return;
+          finishTypewriter();
           el.focus();
           insertNodeAtCursor(el, createCommitMentionChip(commit), { ensureSpaceAfterNode: true });
           closeMentionSession();
@@ -2195,6 +2225,7 @@ export const MentionComposer = memo(
         insertGitFileMention: (file: MentionComposerGitFileMention) => {
           const el = editorRef.current;
           if (!el) return;
+          finishTypewriter();
           el.focus();
           insertNodeAtCursor(el, createGitFileMentionChip(file), { ensureSpaceAfterNode: true });
           closeMentionSession();
@@ -2203,6 +2234,7 @@ export const MentionComposer = memo(
         clear: () => {
           const el = editorRef.current;
           if (!el) return;
+          cancelTypewriter();
           el.innerHTML = "";
           largePastesRef.current.clear();
           closeCommitTooltip();
@@ -2211,12 +2243,90 @@ export const MentionComposer = memo(
           refreshEmptyState();
         },
         focus: () => editorRef.current?.focus(),
+        typeText: (text: string) => {
+          const el = editorRef.current;
+          if (!el) return;
+          cancelTypewriter();
+          el.innerHTML = "";
+          largePastesRef.current.clear();
+          closeCommitTooltip();
+          closeComposerContextMenu();
+          closeMentionSession();
+          el.focus({ preventScroll: true });
+
+          const chars = Array.from(text);
+          const textNode = document.createTextNode("");
+          el.appendChild(textNode);
+          const placeCaretAtEnd = () => {
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            const sel = window.getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          };
+          if (chars.length === 0 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            textNode.data = chars.join("");
+            placeCaretAtEnd();
+            refreshEmptyState();
+            return;
+          }
+
+          // Freshly typed characters live in short-lived fade-in spans, then
+          // fold into the committed text node once their fade completes, so
+          // the editor always ends up holding one plain text node.
+          const ghosts: HTMLSpanElement[] = [];
+          const foldOldestGhost = () => {
+            const ghost = ghosts.shift();
+            if (!ghost) return;
+            textNode.data += ghost.textContent ?? "";
+            ghost.remove();
+          };
+          const finish = () => {
+            for (const ghost of ghosts) ghost.remove();
+            ghosts.length = 0;
+            textNode.data = chars.join("");
+            placeCaretAtEnd();
+            refreshEmptyState();
+          };
+
+          // Adaptive pace: long prompts speed up so the whole line lands in ~1s.
+          const tickMs = Math.max(12, Math.min(28, Math.round(900 / chars.length)));
+          const maxGhosts = Math.max(1, Math.ceil(TYPEWRITER_CHAR_FADE_MS / tickMs));
+          let index = 0;
+          const tick = () => {
+            if (index < chars.length) {
+              const ghost = document.createElement("span");
+              ghost.className = "composer-typewriter-char";
+              ghost.textContent = chars[index] ?? "";
+              el.appendChild(ghost);
+              ghosts.push(ghost);
+              index += 1;
+              while (ghosts.length > maxGhosts) foldOldestGhost();
+              placeCaretAtEnd();
+              refreshEmptyState();
+              typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish };
+              return;
+            }
+            if (ghosts.length > 0) {
+              foldOldestGhost();
+              placeCaretAtEnd();
+              typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish };
+              return;
+            }
+            typewriterRef.current = null;
+          };
+          refreshEmptyState();
+          typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish };
+        },
       }),
       [
         buildDraft,
+        cancelTypewriter,
         closeCommitTooltip,
         closeComposerContextMenu,
         closeMentionSession,
+        finishTypewriter,
         insertLargePaste,
         refreshEmptyState,
       ],
@@ -2529,6 +2639,7 @@ export const MentionComposer = memo(
           e.preventDefault();
           return;
         }
+        finishTypewriter();
         const isEnter = isEnterKeyboardEvent(e);
         const isActiveCompositionKey = isComposingRef.current || isActiveImeKeyboardEvent(e);
         const hasLegacyImeSignal = hasLegacyImeKeyboardSignal(e);
@@ -2644,6 +2755,7 @@ export const MentionComposer = memo(
         selectSuggestion,
         disabled,
         closeMentionSession,
+        finishTypewriter,
         onSend,
         refreshEmptyState,
         refreshMention,
@@ -2656,6 +2768,7 @@ export const MentionComposer = memo(
           e.preventDefault();
           return;
         }
+        finishTypewriter();
         const clipboardFiles = extractClipboardFiles(e.clipboardData);
         if (clipboardFiles.length > 0) {
           e.preventDefault();
@@ -2672,7 +2785,14 @@ export const MentionComposer = memo(
         refreshEmptyState();
         refreshMention();
       },
-      [disabled, insertLargePaste, onPasteFiles, refreshEmptyState, refreshMention],
+      [
+        disabled,
+        finishTypewriter,
+        insertLargePaste,
+        onPasteFiles,
+        refreshEmptyState,
+        refreshMention,
+      ],
     );
 
     const handleCompositionStart = useCallback(() => {

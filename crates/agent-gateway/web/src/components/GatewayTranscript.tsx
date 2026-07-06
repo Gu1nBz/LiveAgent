@@ -45,6 +45,7 @@ import type { TranscriptRow } from "../lib/chat/transcript/types";
 
 import type { GatewayTranscriptRound } from "../lib/chatUi";
 import type { SectionId } from "../pages/settings/types";
+import { ChatEmptyState } from "./chat/ChatEmptyState";
 import {
   Check,
   CheckCircle2,
@@ -54,7 +55,6 @@ import {
   FileText,
   Loader2,
   Pencil,
-  Settings,
   X,
 } from "./icons";
 
@@ -89,6 +89,7 @@ type GatewayTranscriptProps = {
     text: string,
     uploadedFiles: PendingUploadedFile[],
   ) => void;
+  onSuggestionSelect?: (text: string) => void;
   readOnly?: boolean;
   redactToolContent?: boolean;
 };
@@ -1339,10 +1340,10 @@ export function GatewayTranscript({
   gitClient,
   onLoadUploadedImagePreview,
   onResendFromEdit,
+  onSuggestionSelect,
   readOnly = false,
   redactToolContent = false,
 }: GatewayTranscriptProps) {
-  const { t } = useLocale();
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const [transcriptScrollViewport, setTranscriptScrollViewport] = useState<HTMLDivElement | null>(
     null,
@@ -1373,49 +1374,11 @@ export function GatewayTranscript({
     return (
       <div className="gateway-transcript-shell">
         <div className="gateway-chat-column gateway-empty-state">
-          <div className="relative flex flex-col items-center">
-            <div className="hero-entrance hero-icon-float mb-5 flex h-24 w-24 items-center justify-center">
-              <img
-                src="/icon-simple.png"
-                alt=""
-                aria-hidden="true"
-                draggable={false}
-                className="h-[72px] w-[72px] select-none object-contain"
-              />
-            </div>
-
-            <h2
-              className="hero-entrance-delay-1 bg-gradient-to-b from-foreground to-foreground/65 bg-clip-text text-center text-2xl font-semibold leading-tight tracking-tight text-transparent"
-              style={{ margin: `0 0 ${showNoModelsState ? 16 : 25}px` }}
-            >
-              {showNoModelsState ? t("chat.welcome") : t("chat.startChat")}
-            </h2>
-
-            {showNoModelsState ? (
-              <>
-                <p className="hero-entrance-delay-2 mb-1.5 text-center text-sm leading-relaxed text-muted-foreground">
-                  {t("chat.noModelSelected")}
-                </p>
-                <p className="hero-entrance-delay-2 mb-8 text-center text-sm leading-relaxed text-muted-foreground">
-                  {t("chat.configureModel")}
-                </p>
-                {onOpenSettings ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenSettings("providers")}
-                    className="hero-entrance-delay-3 group inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/65 px-5 py-2 text-sm font-medium text-foreground/85 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,0.85)] backdrop-blur-xl transition-all duration-200 hover:-translate-y-[1px] hover:bg-white/80 hover:text-foreground hover:shadow-[0_2px_4px_rgba(0,0,0,0.05),0_12px_32px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.9)] active:translate-y-0 active:shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-white/[0.1] dark:bg-white/[0.06] dark:text-foreground/90 dark:shadow-[0_1px_2px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.06)] dark:hover:bg-white/[0.1]"
-                  >
-                    <Settings className="h-3.5 w-3.5 text-foreground/55 transition-colors group-hover:text-foreground/80" />
-                    {t("chat.goToSettings")}
-                  </button>
-                ) : null}
-              </>
-            ) : (
-              <p className="hero-entrance-delay-2 max-w-[300px] text-center text-[13px] leading-relaxed text-muted-foreground/85">
-                {t("chat.startChatDesc")}
-              </p>
-            )}
-          </div>
+          <ChatEmptyState
+            variant={showNoModelsState ? "no-models" : "start-chat"}
+            onOpenSettings={onOpenSettings}
+            onSuggestionSelect={readOnly ? undefined : onSuggestionSelect}
+          />
         </div>
       </div>
     );

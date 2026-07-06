@@ -1105,14 +1105,6 @@ html[data-liveagent-webui="gateway"] [role="textbox"]:focus-visible {
   padding: 24px 0 0;
 }
 
-.gateway-empty-state h2 {
-  margin: 0;
-}
-
-.gateway-empty-state p {
-  margin-bottom: 0;
-}
-
 .gateway-footer-strip {
   display: flex;
   align-items: center;
@@ -3020,11 +3012,6 @@ html[data-liveagent-webui="gateway"]
   .gateway-empty-state {
     min-height: calc(100dvh - var(--gateway-chat-composer-overlay-height, 176px) - 96px);
     padding-top: 8px;
-  }
-
-  .gateway-empty-state h2 {
-    font-size: 22px;
-    line-height: 1.2;
   }
 
   .gateway-composer-layer {

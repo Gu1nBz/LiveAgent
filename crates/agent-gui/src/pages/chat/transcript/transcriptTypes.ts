@@ -33,6 +33,7 @@ export type ChatTranscriptProps = {
     attachments: PendingUploadedFile[],
   ) => void;
   onOpenSettings: (section?: SectionId) => void;
+  onSuggestionSelect?: (text: string) => void;
 };
 
 export type TranscriptHistoryProps = Pick<

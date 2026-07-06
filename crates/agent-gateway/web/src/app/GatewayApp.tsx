@@ -3285,6 +3285,9 @@ export default function GatewayApp() {
     composerRef.current?.insertGitFileMention(file);
     composerRef.current?.focus();
   }, []);
+  const handleEmptyStateSuggestion = useCallback((text: string) => {
+    composerRef.current?.typeText(text);
+  }, []);
   const handleRightDockClose = useCallback(() => {
     setRightDockOpen(false);
   }, []);
@@ -3768,6 +3771,7 @@ export default function GatewayApp() {
                         gitClient={gitClient}
                         onLoadUploadedImagePreview={handleLoadUploadedImagePreview}
                         onResendFromEdit={handleResendFromEdit}
+                        onSuggestionSelect={handleEmptyStateSuggestion}
                       />
                     </ScrollArea>
                     {conversationOpenState.showOverlay ? (
