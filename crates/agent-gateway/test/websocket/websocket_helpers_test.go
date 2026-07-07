@@ -64,9 +64,10 @@ func receiveEnvelope(t *testing.T, conn *websocket.Conn) wsEnvelope {
 		if err := conn.ReadJSON(&env); err != nil {
 			t.Fatalf("receive websocket envelope: %v", err)
 		}
-		// tunnel.state is broadcast on auth and on unrelated state changes;
-		// tests assert on the envelopes they explicitly provoke.
-		if env.Type == "tunnel.state" {
+		// tunnel.state and process.state are broadcast on auth and on
+		// unrelated state changes; tests assert on the envelopes they
+		// explicitly provoke.
+		if env.Type == "tunnel.state" || env.Type == "process.state" {
 			continue
 		}
 		return env
