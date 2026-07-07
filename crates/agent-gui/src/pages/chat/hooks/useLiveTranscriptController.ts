@@ -740,9 +740,10 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
 
       // On the scroll-area root rather than the viewport: the Base UI
       // scrollbar is a sibling of the viewport, and thumb drags must count as
-      // user scroll intent too.
+      // user scroll intent too. Secondary-button presses are excluded because
+      // the native context menu can swallow the matching pointerup.
       const handleRootPointerDown = (event: PointerEvent) => {
-        if (event.pointerType === "mouse" && event.button !== 0) {
+        if (event.pointerType === "mouse" && event.button === 2) {
           return;
         }
         pointerHeldRef.current = true;
@@ -763,6 +764,16 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
         ) {
           attachAutoScroll();
           requestAutoScroll();
+        }
+      };
+
+      // A pointerup can get lost (button released outside the window, native
+      // menus). A held flag that never clears would suppress zone re-attach
+      // and let layout echoes read as drag-detaches, so any pointer movement
+      // with no buttons down proves the press ended — run the release path.
+      const handlePointerMoveGuard = (event: PointerEvent) => {
+        if (pointerHeldRef.current && event.buttons === 0) {
+          handlePointerRelease();
         }
       };
 
@@ -816,6 +827,7 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
       root.addEventListener("pointerdown", handleRootPointerDown, { passive: true });
       window.addEventListener("pointerup", handlePointerRelease, { passive: true });
       window.addEventListener("pointercancel", handlePointerRelease, { passive: true });
+      window.addEventListener("pointermove", handlePointerMoveGuard, { passive: true });
       window.addEventListener("blur", handlePointerRelease);
       window.addEventListener("keydown", handleKeyDown, { capture: true });
 
@@ -835,6 +847,7 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
         root.removeEventListener("pointerdown", handleRootPointerDown);
         window.removeEventListener("pointerup", handlePointerRelease);
         window.removeEventListener("pointercancel", handlePointerRelease);
+        window.removeEventListener("pointermove", handlePointerMoveGuard);
         window.removeEventListener("blur", handlePointerRelease);
         window.removeEventListener("keydown", handleKeyDown, { capture: true });
         resizeObserver?.disconnect();

@@ -84,8 +84,22 @@ export function decideScrollFollowAction(input: {
     };
   }
 
-  if (bottomGap > previousBottomGap + SCROLL_GAP_DIRECTION_SLOP_PX) {
+  if (pointerHeld && bottomGap > previousBottomGap + SCROLL_GAP_DIRECTION_SLOP_PX) {
+    // Scroll-event detach is reserved for pointer drags (scrollbar thumb,
+    // selection auto-scroll) — every other user path away from the bottom
+    // (wheel-up, touch drag, keys) already detaches synchronously at the
+    // input layer. Away-moves without a held pointer are echoes we must not
+    // act on: on Windows WebView2 the compositor's wheel smooth-scroll
+    // animation keeps emitting frames from its stale trajectory for a few
+    // frames after a programmatic pin writes scrollTop (the abort only lands
+    // with the next main-thread commit), and treating those as "user scrolled
+    // away" tore down follow mode the instant it re-engaged — the
+    // Windows-only "scroll back to bottom never re-sticks" failure.
     return { action: "detach", towardBottom: false, refreshIntent: false };
+  }
+
+  if (bottomGap > previousBottomGap + SCROLL_GAP_DIRECTION_SLOP_PX) {
+    return { action: "none", towardBottom: false, refreshIntent: false };
   }
 
   return { action: "none", towardBottom: null, refreshIntent: false };

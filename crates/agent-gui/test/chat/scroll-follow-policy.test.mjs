@@ -72,14 +72,33 @@ test("layout-driven movement without intent never re-decides follow state", () =
   }
 });
 
-test("moving away from the bottom with intent detaches", () => {
+test("moving away from the bottom during a pointer drag detaches", () => {
+  // Scrollbar thumb drags and selection auto-scroll are the only user paths
+  // away from the bottom that arrive solely as scroll events.
   const decision = decideScrollFollowAction({
     bottomGap: 90,
     previousBottomGap: 20,
     intentActive: true,
-    pointerHeld: false,
+    pointerHeld: true,
   });
   assert.equal(decision.action, "detach");
+  assert.equal(decision.towardBottom, false);
+});
+
+test("away-moves without a held pointer never detach", () => {
+  // Windows WebView2 regression: after a programmatic pin, the compositor's
+  // wheel smooth-scroll animation emits a few frames from its stale
+  // trajectory (the abort only lands with the next main-thread commit).
+  // Those look like "scrolled away with intent" but must not tear down the
+  // follow that just re-engaged — wheel-up, touch, and key detaches all
+  // happen at the input layer instead.
+  const decision = decideScrollFollowAction({
+    bottomGap: 130,
+    previousBottomGap: 0,
+    intentActive: true,
+    pointerHeld: false,
+  });
+  assert.equal(decision.action, "none");
   assert.equal(decision.towardBottom, false);
 });
 
