@@ -13,6 +13,7 @@ import { Copy } from "../../../components/icons";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { useLocale } from "../../../i18n";
 import { resolveScrollViewport } from "../utils/chatScrollViewport";
+import { BOTTOM_REATTACH_ZONE_PX } from "../utils/scrollFollowPolicy";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { TranscriptHistory } from "./TranscriptHistory";
 import { TranscriptLiveState } from "./TranscriptLiveState";
@@ -55,8 +56,11 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
   const showNoModelsState = !hasModels;
   const showStartChatState = hasModels && historyItems.length === 0 && !isSending;
   const shouldReserveTranscriptBottomSpace = !(showNoModelsState || showStartChatState);
+  // The reserve minimum doubles as the scroll-follow reattach zone: stopping
+  // anywhere inside the reserve looks like "the bottom" to the user, so the
+  // zone must stay >= this minimum for scroll-back-to-bottom to re-stick.
   const transcriptBottomReservePx = shouldReserveTranscriptBottomSpace
-    ? Math.max(192, Math.ceil(bottomReservePx) + 12)
+    ? Math.max(BOTTOM_REATTACH_ZONE_PX, Math.ceil(bottomReservePx) + 12)
     : 0;
   const [scrollViewport, setScrollViewport] = useState<HTMLDivElement | null>(null);
   const transcriptRootRef = useRef<HTMLDivElement | null>(null);

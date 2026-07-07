@@ -18,8 +18,13 @@ import {
 } from "../../../lib/chat/conversation/liveTranscriptStore";
 import type { LiveRound } from "../../../lib/chat/messages/uiMessages";
 import { resolveScrollViewport } from "../utils/chatScrollViewport";
+import {
+  decidePointerReleaseAction,
+  decideScrollFollowAction,
+  isAtBottom,
+  isDominantVerticalWheel,
+} from "../utils/scrollFollowPolicy";
 
-const AUTO_SCROLL_LOCK_THRESHOLD_PX = 2;
 const SCROLL_OVERFLOW_THRESHOLD_PX = 4;
 const STREAM_AUTO_SCROLL_INTERVAL_MS = 80;
 const STREAM_INPUT_BUSY_INTERVAL_MS = 160;
@@ -93,7 +98,7 @@ function getViewportBottomGap(viewport: HTMLDivElement) {
 }
 
 function isViewportAtLatest(viewport: HTMLDivElement) {
-  return getViewportBottomGap(viewport) <= AUTO_SCROLL_LOCK_THRESHOLD_PX;
+  return isAtBottom(getViewportBottomGap(viewport));
 }
 
 function hasViewportOverflow(viewport: HTMLDivElement) {
@@ -121,6 +126,18 @@ function isHistoryScrollKey(event: KeyboardEvent) {
     event.key === "PageUp" ||
     event.key === "Home" ||
     (event.key === " " && event.shiftKey)
+  );
+}
+
+function isFollowScrollKey(event: KeyboardEvent) {
+  if (isEditableEventTarget(event.target)) {
+    return false;
+  }
+  return (
+    event.key === "ArrowDown" ||
+    event.key === "PageDown" ||
+    event.key === "End" ||
+    (event.key === " " && !event.shiftKey)
   );
 }
 
@@ -165,6 +182,12 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
   const shouldAutoScrollRef = useRef(true);
   const userScrollIntentUntilRef = useRef(0);
   const touchYRef = useRef<number | null>(null);
+  // A held pointer (scrollbar thumb drag, touch contact, text selection) keeps
+  // user intent alive past the timed window — those gestures routinely outlast
+  // it and used to fight the auto-pin halfway through.
+  const pointerHeldRef = useRef(false);
+  const lastObservedBottomGapRef = useRef(0);
+  const lastScrollTowardBottomRef = useRef(false);
   const bottomLockUntilRef = useRef(0);
   const liveTranscriptArtifactsRef = useRef(new Map<string, LiveTranscriptArtifacts>());
   const liveTranscriptArtifactsByStoreRef = useRef(
@@ -246,7 +269,7 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
   }, []);
 
   const hasRecentUserScrollIntent = useCallback(
-    () => Date.now() <= userScrollIntentUntilRef.current,
+    () => pointerHeldRef.current || Date.now() <= userScrollIntentUntilRef.current,
     [],
   );
 
@@ -612,7 +635,9 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
       viewportRef.current = viewport;
 
       const syncAutoScrollState = () => {
-        if (isViewportAtLatest(viewport)) {
+        const gap = getViewportBottomGap(viewport);
+        lastObservedBottomGapRef.current = gap;
+        if (isAtBottom(gap)) {
           attachAutoScroll();
           return;
         }
@@ -622,13 +647,73 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
       };
 
       const handleScroll = () => {
-        syncAutoScrollState();
+        const previousGap = lastObservedBottomGapRef.current;
+        const gap = getViewportBottomGap(viewport);
+        lastObservedBottomGapRef.current = gap;
+
+        const decision = decideScrollFollowAction({
+          bottomGap: gap,
+          previousBottomGap: previousGap,
+          intentActive: hasRecentUserScrollIntent(),
+          pointerHeld: pointerHeldRef.current,
+        });
+        if (decision.towardBottom !== null) {
+          lastScrollTowardBottomRef.current = decision.towardBottom;
+        }
+        if (decision.refreshIntent) {
+          markUserScrollIntent();
+        }
+        if (decision.action === "attach") {
+          attachAutoScroll();
+        } else if (decision.action === "attachAndPin") {
+          attachAutoScroll();
+          requestAutoScroll();
+        } else if (decision.action === "detach") {
+          detachAutoScroll();
+        }
+      };
+
+      // Walk from the wheel target up to (excluding) the viewport: a nested
+      // scroller that is mid-scroll (thinking <pre>, scrollable tool output)
+      // consumes the upward delta itself — the viewport never moves, and since
+      // re-attach needs a viewport scroll event, detaching here would strand
+      // follow mode "off" while visually pinned at the bottom.
+      const canNestedScrollerConsumeWheelUp = (target: EventTarget | null) => {
+        let node = target instanceof Element ? target : null;
+        while (node && node !== viewport) {
+          if (
+            node instanceof HTMLElement &&
+            node.scrollTop > 0 &&
+            node.scrollHeight - node.clientHeight > SCROLL_OVERFLOW_THRESHOLD_PX
+          ) {
+            return true;
+          }
+          node = node.parentElement;
+        }
+        return false;
       };
 
       const handleWheel = (event: WheelEvent) => {
         markUserScrollIntent();
-        if (event.deltaY < 0 && hasViewportOverflow(viewport)) {
+        if (!isDominantVerticalWheel(event.deltaX, event.deltaY)) {
+          return;
+        }
+        if (event.deltaY < 0) {
+          if (!hasViewportOverflow(viewport)) {
+            return;
+          }
+          if (canNestedScrollerConsumeWheelUp(event.target)) {
+            return;
+          }
           detachAutoScroll();
+          return;
+        }
+        // Wheeling further down while already clamped at the bottom produces
+        // no scroll event (scrollTop can't change) — treat it as an explicit
+        // re-engage so a stranded detached-at-bottom state stays recoverable.
+        if (!shouldAutoScrollRef.current && isViewportAtLatest(viewport)) {
+          attachAutoScroll();
+          requestAutoScroll();
         }
       };
 
@@ -653,19 +738,48 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
         touchYRef.current = nextY;
       };
 
-      const handlePointerDown = () => {
+      // On the scroll-area root rather than the viewport: the Base UI
+      // scrollbar is a sibling of the viewport, and thumb drags must count as
+      // user scroll intent too.
+      const handleRootPointerDown = (event: PointerEvent) => {
+        if (event.pointerType === "mouse" && event.button !== 0) {
+          return;
+        }
+        pointerHeldRef.current = true;
         markUserScrollIntent();
       };
 
-      const handleKeyDown = (event: KeyboardEvent) => {
-        if (!isHistoryScrollKey(event)) {
+      const handlePointerRelease = () => {
+        if (!pointerHeldRef.current) {
           return;
         }
-        if (!hasViewportOverflow(viewport)) {
-          return;
-        }
+        pointerHeldRef.current = false;
         markUserScrollIntent();
-        detachAutoScroll();
+        if (
+          decidePointerReleaseAction({
+            bottomGap: getViewportBottomGap(viewport),
+            lastScrollTowardBottom: lastScrollTowardBottomRef.current,
+          }) === "attachAndPin"
+        ) {
+          attachAutoScroll();
+          requestAutoScroll();
+        }
+      };
+
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (isHistoryScrollKey(event)) {
+          if (!hasViewportOverflow(viewport)) {
+            return;
+          }
+          markUserScrollIntent();
+          detachAutoScroll();
+          return;
+        }
+        if (isFollowScrollKey(event)) {
+          // Downward keys only mark intent — their scroll events then pass the
+          // user-intent gate and re-engage through the strict/zone checks.
+          markUserScrollIntent();
+        }
       };
 
       const handleContentResize = () => {
@@ -680,7 +794,12 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
           // large gap here keeps single-commit height jumps from ever being
           // painted. Small gaps are ordinary streaming growth and stay on the
           // throttled path.
-          if (getViewportBottomGap(viewport) > CONTENT_JUMP_REPIN_THRESHOLD_PX) {
+          // Recording the gap keeps the scroll handler's direction detection
+          // honest: without it, growth since the last scroll event would make
+          // the user's next downward wheel read as "moving away" and detach.
+          const gap = getViewportBottomGap(viewport);
+          lastObservedBottomGapRef.current = gap;
+          if (gap > CONTENT_JUMP_REPIN_THRESHOLD_PX) {
             viewport.scrollTop = viewport.scrollHeight;
           }
           requestAutoScroll();
@@ -694,7 +813,10 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
       viewport.addEventListener("wheel", handleWheel, { passive: true });
       viewport.addEventListener("touchstart", handleTouchStart, { passive: true });
       viewport.addEventListener("touchmove", handleTouchMove, { passive: true });
-      viewport.addEventListener("pointerdown", handlePointerDown, { passive: true });
+      root.addEventListener("pointerdown", handleRootPointerDown, { passive: true });
+      window.addEventListener("pointerup", handlePointerRelease, { passive: true });
+      window.addEventListener("pointercancel", handlePointerRelease, { passive: true });
+      window.addEventListener("blur", handlePointerRelease);
       window.addEventListener("keydown", handleKeyDown, { capture: true });
 
       const resizeObserver =
@@ -710,9 +832,13 @@ export function useLiveTranscriptController(params: UseLiveTranscriptControllerP
         viewport.removeEventListener("wheel", handleWheel);
         viewport.removeEventListener("touchstart", handleTouchStart);
         viewport.removeEventListener("touchmove", handleTouchMove);
-        viewport.removeEventListener("pointerdown", handlePointerDown);
+        root.removeEventListener("pointerdown", handleRootPointerDown);
+        window.removeEventListener("pointerup", handlePointerRelease);
+        window.removeEventListener("pointercancel", handlePointerRelease);
+        window.removeEventListener("blur", handlePointerRelease);
         window.removeEventListener("keydown", handleKeyDown, { capture: true });
         resizeObserver?.disconnect();
+        pointerHeldRef.current = false;
       };
     };
 

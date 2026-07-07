@@ -5,6 +5,7 @@ import { LiveMarkdown, Markdown } from "../../../../components/Markdown";
 import { useLocale } from "../../../../i18n";
 import type { UiRound } from "../../../../lib/chat/messages/uiMessages";
 import { normalizeLiveToolStatus, VIBING_STATUS } from "../../../../lib/chat/page/chatPageHelpers";
+import { isAtBottom, isDominantVerticalWheel } from "../../utils/scrollFollowPolicy";
 import { groupRoundBlocks } from "./assistantBubbleUtils";
 import { HostedSearchGroupView } from "./HostedSearchGroupView";
 import { CompactingText, VibingText } from "./StatusText";
@@ -21,7 +22,9 @@ function getThinkingScrollBottomGap(viewport: HTMLElement) {
 }
 
 function isThinkingScrollAtBottom(viewport: HTMLElement) {
-  return getThinkingScrollBottomGap(viewport) <= THINKING_SCROLL_BOTTOM_THRESHOLD_PX;
+  // Shares the transcript's fractional-DPR-tolerant threshold; a 2px check
+  // can't be satisfied at the physical clamp on scaled displays.
+  return isAtBottom(getThinkingScrollBottomGap(viewport));
 }
 
 function hasThinkingScrollOverflow(viewport: HTMLElement) {
@@ -99,7 +102,11 @@ function useStickyBottomScroll(
 
     const handleWheel = (event: WheelEvent) => {
       markUserScrollIntent();
-      if (event.deltaY < 0 && hasThinkingScrollOverflow(viewport)) {
+      if (
+        event.deltaY < 0 &&
+        isDominantVerticalWheel(event.deltaX, event.deltaY) &&
+        hasThinkingScrollOverflow(viewport)
+      ) {
         shouldStickRef.current = false;
       }
     };
