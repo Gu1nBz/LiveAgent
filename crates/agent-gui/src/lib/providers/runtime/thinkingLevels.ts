@@ -1,5 +1,5 @@
 import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { GoogleOptions } from "@earendil-works/pi-ai/google";
+import type { GoogleOptions } from "@earendil-works/pi-ai/api/google-generative-ai";
 import { resolveMaxTokens } from "./common";
 import type { StreamOptionsEx } from "./types";
 

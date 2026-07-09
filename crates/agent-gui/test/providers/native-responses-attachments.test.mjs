@@ -777,8 +777,8 @@ test("text-mode OpenAI Responses stream forwards workdir for native attachments"
           throw new Error(`unexpected invoke: ${command}`);
         },
       },
-      "@earendil-works/pi-ai/openai-responses": {
-        streamOpenAIResponses(model, context, options) {
+      "@earendil-works/pi-ai/api/openai-responses": {
+        stream(model, context, options) {
           return {
             async *[Symbol.asyncIterator]() {
               capturedPayload = await options.onPayload(
@@ -866,8 +866,8 @@ test("text-mode OpenAI Chat Completions stream forwards workdir for native image
           throw new Error(`unexpected invoke: ${command}`);
         },
       },
-      "@earendil-works/pi-ai/openai-completions": {
-        streamOpenAICompletions(model, context, options) {
+      "@earendil-works/pi-ai/api/openai-completions": {
+        stream(model, context, options) {
           return {
             async *[Symbol.asyncIterator]() {
               capturedPayload = await options.onPayload(
@@ -960,8 +960,8 @@ test("text-mode Anthropic stream forwards workdir for native attachments", async
           throw new Error(`unexpected invoke: ${command}`);
         },
       },
-      "@earendil-works/pi-ai/anthropic": {
-        streamAnthropic(model, context, options) {
+      "@earendil-works/pi-ai/api/anthropic-messages": {
+        stream(model, context, options) {
           return {
             async *[Symbol.asyncIterator]() {
               capturedPayload = await options.onPayload(
@@ -1055,8 +1055,8 @@ test("text-mode Gemini stream forwards workdir for native attachments", async ()
           throw new Error(`unexpected invoke: ${command}`);
         },
       },
-      "@earendil-works/pi-ai/google": {
-        streamGoogle(model, context, options) {
+      "@earendil-works/pi-ai/api/google-generative-ai": {
+        stream(model, context, options) {
           return {
             async *[Symbol.asyncIterator]() {
               capturedPayload = await options.onPayload(

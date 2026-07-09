@@ -44,8 +44,8 @@ function loadProvidersWithCapturedAnthropicStream() {
   const state = {};
   const localLoader = createTsModuleLoader({
     mocks: {
-      "@earendil-works/pi-ai/anthropic": {
-        streamAnthropic(model, context, options) {
+      "@earendil-works/pi-ai/api/anthropic-messages": {
+        stream(model, context, options) {
           state.captured = { model, context, options };
           return createMockAssistantStream();
         },
@@ -336,8 +336,8 @@ test("Codex Chat Completions streams forward reasoning effort", () => {
   let captured;
   const localLoader = createTsModuleLoader({
     mocks: {
-      "@earendil-works/pi-ai/openai-completions": {
-        streamOpenAICompletions(model, context, options) {
+      "@earendil-works/pi-ai/api/openai-completions": {
+        stream(model, context, options) {
           captured = { model, context, options };
           return { mocked: true };
         },
@@ -385,8 +385,8 @@ test("DeepSeek OpenAI payload adapter injects thinking and reasoning_content", a
   let captured;
   const localLoader = createTsModuleLoader({
     mocks: {
-      "@earendil-works/pi-ai/openai-completions": {
-        streamOpenAICompletions(model, context, options) {
+      "@earendil-works/pi-ai/api/openai-completions": {
+        stream(model, context, options) {
           captured = { model, context, options };
           return { mocked: true };
         },

@@ -44,8 +44,8 @@ test("codex provider normalization strips route suffixes and keeps only configur
     provider.models.map((model) => model.id),
     ["gpt-5", "gpt-5-mini"],
   );
-  assert.equal(provider.models[0].contextWindow, 258_000);
-  assert.equal(provider.models[0].maxOutputToken, 142_000);
+  assert.equal(provider.models[0].contextWindow, 400_000);
+  assert.equal(provider.models[0].maxOutputToken, 128_000);
   assert.equal(provider.models[1].contextWindow, 64_000);
   assert.equal(provider.models[1].maxOutputToken, 4_096);
 });

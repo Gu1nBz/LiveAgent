@@ -1,14 +1,14 @@
 import type { Context, Model } from "@earendil-works/pi-ai";
-import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
-import { type GoogleOptions, streamGoogle } from "@earendil-works/pi-ai/google";
+import { stream as streamAnthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { type GoogleOptions, stream as streamGoogle } from "@earendil-works/pi-ai/api/google-generative-ai";
 import {
   type OpenAICompletionsOptions,
-  streamOpenAICompletions,
-} from "@earendil-works/pi-ai/openai-completions";
+  stream as streamOpenAICompletions,
+} from "@earendil-works/pi-ai/api/openai-completions";
 import {
   type OpenAIResponsesOptions,
-  streamOpenAIResponses,
-} from "@earendil-works/pi-ai/openai-responses";
+  stream as streamOpenAIResponses,
+} from "@earendil-works/pi-ai/api/openai-responses";
 import { wrapDeepSeekDsmlToolCallStream } from "../deepSeekDsmlToolCallStream";
 import {
   attachDeepSeekProviderPayloadAdapter,

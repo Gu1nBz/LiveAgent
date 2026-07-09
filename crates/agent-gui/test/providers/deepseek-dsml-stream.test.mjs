@@ -889,8 +889,8 @@ test("streamAssistantMessage replies to recovered DeepSeek DSML tool calls befor
           return undefined;
         },
       },
-      "@earendil-works/pi-ai/anthropic": {
-        streamAnthropic(_model, context) {
+      "@earendil-works/pi-ai/api/anthropic-messages": {
+        stream(_model, context) {
           capturedContexts.push(context);
           const stream = streamQueue.shift();
           if (!stream) throw new Error("No mocked Anthropic stream queued");
@@ -974,8 +974,8 @@ test("streamAssistantMessage normalizes recovered DeepSeek DSML tool calls from 
           return undefined;
         },
       },
-      "@earendil-works/pi-ai/anthropic": {
-        streamAnthropic(_model, context) {
+      "@earendil-works/pi-ai/api/anthropic-messages": {
+        stream(_model, context) {
           capturedContexts.push(context);
           return createSourceStream(["answer after repaired history"]);
         },
@@ -1059,8 +1059,8 @@ test("completeAssistantMessage normalizes recovered DeepSeek DSML tool calls fro
           return undefined;
         },
       },
-      "@earendil-works/pi-ai/anthropic": {
-        streamAnthropic(_model, context) {
+      "@earendil-works/pi-ai/api/anthropic-messages": {
+        stream(_model, context) {
           capturedContexts.push(context);
           return createSourceStream(["completed answer"]);
         },

@@ -22,6 +22,18 @@ const piAiValidation = await import(
     import.meta.url,
   ).href
 );
+const piAiEventStream = await import(
+  new URL(
+    "../../node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js",
+    import.meta.url,
+  ).href
+);
+const piAiProvidersAll = await import(
+  new URL(
+    "../../node_modules/@earendil-works/pi-ai/dist/providers/all.js",
+    import.meta.url,
+  ).href
+);
 
 function createDefaultMocks() {
   const typeboxMock = {
@@ -89,24 +101,36 @@ function createDefaultMocks() {
         }
       },
     },
-    "@earendil-works/pi-ai/anthropic": {
-      streamAnthropic() {
-        throw new Error("streamAnthropic mock was not expected to be called");
+    "@earendil-works/pi-ai/api/anthropic-messages": {
+      stream() {
+        throw new Error("stream (anthropic-messages) mock was not expected to be called");
       },
     },
-    "@earendil-works/pi-ai/openai-completions": {
-      streamOpenAICompletions() {
-        throw new Error("streamOpenAICompletions mock was not expected to be called");
+    "@earendil-works/pi-ai/api/openai-completions": {
+      stream() {
+        throw new Error("stream (openai-completions) mock was not expected to be called");
       },
     },
-    "@earendil-works/pi-ai/openai-responses": {
-      streamOpenAIResponses() {
-        throw new Error("streamOpenAIResponses mock was not expected to be called");
+    "@earendil-works/pi-ai/api/openai-responses": {
+      stream() {
+        throw new Error("stream (openai-responses) mock was not expected to be called");
       },
     },
-    "@earendil-works/pi-ai/google": {
-      streamGoogle() {
-        throw new Error("streamGoogle mock was not expected to be called");
+    "@earendil-works/pi-ai/api/google-generative-ai": {
+      stream() {
+        throw new Error("stream (google-generative-ai) mock was not expected to be called");
+      },
+    },
+    "@earendil-works/pi-ai/providers/all": {
+      getBuiltinModel: piAiProvidersAll.getBuiltinModel,
+      getBuiltinModels: piAiProvidersAll.getBuiltinModels,
+      getBuiltinProviders: piAiProvidersAll.getBuiltinProviders,
+    },
+    "@earendil-works/pi-ai/compat": {
+      EventStream: piAiEventStream.EventStream,
+      validateToolArguments: piAiValidation.validateToolArguments,
+      streamSimple() {
+        throw new Error("streamSimple mock was not expected to be called");
       },
     },
     "@tauri-apps/api/core": {

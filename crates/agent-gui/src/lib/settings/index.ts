@@ -1,5 +1,5 @@
 import type { KnownProvider } from "@earendil-works/pi-ai";
-import { getModels } from "@earendil-works/pi-ai";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_LOCALE, type Locale, normalizeLocale } from "../../i18n/config";
 import { mergeAlwaysEnabledSkillNames } from "../skills/builtin";
 import { SYSTEM_TOOL_OPTIONS, type SystemToolId } from "../tools/systemToolOptions";
@@ -947,7 +947,9 @@ function getKnownModelLimits(
 ): Pick<ProviderModelConfig, "contextWindow" | "maxOutputToken"> | undefined {
   const trimmedId = modelId?.trim();
   if (!trimmedId) return undefined;
-  const known = getModels(toKnownProvider(providerId)).find((model) => model.id === trimmedId);
+  const known = getBuiltinModels(toKnownProvider(providerId)).find(
+    (model) => model.id === trimmedId,
+  );
   if (!known) return undefined;
   return { contextWindow: known.contextWindow, maxOutputToken: known.maxTokens };
 }

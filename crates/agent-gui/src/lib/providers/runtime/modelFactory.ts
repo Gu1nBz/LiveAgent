@@ -1,5 +1,5 @@
 import type { Model, OpenAICompletionsCompat } from "@earendil-works/pi-ai";
-import { getModel } from "@earendil-works/pi-ai";
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import {
   type CodexRequestFormat,
   getProviderModelDefaults,
@@ -23,7 +23,7 @@ function resolveKnownModel(
   modelId: string,
   baseUrl: string,
 ): Model<any> | undefined {
-  const known = getModel(provider as any, modelId as any) as Model<any> | undefined;
+  const known = getBuiltinModel(provider as any, modelId as any) as Model<any> | undefined;
   return known?.api ? ({ ...known, baseUrl } as Model<any>) : undefined;
 }
 
