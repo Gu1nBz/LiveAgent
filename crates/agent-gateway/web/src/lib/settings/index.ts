@@ -933,9 +933,21 @@ export function getKnownModelThinkingLevels(
   providerId: ProviderId,
   modelId: string | undefined,
 ): ReasoningLevel[] {
-  const known = findKnownModel(providerId, modelId);
-  if (!known) return [];
-  return getSupportedThinkingLevels(known).filter((level) => level !== "off");
+  const trimmedId = modelId?.trim();
+  if (!trimmedId) return [];
+  const known = findKnownModel(providerId, trimmedId);
+  // 目录之外的自定义模型（deepseek/glm 等三方聚合）无法从 id 判断推理能力，
+  // 与桌面端 modelFactory 自定义分支一致按可推理处理：标准档位，xhigh/max
+  // 仍需目录 opt-in；deepseek 走 codex 时镜像桌面端 DeepSeek 适配层的 xhigh 档。
+  const model =
+    known ??
+    ({
+      reasoning: true,
+      ...(providerId === "codex" && trimmedId.toLowerCase().includes("deepseek")
+        ? { thinkingLevelMap: { xhigh: "max" } }
+        : {}),
+    } as Parameters<typeof getSupportedThinkingLevels>[0]);
+  return getSupportedThinkingLevels(model).filter((level) => level !== "off");
 }
 
 export function isThinkingAlwaysOnForModel(

@@ -176,6 +176,30 @@ test("web chat runtime controls default and follow model-aware reasoning support
     }),
     ["minimal", "low", "medium", "high"],
   );
+  // 目录之外的自定义模型（deepseek/glm 等）按可推理处理，与桌面端一致：
+  // 标准四档；deepseek 走 codex 时镜像桌面端适配层的 xhigh 档。
+  assert.deepEqual(
+    settings.getChatRuntimeReasoningLevelsForProvider({
+      providerId: "codex",
+      requestFormat: "openai-completions",
+      modelId: "glm-4.7",
+    }),
+    ["minimal", "low", "medium", "high"],
+  );
+  assert.deepEqual(
+    settings.getChatRuntimeReasoningLevelsForProvider({
+      providerId: "claude_code",
+      modelId: "deepseek-reasoner",
+    }),
+    ["minimal", "low", "medium", "high"],
+  );
+  assert.deepEqual(
+    settings.getChatRuntimeReasoningLevelsForProvider({
+      providerId: "codex",
+      modelId: "deepseek-chat",
+    }),
+    ["minimal", "low", "medium", "high", "xhigh"],
+  );
 
   assert.equal(settings.isThinkingAlwaysOnForModel("claude_code", "claude-fable-5"), true);
   assert.equal(settings.isThinkingAlwaysOnForModel("claude_code", "claude-opus-4-8"), false);

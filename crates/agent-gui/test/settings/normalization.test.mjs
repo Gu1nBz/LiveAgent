@@ -325,6 +325,34 @@ test("chat runtime controls default and follow provider model reasoning support"
     }),
     ["low", "high"],
   );
+  // 目录之外的自定义模型（glm/kimi 等三方聚合）按可推理处理：标准四档，
+  // 不因 id 猜不中而禁用思考。
+  assert.deepEqual(
+    settings.getChatRuntimeReasoningLevelsForProvider({
+      providerId: "codex",
+      requestFormat: "openai-completions",
+      modelId: "glm-4.7",
+      baseUrl: "https://api.z.ai/api/coding/paas/v4",
+    }),
+    ["minimal", "low", "medium", "high"],
+  );
+  assert.deepEqual(
+    settings.getChatRuntimeReasoningLevelsForProvider({
+      providerId: "claude_code",
+      modelId: "glm-4.7",
+      baseUrl: "https://api.z.ai/api/anthropic",
+    }),
+    ["minimal", "low", "medium", "high"],
+  );
+  // DeepSeek 走 codex：适配层 thinkingLevelMap 额外开出 xhigh。
+  assert.deepEqual(
+    settings.getChatRuntimeReasoningLevelsForProvider({
+      providerId: "codex",
+      modelId: "deepseek-chat",
+      baseUrl: "https://api.deepseek.com",
+    }),
+    ["minimal", "low", "medium", "high", "xhigh"],
+  );
 
   assert.deepEqual(
     settings.normalizeChatRuntimeControlsForProvider(

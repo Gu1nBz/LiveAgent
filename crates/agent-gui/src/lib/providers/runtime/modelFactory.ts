@@ -77,29 +77,6 @@ function maybeAppendCodexApiVersion(baseUrl: string) {
   }
 }
 
-function supportsCodexReasoningModel(modelId: string) {
-  const normalizedModelId = modelId.trim().toLowerCase();
-  return (
-    normalizedModelId.startsWith("gpt-5") ||
-    normalizedModelId.includes("codex") ||
-    normalizedModelId.startsWith("o1") ||
-    normalizedModelId.startsWith("o3") ||
-    normalizedModelId.startsWith("o4")
-  );
-}
-
-function supportsOpenAICompletionsReasoningModel(modelId: string) {
-  const normalizedModelId = modelId.trim().toLowerCase();
-  return (
-    supportsCodexReasoningModel(normalizedModelId) ||
-    normalizedModelId.includes("deepseek") ||
-    normalizedModelId.includes("gpt-oss") ||
-    normalizedModelId.includes("qwen") ||
-    normalizedModelId.includes("reason") ||
-    normalizedModelId.includes("think")
-  );
-}
-
 function supportsOpenAICompletionsImageInputModel(modelId: string) {
   const normalizedModelId = modelId.trim().toLowerCase();
   if (normalizedModelId.includes("search-preview")) return false;
@@ -292,10 +269,10 @@ export function createModelFromConfig(
       api,
       provider: "openai",
       baseUrl: normalizedBaseUrl,
-      reasoning:
-        api === "openai-completions"
-          ? supportsOpenAICompletionsReasoningModel(modelId)
-          : supportsCodexReasoningModel(modelId),
+      // 目录之外的自定义模型无法从 id 可靠判断推理能力，与 anthropic/gemini
+      // 自定义分支一致按可推理处理（标准档位，xhigh/max 仍需目录 opt-in），
+      // 是否真的下发思考由用户的开关决定。
+      reasoning: true,
       input: resolveCodexModelInput(api, modelId),
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow,
