@@ -64,12 +64,6 @@ export type UiRound = {
   };
 };
 
-export type LiveRound = UiRound & {
-  key: string;
-  runningToolCallIds: string[];
-  thinkingOpen: boolean;
-};
-
 export type UiMessage = {
   key: string;
   role: "user" | "assistant";
@@ -1139,33 +1133,6 @@ export function upsertHostedSearchToRound<TRound extends Pick<UiRound, "blocks">
     ...round,
     blocks: upsertHostedSearchBlock(round.blocks, hostedSearch),
   };
-}
-
-export function updateLiveRound(
-  prev: LiveRound[],
-  round: number,
-  updater: (target: LiveRound) => LiveRound,
-) {
-  if (prev.length === 0) return prev;
-
-  const lastIdx = prev.length - 1;
-  if (prev[lastIdx].round === round) {
-    const next = prev.slice();
-    next[lastIdx] = updater(prev[lastIdx]);
-    return next;
-  }
-
-  const idx = prev.findIndex((item) => item.round === round);
-  if (idx < 0) return prev;
-
-  const next = prev.slice();
-  next[idx] = updater(prev[idx]);
-  return next;
-}
-
-export function collapseThinking(target: LiveRound) {
-  if (!target.thinkingOpen || !getRoundThinkingText(target).trim()) return target;
-  return { ...target, thinkingOpen: false };
 }
 
 function buildUiRoundBlocks(

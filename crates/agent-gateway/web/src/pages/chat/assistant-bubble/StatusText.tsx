@@ -11,20 +11,10 @@ export function CompactingText({ className }: { className?: string }) {
   return <AnimatedStatusText text={t("chat.compactingContext")} className={className} />;
 }
 
+// One element with a background-clip:text shimmer: no per-render span
+// allocation, one compositor layer instead of one promoted layer per
+// character, and the caller's text color flows through via currentColor.
 function AnimatedStatusText(props: { text: string; className?: string }) {
   const { text, className } = props;
-  return (
-    <span className={cn("vibing-status", className)} aria-label={text}>
-      {Array.from(text).map((char, idx) => (
-        <span
-          key={`${char}-${idx}`}
-          aria-hidden="true"
-          className="vibing-status-char"
-          style={{ animationDelay: `${idx * 0.08}s` }}
-        >
-          {char === " " ? "\u00A0" : char}
-        </span>
-      ))}
-    </span>
-  );
+  return <span className={cn("vibing-status", className)}>{text}</span>;
 }

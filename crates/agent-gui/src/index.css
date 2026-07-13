@@ -1128,16 +1128,22 @@
     animation-delay: 0.4s;
   }
 
+  /* Status shimmer: one element, one compositor layer. The gradient is
+     built from currentColor so callers keep controlling the text color. */
   .vibing-status {
-    display: inline-flex;
-    align-items: center;
-    letter-spacing: 0.02em;
-  }
-
-  .vibing-status-char {
     display: inline-block;
-    animation: vibingBounce 1.4s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
-    will-change: transform;
+    letter-spacing: 0.02em;
+    background-image: linear-gradient(
+      90deg,
+      color-mix(in srgb, currentColor 55%, transparent),
+      currentColor,
+      color-mix(in srgb, currentColor 55%, transparent)
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: vibingShimmer 1.8s linear infinite;
   }
 
   @keyframes typingBounce {
@@ -1151,16 +1157,20 @@
     }
   }
 
-  @keyframes vibingBounce {
-    0%,
+  @keyframes vibingShimmer {
+    0% {
+      background-position: 150% 0;
+    }
     100% {
-      transform: translateY(0);
+      background-position: -150% 0;
     }
-    30% {
-      transform: translateY(-2px);
-    }
-    55% {
-      transform: translateY(0.5px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .vibing-status {
+      animation: none;
+      background-image: none;
+      -webkit-text-fill-color: currentColor;
     }
   }
 
