@@ -12,6 +12,7 @@ const GATEWAY_WEBUI_MARKER = "gateway";
 const GATEWAY_TOKEN_STORAGE_KEY = "liveagent.gateway.token";
 const CODEX_MODELS_SUFFIXES = ["/chat/completions", "/responses", "/response"];
 const GEMINI_GENERATE_SUFFIXES = [":streamGenerateContent", ":generateContent"];
+const ANTHROPIC_API_VERSION = "2023-06-01";
 
 export function isGatewayWebuiRuntime() {
   return (
@@ -55,15 +56,123 @@ function normalizeModelBaseUrl(type: ProviderId, baseUrl: string) {
   return normalizeBaseUrl(normalizedUrl);
 }
 
-function buildModelsUrl(type: ProviderId, baseUrl: string) {
+export type ProviderModelsAttemptKind = "default" | "official";
+
+export type ProviderModelsAttempt = {
+  kind: ProviderModelsAttemptKind;
+  headers: Record<string, string>;
+};
+
+export type ProviderModelsFailure = {
+  status: number | null;
+  message: string;
+};
+
+function buildGeminiModelsUrl(baseUrl: string, versionPath: string) {
+  const normalizedUrl = normalizeBaseUrl(baseUrl);
+  if (normalizedUrl.toLowerCase().endsWith("/models")) return normalizedUrl;
+  if (/\/v\d+(?:beta)?$/i.test(normalizedUrl)) return `${normalizedUrl}/models`;
+  return `${normalizedUrl}/${versionPath}/models`;
+}
+
+export function buildProviderModelsUrl(
+  type: ProviderId,
+  baseUrl: string,
+  kind: ProviderModelsAttemptKind,
+) {
   if (type === "gemini") {
-    const normalizedUrl = normalizeBaseUrl(baseUrl);
-    if (normalizedUrl.toLowerCase().endsWith("/models")) return normalizedUrl;
-    if (/\/v\d+(?:beta)?$/i.test(normalizedUrl)) return `${normalizedUrl}/models`;
-    return `${normalizedUrl}/v1beta/models`;
+    return buildGeminiModelsUrl(baseUrl, kind === "official" ? "v1beta" : "v1");
   }
 
   return baseUrl.endsWith("/v1") ? `${baseUrl}/models` : `${baseUrl}/v1/models`;
+}
+
+function buildDefaultModelsHeaders(type: ProviderId, apiKey: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+  if (type === "gemini") {
+    headers["x-goog-api-key"] = apiKey;
+    return headers;
+  }
+  headers["x-api-key"] = apiKey;
+  if (type === "claude_code") {
+    headers["anthropic-version"] = ANTHROPIC_API_VERSION;
+  }
+  return headers;
+}
+
+function buildOfficialModelsHeaders(type: ProviderId, apiKey: string): Record<string, string> {
+  if (type === "gemini") {
+    return {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    };
+  }
+  if (type === "claude_code") {
+    return {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": ANTHROPIC_API_VERSION,
+    };
+  }
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+}
+
+function providerModelsAttemptSignature(
+  type: ProviderId,
+  baseUrl: string,
+  attempt: ProviderModelsAttempt,
+) {
+  const url = buildProviderModelsUrl(type, baseUrl, attempt.kind);
+  const headers = Object.entries(attempt.headers).sort(([a], [b]) => a.localeCompare(b));
+  return `${url}||${JSON.stringify(headers)}`;
+}
+
+export function buildProviderModelsAttempts(
+  type: ProviderId,
+  baseUrl: string,
+  apiKey: string,
+): ProviderModelsAttempt[] {
+  const candidates: ProviderModelsAttempt[] = [
+    { kind: "default", headers: buildDefaultModelsHeaders(type, apiKey) },
+    { kind: "official", headers: buildOfficialModelsHeaders(type, apiKey) },
+  ];
+
+  const attempts: ProviderModelsAttempt[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const signature = providerModelsAttemptSignature(type, baseUrl, candidate);
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    attempts.push(candidate);
+  }
+  return attempts;
+}
+
+function isMissingEndpointStatus(status: number | null) {
+  return status === 404 || status === 405;
+}
+
+export function pickProviderModelsFailure(
+  failures: ProviderModelsFailure[],
+): ProviderModelsFailure | null {
+  for (let index = failures.length - 1; index >= 0; index -= 1) {
+    if (!isMissingEndpointStatus(failures[index].status)) return failures[index];
+  }
+  return failures.length > 0 ? failures[failures.length - 1] : null;
+}
+
+function extractModelListItems(data: unknown): unknown[] | null {
+  if (Array.isArray(data)) return data;
+  const payload = data as { data?: unknown; models?: unknown } | null;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.models)) return payload.models;
+  return null;
 }
 
 async function readFetchError(response: Response, fallback: string) {
@@ -105,14 +214,9 @@ async function fetchModelsThroughGateway(
     api_key: apiKey,
   } as any);
 
-  if (Array.isArray((data as { data?: unknown[] } | null)?.data)) {
-    return normalizeFetchedModels((data as { data: unknown[] }).data, type);
-  }
-  if (Array.isArray((data as { models?: unknown[] } | null)?.models)) {
-    return normalizeFetchedModels((data as { models: unknown[] }).models, type);
-  }
-  if (Array.isArray(data)) {
-    return normalizeFetchedModels(data, type);
+  const items = extractModelListItems(data);
+  if (items !== null) {
+    return normalizeFetchedModels(items, type);
   }
 
   const maybeError =
@@ -234,39 +338,53 @@ export async function fetchModelsFromApi(
     return fetchModelsThroughGateway(type, normalizedUrl, normalizedApiKey);
   }
 
-  const headers: Record<string, string> =
-    type === "gemini"
-      ? {
-          "Content-Type": "application/json",
-          "x-goog-api-key": normalizedApiKey,
-        }
-      : {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${normalizedApiKey}`,
-          "x-api-key": normalizedApiKey,
-        };
+  const attempts = buildProviderModelsAttempts(type, normalizedUrl, normalizedApiKey);
+  const failures: ProviderModelsFailure[] = [];
+  let emptyResult: ProviderModelConfig[] | null = null;
 
-  if (type === "claude_code") {
-    headers["anthropic-version"] = "2023-06-01";
+  for (const attempt of attempts) {
+    const proxyRequest = await prepareProxyRequest(type, normalizedUrl, attempt.headers);
+    const modelsUrl = buildProviderModelsUrl(type, proxyRequest.baseUrl, attempt.kind);
+
+    let response: Response;
+    try {
+      response = await fetch(modelsUrl, { headers: proxyRequest.headers });
+    } catch (error) {
+      failures.push({
+        status: null,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    if (!response.ok) {
+      failures.push({
+        status: response.status,
+        message: await readFetchError(response, `HTTP ${response.status} ${response.statusText}`),
+      });
+      continue;
+    }
+
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      failures.push({ status: null, message: "Model list response is not valid JSON" });
+      continue;
+    }
+
+    const items = extractModelListItems(data);
+    if (items === null) {
+      emptyResult ??= [];
+      continue;
+    }
+    const models = normalizeFetchedModels(items, type);
+    if (models.length > 0) return models;
+    emptyResult = models;
   }
 
-  const proxyRequest = await prepareProxyRequest(type, normalizedUrl, headers);
-  const proxyUrl = buildModelsUrl(type, proxyRequest.baseUrl);
+  if (emptyResult !== null) return emptyResult;
 
-  const res = await fetch(proxyUrl, { headers: proxyRequest.headers });
-  if (!res.ok) {
-    throw new Error(await readFetchError(res, `HTTP ${res.status} ${res.statusText}`));
-  }
-  const data = await res.json();
-
-  if (Array.isArray(data.data)) {
-    return normalizeFetchedModels(data.data, type);
-  }
-  if (Array.isArray(data.models)) {
-    return normalizeFetchedModels(data.models, type);
-  }
-  if (Array.isArray(data)) {
-    return normalizeFetchedModels(data, type);
-  }
-  return [];
+  const failure = pickProviderModelsFailure(failures);
+  throw new Error(failure?.message ?? "Failed to fetch model list");
 }
