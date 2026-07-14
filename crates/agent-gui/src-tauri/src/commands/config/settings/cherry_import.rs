@@ -82,50 +82,114 @@ struct CherryImportScan {
 #[tauri::command]
 pub async fn settings_list_cherry_studio_providers() -> Result<CherryProvidersResponse, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let candidates = cherry_user_data_candidates();
-        let mut read_errors = Vec::new();
-
-        for data_path in &candidates {
-            let sqlite_path = data_path.join("cherrystudio.sqlite");
-            if !sqlite_path.is_file() {
-                continue;
-            }
-            match cherry_read_v2(&sqlite_path, data_path) {
-                Ok(scan) => return Ok(cherry_scan_response(scan)),
-                Err(error) => read_errors.push(error),
-            }
-        }
-
-        for data_path in &candidates {
-            let leveldb_path = data_path.join("Local Storage").join("leveldb");
-            if !leveldb_path.is_dir() {
-                continue;
-            }
-            match cherry_read_v1(&leveldb_path, data_path) {
-                Ok(scan) => return Ok(cherry_scan_response(scan)),
-                Err(error) => read_errors.push(error),
-            }
-        }
-
-        if !read_errors.is_empty() {
-            return Err(read_errors.join("；"));
-        }
-
-        Ok(CherryProvidersResponse {
-            status: "success".to_string(),
-            message: "未发现 Cherry Studio 供应商数据".to_string(),
-            version: String::new(),
-            data_path: candidates
-                .first()
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            total_provider_count: 0,
-            enabled_provider_count: 0,
-            providers: Vec::new(),
-        })
+        cherry_scan_candidates(&cherry_user_data_candidates(), false)
     })
     .await
     .map_err(|error| format!("settings_list_cherry_studio_providers join 失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn settings_list_cherry_studio_providers_from_path(
+    data_path: String,
+) -> Result<CherryProvidersResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let selected = PathBuf::from(data_path.trim());
+        if selected.as_os_str().is_empty() {
+            return Err("未选择 Cherry Studio 数据目录".to_string());
+        }
+        cherry_scan_candidates(&cherry_manual_data_candidates(&selected), true)
+    })
+    .await
+    .map_err(|error| {
+        format!("settings_list_cherry_studio_providers_from_path join 失败：{error}")
+    })?
+}
+
+fn cherry_scan_candidates(
+    candidates: &[PathBuf],
+    require_data: bool,
+) -> Result<CherryProvidersResponse, String> {
+    let mut read_errors = Vec::new();
+
+    for data_path in candidates {
+        let sqlite_path = data_path.join("cherrystudio.sqlite");
+        if !sqlite_path.is_file() {
+            continue;
+        }
+        match cherry_read_v2(&sqlite_path, data_path) {
+            Ok(scan) => return Ok(cherry_scan_response(scan)),
+            Err(error) => read_errors.push(format!("{}：{error}", data_path.display())),
+        }
+    }
+
+    for data_path in candidates {
+        let leveldb_path = data_path.join("Local Storage").join("leveldb");
+        if !leveldb_path.is_dir() {
+            continue;
+        }
+        match cherry_read_v1(&leveldb_path, data_path) {
+            Ok(scan) => return Ok(cherry_scan_response(scan)),
+            Err(error) => read_errors.push(format!("{}：{error}", data_path.display())),
+        }
+    }
+
+    if require_data {
+        if !read_errors.is_empty() {
+            return Err(format!(
+                "选择的目录不是有效的 Cherry Studio 数据目录：{}",
+                read_errors.join("；")
+            ));
+        }
+        return Err(format!(
+            "选择的目录中未发现 Cherry Studio 数据，请检查以下位置：{}",
+            candidates
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
+    }
+
+    if !read_errors.is_empty() {
+        return Err(read_errors.join("；"));
+    }
+    Ok(CherryProvidersResponse {
+        status: "success".to_string(),
+        message: "未发现 Cherry Studio 供应商数据".to_string(),
+        version: String::new(),
+        data_path: candidates
+            .first()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        total_provider_count: 0,
+        enabled_provider_count: 0,
+        providers: Vec::new(),
+    })
+}
+
+fn cherry_manual_data_candidates(selected: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    cherry_push_unique_path(&mut candidates, selected.to_path_buf());
+    cherry_push_unique_path(&mut candidates, selected.join("data"));
+    cherry_push_unique_path(&mut candidates, selected.join("CherryStudio"));
+    cherry_push_unique_path(&mut candidates, selected.join("Cherry Studio"));
+
+    if selected.file_name().is_some_and(|name| name == "leveldb")
+        && selected.parent().and_then(Path::file_name)
+            == Some(std::ffi::OsStr::new("Local Storage"))
+    {
+        if let Some(user_data) = selected.parent().and_then(Path::parent) {
+            cherry_push_unique_path(&mut candidates, user_data.to_path_buf());
+        }
+    } else if selected
+        .file_name()
+        .is_some_and(|name| name == "Local Storage")
+    {
+        if let Some(user_data) = selected.parent() {
+            cherry_push_unique_path(&mut candidates, user_data.to_path_buf());
+        }
+    }
+    candidates
 }
 
 fn cherry_scan_response(scan: CherryImportScan) -> CherryProvidersResponse {

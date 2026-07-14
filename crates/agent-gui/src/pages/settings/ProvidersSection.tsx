@@ -8,6 +8,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FolderOpen,
   GeminiIcon,
   Key,
   Loader2,
@@ -117,6 +118,19 @@ function ProviderBrandIcon({ type }: { type: ProviderId }) {
 }
 
 const REDACTED_API_KEY_DISPLAY = "API Key";
+const CHERRY_DATA_PATH_STORAGE_KEY = "liveagent.cherryStudioDataPath";
+
+function readCherryDataPath() {
+  try {
+    return localStorage.getItem(CHERRY_DATA_PATH_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function cherryDataPathLabel(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
 
 function normalizeModelDomId(modelId: string) {
   return modelId.replace(/[^a-zA-Z0-9_-]+/g, "-");
@@ -1170,10 +1184,13 @@ function ProviderList(props: {
   cherryLoading: boolean;
   cherryImporting: boolean;
   cherryMessage: string | null;
+  cherryDataPath: string | null;
   onEnsureThirdPartyScan: () => void;
   onRefreshThirdPartyProviders: () => void;
   onOpenCcsImport: () => void;
   onOpenCherryImport: () => void;
+  onChooseCherryDataDirectory: () => void;
+  onResetCherryDataDirectory: () => void;
 }) {
   const { t } = useLocale();
   const {
@@ -1191,10 +1208,13 @@ function ProviderList(props: {
     cherryLoading,
     cherryImporting,
     cherryMessage,
+    cherryDataPath,
     onEnsureThirdPartyScan,
     onRefreshThirdPartyProviders,
     onOpenCcsImport,
     onOpenCherryImport,
+    onChooseCherryDataDirectory,
+    onResetCherryDataDirectory,
   } = props;
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const filtered = providers.filter((provider) => provider.type === type);
@@ -1353,6 +1373,33 @@ function ProviderList(props: {
                     <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
                   ) : null}
                 </DropdownMenuItem>
+                <DropdownMenuSeparator className="my-1 bg-border/40" />
+                <DropdownMenuItem
+                  className="model-selector-item cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2.5"
+                  disabled={cherryLoading || cherryImporting}
+                  onSelect={onChooseCherryDataDirectory}
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                    <FolderOpen className="h-4 w-4" />
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="text-sm font-medium">选择 Cherry Studio 数据目录…</span>
+                    <span className="line-clamp-2 text-xs text-muted-foreground">
+                      {cherryDataPath
+                        ? `当前：${cherryDataPathLabel(cherryDataPath)}`
+                        : "支持 Windows 便携版和自定义位置"}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+                {cherryDataPath ? (
+                  <DropdownMenuItem
+                    className="model-selector-item cursor-pointer rounded-lg px-2.5 py-2 text-xs text-muted-foreground"
+                    disabled={cherryLoading || cherryImporting}
+                    onSelect={onResetCherryDataDirectory}
+                  >
+                    恢复自动检测
+                  </DropdownMenuItem>
+                ) : null}
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1439,13 +1486,18 @@ export function ProvidersSection(props: SettingsSectionProps) {
   const [cherryLoading, setCherryLoading] = useState(false);
   const [cherryImporting, setCherryImporting] = useState(false);
   const [cherryMessage, setCherryMessage] = useState<string | null>(null);
+  const [cherryDataPath, setCherryDataPath] = useState<string | null>(readCherryDataPath);
 
   async function refreshThirdPartyProviders() {
     setCcsLoading(true);
     setCherryLoading(true);
     const [ccsResult, cherryResult] = await Promise.allSettled([
       invoke<CcsProvidersResponse>("settings_list_ccswitch_providers"),
-      invoke<CherryProvidersResponse>("settings_list_cherry_studio_providers"),
+      cherryDataPath
+        ? invoke<CherryProvidersResponse>("settings_list_cherry_studio_providers_from_path", {
+            dataPath: cherryDataPath,
+          })
+        : invoke<CherryProvidersResponse>("settings_list_cherry_studio_providers"),
     ]);
     if (ccsResult.status === "fulfilled") {
       setCcsProviders(ccsResult.value);
@@ -1469,6 +1521,48 @@ export function ProvidersSection(props: SettingsSectionProps) {
     }
     setCcsLoading(false);
     setCherryLoading(false);
+  }
+
+  async function chooseCherryDataDirectory() {
+    const selected = await invoke<string | null>("system_pick_folder", {
+      initialWorkdir: cherryDataPath ?? cherryProviders?.dataPath ?? undefined,
+    });
+    if (!selected) return;
+
+    setCherryLoading(true);
+    setCherryMessage("正在扫描选择的 Cherry Studio 数据目录…");
+    try {
+      const response = await invoke<CherryProvidersResponse>(
+        "settings_list_cherry_studio_providers_from_path",
+        { dataPath: selected },
+      );
+      const resolvedPath = response.dataPath || selected;
+      localStorage.setItem(CHERRY_DATA_PATH_STORAGE_KEY, resolvedPath);
+      setCherryDataPath(resolvedPath);
+      setCherryProviders(response);
+      setCherryMessage(response.message);
+    } catch (error) {
+      setCherryMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCherryLoading(false);
+    }
+  }
+
+  function resetCherryDataDirectory() {
+    localStorage.removeItem(CHERRY_DATA_PATH_STORAGE_KEY);
+    setCherryDataPath(null);
+    setCherryProviders(null);
+    setCherryMessage("已恢复自动检测，正在重新扫描…");
+    setCherryLoading(true);
+    void invoke<CherryProvidersResponse>("settings_list_cherry_studio_providers")
+      .then((response) => {
+        setCherryProviders(response);
+        setCherryMessage(response.message);
+      })
+      .catch((error) => {
+        setCherryMessage(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setCherryLoading(false));
   }
 
   function ensureThirdPartyScan() {
@@ -1796,10 +1890,13 @@ export function ProvidersSection(props: SettingsSectionProps) {
                 cherryLoading={cherryLoading}
                 cherryImporting={cherryImporting}
                 cherryMessage={cherryMessage}
+                cherryDataPath={cherryDataPath}
                 onEnsureThirdPartyScan={ensureThirdPartyScan}
                 onRefreshThirdPartyProviders={() => void refreshThirdPartyProviders()}
                 onOpenCcsImport={() => setCcsImportType(tab)}
                 onOpenCherryImport={() => setCherryImportType(tab)}
+                onChooseCherryDataDirectory={() => void chooseCherryDataDirectory()}
+                onResetCherryDataDirectory={resetCherryDataDirectory}
               />
             </div>
           ))}

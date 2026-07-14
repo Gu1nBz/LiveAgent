@@ -1086,6 +1086,25 @@ mod tests {
     }
 
     #[test]
+    fn cherry_manual_data_candidates_support_portable_and_nested_directories() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let portable = root.path().join("CherryStudioPortable");
+        let data = portable.join("data");
+        let local_storage = data.join("Local Storage");
+        let leveldb = local_storage.join("leveldb");
+
+        let portable_candidates = cherry_manual_data_candidates(&portable);
+        assert!(portable_candidates.contains(&portable));
+        assert!(portable_candidates.contains(&data));
+
+        let local_storage_candidates = cherry_manual_data_candidates(&local_storage);
+        assert!(local_storage_candidates.contains(&data));
+
+        let leveldb_candidates = cherry_manual_data_candidates(&leveldb);
+        assert!(leveldb_candidates.contains(&data));
+    }
+
+    #[test]
     fn cherry_normalize_routed_base_url_removes_endpoint_marker() {
         assert_eq!(
             cherry_normalize_routed_base_url("https://example.test/v1/chat/completions#"),
