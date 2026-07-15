@@ -4,6 +4,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { CronPromptRunner } from "./components/cron/CronPromptRunner";
 import { MemoryOrganizerHost } from "./components/memory/useMemoryOrganizer";
+import { PetWindowApp } from "./components/pet/PetWindowApp";
 import { WindowsTitleBar } from "./components/WindowsTitleBar";
 import { LocaleContext, t as translate } from "./i18n";
 import { type AppUpdateController, useAppUpdateController } from "./lib/appUpdates";
@@ -123,7 +124,7 @@ function applyRuntimeSystemDefaults(settings: AppSettings, defaultWorkdir: strin
   });
 }
 
-export default function App() {
+function MainApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SectionId>("system");
   const [settingsReady, setSettingsReady] = useState(false);
@@ -438,4 +439,9 @@ export default function App() {
       </AppChrome>
     </LocaleContext.Provider>
   );
+}
+
+export default function App() {
+  const isPetWindow = new URLSearchParams(window.location.search).get("window") === "pet";
+  return isPetWindow ? <PetWindowApp /> : <MainApp />;
 }

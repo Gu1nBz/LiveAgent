@@ -9,6 +9,7 @@ export type SectionId =
   | "systemTools"
   | "providers"
   | "agents"
+  | "pet"
   | "ssh"
   | "memory"
   | "hooks"

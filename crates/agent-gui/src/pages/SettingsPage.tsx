@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   BookOpen,
+  Bot,
   Brain,
   Clock3,
   Cloud,
@@ -20,6 +21,7 @@ import { AgentsSection } from "./settings/AgentsSection";
 import { CronSection } from "./settings/CronSection";
 import { HooksSection } from "./settings/HooksSection";
 import { MemoryPanel } from "./settings/memory/MemoryPanel";
+import { PetSection } from "./settings/PetSection";
 import { ProvidersSection } from "./settings/ProvidersSection";
 import { RemoteSection } from "./settings/RemoteSection";
 import { SshSection } from "./settings/SshSection";
@@ -96,6 +98,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "system", icon: <Settings2 className="h-3.5 w-3.5" /> },
       { id: "providers", icon: <Cpu className="h-3.5 w-3.5" /> },
       { id: "agents", icon: <BookOpen className="h-3.5 w-3.5" /> },
+      { id: "pet", icon: <Bot className="h-3.5 w-3.5" /> },
     ],
   },
   {
@@ -143,6 +146,7 @@ export function SettingsPage(props: SettingsPageProps) {
     systemTools: t("settings.navSystemTools"),
     providers: t("settings.navProviders"),
     agents: t("settings.navAgents"),
+    pet: t("settings.navPet"),
     ssh: t("settings.navSsh"),
     memory: t("settings.navMemory"),
     hooks: t("settings.navHooks"),
@@ -190,6 +194,8 @@ export function SettingsPage(props: SettingsPageProps) {
         return <CronSection settings={settings} setSettings={setSettings} />;
       case "agents":
         return <AgentsSection settings={settings} setSettings={setSettings} />;
+      case "pet":
+        return <PetSection settings={settings} setSettings={setSettings} />;
       case "ssh":
         return <SshSection settings={settings} setSettings={setSettings} />;
       case "remote":

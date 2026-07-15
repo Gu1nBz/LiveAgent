@@ -26,6 +26,8 @@ import { createFsTools } from "./fsTools";
 import { createMcpManagerTools } from "./mcpManagerTools";
 import { createMcpTools } from "./mcpTools";
 import { createMemoryTools } from "./memoryTools";
+import { createNativeImageTools } from "./nativeImageTools";
+import { createPetManagerTools } from "./petManagerTools";
 import { createShellTools } from "./shellTools";
 import type { SkillAccessPolicy } from "./skillAccessPolicy";
 import { createSkillTools } from "./skillTools";
@@ -206,6 +208,10 @@ async function buildBaseBuiltinToolBundles(params: BuildBuiltinBaseToolRegistryP
       workdir: params.workdir,
       mode: params.memoryToolMode ?? "rw",
     }),
+    ...(params.runtimeScope === "chat"
+      ? [createNativeImageTools({ workdir: params.workdir })]
+      : []),
+    ...(params.runtimeScope === "chat" ? [createPetManagerTools({ workdir: params.workdir })] : []),
     createTunnelManagerTools({
       enabled: params.remoteWebTunnelsEnabled === true && params.runtimeScope === "chat",
       runtimeScope: params.runtimeScope,

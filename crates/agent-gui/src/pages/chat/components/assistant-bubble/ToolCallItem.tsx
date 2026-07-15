@@ -76,6 +76,29 @@ function getToolDisplay(toolCall: { name: string; arguments?: Record<string, unk
         tags.push({ label: "scope", value: args.scope as string });
       if (typeof args.type === "string") tags.push({ label: "type", value: args.type as string });
       return { type: "generic" as const, path: null, pattern: null, tags };
+    case "ImageManager":
+      if (typeof args.action === "string")
+        tags.push({ label: "action", value: args.action as string });
+      if (typeof args.job_id === "string")
+        tags.push({ label: "job", value: args.job_id as string });
+      return { type: "generic" as const, path: null, pattern: null, tags };
+    case "ImageGenerate":
+    case "ImageEdit":
+      if (typeof args.model === "string")
+        tags.push({ label: "model", value: args.model as string });
+      if (typeof args.size === "string") tags.push({ label: "size", value: args.size as string });
+      if (typeof args.n === "number") tags.push({ label: "count", value: String(args.n) });
+      if (Array.isArray(args.input_paths))
+        tags.push({ label: "inputs", value: String(args.input_paths.length) });
+      if (typeof args.prompt === "string")
+        tags.push({ label: "prompt", value: `${(args.prompt as string).length} chars` });
+      return { type: "generic" as const, path: null, pattern: null, tags };
+    case "PetManager":
+      if (typeof args.action === "string")
+        tags.push({ label: "action", value: args.action as string });
+      if (typeof args.source_dir === "string")
+        tags.push({ label: "package", value: args.source_dir as string });
+      return { type: "generic" as const, path: null, pattern: null, tags };
     case "McpManager":
       if (typeof args.action === "string")
         tags.push({ label: "action", value: args.action as string });

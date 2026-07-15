@@ -44,7 +44,10 @@ pub struct ManagedProcessNotifier {
 
 impl ManagedProcessNotifier {
     fn changed(&self, snapshot: &ManagedProcessSnapshot) {
-        if let Err(error) = self.app_handle.emit(MANAGED_PROCESS_CHANGED_EVENT, snapshot) {
+        if let Err(error) = self
+            .app_handle
+            .emit(MANAGED_PROCESS_CHANGED_EVENT, snapshot)
+        {
             eprintln!("emit {MANAGED_PROCESS_CHANGED_EVENT} failed: {error}");
         }
         if let Some(gateway) = self.gateway.upgrade() {
@@ -597,10 +600,7 @@ impl ManagedProcessRegistry {
                     signal_process_tree_by_pid(entry.pid, true);
                 } else {
                     // Restored entry: no handle, terminate the group by pid.
-                    terminate_process_tree_by_pid(
-                        entry.pid,
-                        Duration::from_millis(STOP_GRACE_MS),
-                    );
+                    terminate_process_tree_by_pid(entry.pid, Duration::from_millis(STOP_GRACE_MS));
                     entry.exit_code = None;
                 }
                 entry.finished_at = Some(now_ms());
@@ -735,10 +735,7 @@ impl ManagedProcessRegistry {
                 RecordProbe::Unknown => {}
                 RecordProbe::AliveMatching if record.isolated => restored.push(record),
                 RecordProbe::AliveMatching => {
-                    terminate_process_tree_by_pid(
-                        record.pid,
-                        Duration::from_millis(STOP_GRACE_MS),
-                    );
+                    terminate_process_tree_by_pid(record.pid, Duration::from_millis(STOP_GRACE_MS));
                     drop_ids.push(record.id);
                 }
                 RecordProbe::Gone => drop_ids.push(record.id),
@@ -1182,9 +1179,7 @@ mod tests {
 
         // Next launch.
         let registry = ManagedProcessRegistry::with_journal_conn(open_conn());
-        registry
-            .startup_reconcile()
-            .expect("reconcile should work");
+        registry.startup_reconcile().expect("reconcile should work");
 
         assert!(
             wait_until(|| !process_alive(plain_pid)),

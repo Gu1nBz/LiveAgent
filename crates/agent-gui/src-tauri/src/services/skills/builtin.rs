@@ -17,6 +17,62 @@ pub(crate) struct BuiltinSkill {
     pub(crate) files: &'static [BuiltinSkillFile],
 }
 
+const API2IMG_FILES: &[BuiltinSkillFile] = &[
+    BuiltinSkillFile {
+        path: "LICENSE.txt",
+        content: include_str!("../../../prompt/skills/api2img/LICENSE.txt"),
+    },
+    BuiltinSkillFile {
+        path: "NOTICE.txt",
+        content: include_str!("../../../prompt/skills/api2img/NOTICE.txt"),
+    },
+    BuiltinSkillFile {
+        path: "SKILL.md",
+        content: include_str!("../../../prompt/skills/api2img/SKILL.md"),
+    },
+    BuiltinSkillFile {
+        path: "references/ai-adapter.md",
+        content: include_str!("../../../prompt/skills/api2img/references/ai-adapter.md"),
+    },
+];
+
+const HATCH_PET_FILES: &[BuiltinSkillFile] = &[
+    BuiltinSkillFile {
+        path: "LICENSE.txt",
+        content: include_str!("../../../prompt/skills/hatch-pet/LICENSE.txt"),
+    },
+    BuiltinSkillFile {
+        path: "NOTICE.txt",
+        content: include_str!("../../../prompt/skills/hatch-pet/NOTICE.txt"),
+    },
+    BuiltinSkillFile {
+        path: "SKILL.md",
+        content: include_str!("../../../prompt/skills/hatch-pet/SKILL.md"),
+    },
+    BuiltinSkillFile {
+        path: "references/animation-rows.md",
+        content: include_str!("../../../prompt/skills/hatch-pet/references/animation-rows.md"),
+    },
+    BuiltinSkillFile {
+        path: "references/liveagent-pet-contract.md",
+        content: include_str!(
+            "../../../prompt/skills/hatch-pet/references/liveagent-pet-contract.md"
+        ),
+    },
+    BuiltinSkillFile {
+        path: "references/qa-rubric.md",
+        content: include_str!("../../../prompt/skills/hatch-pet/references/qa-rubric.md"),
+    },
+    BuiltinSkillFile {
+        path: "references/visual-generation.md",
+        content: include_str!("../../../prompt/skills/hatch-pet/references/visual-generation.md"),
+    },
+    BuiltinSkillFile {
+        path: "references/workflow.md",
+        content: include_str!("../../../prompt/skills/hatch-pet/references/workflow.md"),
+    },
+];
+
 const SKILLS_INSTALLER_FILES: &[BuiltinSkillFile] = &[
     BuiltinSkillFile {
         path: "SKILL.md",
@@ -56,6 +112,14 @@ const SKILLS_CREATOR_FILES: &[BuiltinSkillFile] = &[
 ];
 
 pub(crate) const BUILTIN_AGENT_SKILLS: &[BuiltinSkill] = &[
+    BuiltinSkill {
+        name: "api2img",
+        files: API2IMG_FILES,
+    },
+    BuiltinSkill {
+        name: "hatch-pet",
+        files: HATCH_PET_FILES,
+    },
     BuiltinSkill {
         name: "skills-installer",
         files: SKILLS_INSTALLER_FILES,

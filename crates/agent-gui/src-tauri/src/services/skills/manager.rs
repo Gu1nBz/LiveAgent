@@ -27,8 +27,7 @@ fn require_payload_string<'a>(
     key: &str,
     action: &str,
 ) -> Result<&'a str, String> {
-    object_string(payload, key)
-        .ok_or_else(|| format!("SkillsManager {action} requires {key}"))
+    object_string(payload, key).ok_or_else(|| format!("SkillsManager {action} requires {key}"))
 }
 
 pub fn system_manage_skill_sync(payload: Value) -> Result<SystemManageSkillResponse, String> {

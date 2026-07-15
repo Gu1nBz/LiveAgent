@@ -1,0 +1,9 @@
+api2img LiveAgent native adaptation
+
+Derived from api2img-skill by Voler:
+https://github.com/MrVoler/api2img-skill
+
+LiveAgent changed the original command-oriented Skill into instructions for
+LiveAgent's native ImageManager, ImageGenerate, and ImageEdit tools. The
+installer, CLI, external-agent adapters, and configuration files are not
+redistributed in this built-in Skill.

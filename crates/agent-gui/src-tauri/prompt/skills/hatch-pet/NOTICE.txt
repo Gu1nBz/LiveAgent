@@ -1,0 +1,7 @@
+hatch-pet LiveAgent native adaptation
+
+This distribution modifies the Apache-2.0 hatch-pet Skill for LiveAgent. The
+entry instructions, atlas contract, generation workflow, and packaging flow
+were changed to use LiveAgent's native ImageManager, ImageGenerate, ImageEdit,
+and PetManager tools. Agent-specific paths, external runtimes, and bundled
+raster-processing scripts were removed.

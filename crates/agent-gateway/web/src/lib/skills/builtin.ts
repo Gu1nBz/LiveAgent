@@ -1,4 +1,9 @@
-const ALWAYS_ENABLED_SKILL_NAMES = ["skills-creator", "skills-installer"] as const;
+const ALWAYS_ENABLED_SKILL_NAMES = [
+  "skills-creator",
+  "skills-installer",
+  "hatch-pet",
+  "api2img",
+] as const;
 
 const alwaysEnabledSkillNameSet = new Set<string>(ALWAYS_ENABLED_SKILL_NAMES);
 

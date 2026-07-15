@@ -398,6 +398,8 @@ test("builtin agent skills stay selected and sort first", () => {
   assert.deepEqual(skillBuiltinHelpers.mergeAlwaysEnabledSkillNames(["demo-skill"]), [
     "skills-creator",
     "skills-installer",
+    "hatch-pet",
+    "api2img",
     "demo-skill",
   ]);
   assert.deepEqual(
@@ -406,10 +408,13 @@ test("builtin agent skills stay selected and sort first", () => {
       { name: "skills-installer" },
       { name: "a-skill" },
       { name: "skills-creator" },
+      { name: "api2img" },
+      { name: "hatch-pet" },
     ]).map((skill) => skill.name),
-    ["skills-creator", "skills-installer", "a-skill", "z-skill"],
+    ["skills-creator", "skills-installer", "hatch-pet", "api2img", "a-skill", "z-skill"],
   );
   assert.equal(skillBuiltinHelpers.isUserSelectableSkillName("skills-creator"), false);
+  assert.equal(skillBuiltinHelpers.isUserSelectableSkillName("hatch-pet"), false);
   assert.equal(skillBuiltinHelpers.isUserSelectableSkillName("workflow-skill"), true);
 });
 

@@ -205,6 +205,133 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  html.pet-window,
+  html.pet-window body,
+  html.pet-window #root {
+    background: transparent !important;
+    overflow: hidden;
+  }
+
+  .pet-status-shell {
+    position: relative;
+    display: flex;
+    min-width: 20rem;
+    justify-content: center;
+  }
+
+  .pet-status-list {
+    display: flex;
+    width: 20rem;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .pet-status-shell[data-pet-placement="below"] .pet-status-list {
+    margin-top: 0.6rem;
+    margin-bottom: 0;
+  }
+
+  .pet-status-bubble {
+    position: relative;
+    display: flex;
+    width: 20rem;
+    align-items: center;
+    gap: 0.65rem;
+    margin-bottom: 0;
+    border: 1px solid rgb(0 0 0 / 12%);
+    border-radius: 1rem;
+    background: rgb(255 255 255 / 96%);
+    padding: 0.48rem 0.7rem 0.48rem 0.8rem;
+    color: rgb(39 39 42);
+    box-shadow: 0 3px 12px rgb(0 0 0 / 9%);
+    animation: petStatusBubbleIn 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .pet-status-control {
+    position: absolute;
+    top: -0.25rem;
+    right: -1.1rem;
+    z-index: 20;
+    display: grid;
+    width: 1.55rem;
+    height: 1.55rem;
+    cursor: pointer;
+    place-items: center;
+    border-radius: 9999px;
+    box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+  }
+
+  .pet-drag-hitbox {
+    position: absolute;
+    z-index: 10;
+  }
+
+  .pet-status-count {
+    border: 1px solid rgb(22 163 74 / 18%);
+    background: rgb(22 163 74 / 98%);
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 500;
+    animation: petStatusBubbleIn 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .pet-status-toggle {
+    border: 1px solid rgb(0 0 0 / 8%);
+    background: rgb(244 244 245 / 96%);
+    color: rgb(82 82 91);
+  }
+
+  .pet-status-toggle:hover {
+    background: rgb(228 228 231 / 98%);
+  }
+
+  .pet-status-spinner,
+  .pet-status-complete,
+  .pet-status-failed {
+    display: grid;
+    width: 0.9rem;
+    height: 0.9rem;
+    flex: none;
+    place-items: center;
+    border-radius: 9999px;
+    font-size: 0.62rem;
+    line-height: 1;
+  }
+
+  .pet-status-spinner {
+    border: 1.5px solid rgb(161 161 170 / 45%);
+    border-top-color: rgb(82 82 91);
+    animation: petStatusSpinner 800ms linear infinite;
+  }
+
+  .pet-status-complete {
+    border: 1px solid rgb(34 197 94 / 35%);
+    color: rgb(22 163 74);
+  }
+
+  .pet-status-failed {
+    border: 1px solid rgb(239 68 68 / 35%);
+    color: rgb(220 38 38);
+  }
+
+  @keyframes petStatusBubbleIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes petStatusSpinner {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   input,
   textarea,
   [contenteditable="true"],

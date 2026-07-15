@@ -191,6 +191,11 @@ jobs:
           CARGO_TERM_COLOR: always
         run: cargo test --manifest-path crates/agent-gui/src-tauri/Cargo.toml chat_history --lib
 
+      - name: Test pet import and asset protocol
+        env:
+          CARGO_TERM_COLOR: always
+        run: cargo test --manifest-path crates/agent-gui/src-tauri/Cargo.toml commands::app_commands::pet::tests --lib
+
   mirror:
     name: GUI/WebUI Mirror Check
     runs-on: ubuntu-latest

@@ -499,7 +499,10 @@ where
             stdio_factory().map_err(|err| format!("Failed to prepare shell stdio: {err}"))?;
         let mut c = Command::new(&candidate.program);
         c.args(&candidate.args);
-        c.envs(envs.iter().map(|(key, value)| (key.as_str(), value.as_str())));
+        c.envs(
+            envs.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
         if candidate.augment_macos_path {
             maybe_augment_macos_path(&mut c);
         }

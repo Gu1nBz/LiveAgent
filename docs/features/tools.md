@@ -49,7 +49,7 @@
 | 能力 | 说明 |
 |---|---|
 | 固定 root | Skills runtime root 是 `~/.liveagent/skills`。 |
-| always-on | `skills-creator`、`skills-installer` 是 builtin always enabled skills。 |
+| always-on | `skills-creator`、`skills-installer`、`hatch-pet`、`api2img` 是 builtin always enabled skills；宠物任务由 `hatch-pet` 编排，`api2img` 负责原生图像生成、编辑，以及根据脱敏文档配置声明式同步/异步中转协议。 |
 | 文件访问 | 已启用 skill 内部文件可通过 FS tools 的 `root="skills"` 相对路径访问。 |
 | 管理操作 | 创建、安装、ClawHub 安装、validate、package 应通过 `SkillsManager`。 |
 | 访问策略 | `SkillAccessPolicy` 控制模型能否访问/修改 skills root。 |

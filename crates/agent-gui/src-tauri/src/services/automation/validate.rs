@@ -167,15 +167,16 @@ fn parse_headers(
     }
 }
 
-fn parse_selected_model(
-    value: Option<&Value>,
-    label: &str,
-) -> Result<SelectedModelRef, String> {
+fn parse_selected_model(value: Option<&Value>, label: &str) -> Result<SelectedModelRef, String> {
     let map = value
         .and_then(Value::as_object)
         .ok_or_else(|| format!("{label}.selectedModel 不能为空"))?;
     Ok(SelectedModelRef {
-        custom_provider_id: required_string(map, "customProviderId", &format!("{label}.selectedModel"))?,
+        custom_provider_id: required_string(
+            map,
+            "customProviderId",
+            &format!("{label}.selectedModel"),
+        )?,
         model: required_string(map, "model", &format!("{label}.selectedModel"))?,
     })
 }
@@ -298,9 +299,12 @@ pub fn validate_hook(value: Value, label: &str) -> Result<HookDef, String> {
 
 /// Merge a partial patch onto a stored item (top-level keys), returning the
 /// merged object for re-validation.
-pub fn merge_patch(stored: &impl serde::Serialize, patch: Value, label: &str) -> Result<Value, String> {
-    let base = serde_json::to_value(stored)
-        .map_err(|e| format!("{label} 序列化失败：{e}"))?;
+pub fn merge_patch(
+    stored: &impl serde::Serialize,
+    patch: Value,
+    label: &str,
+) -> Result<Value, String> {
+    let base = serde_json::to_value(stored).map_err(|e| format!("{label} 序列化失败：{e}"))?;
     let mut merged = expect_object(base, label)?;
     let patch = expect_object(patch, &format!("{label}.patch"))?;
     for (key, value) in patch {
@@ -314,10 +318,7 @@ pub fn merge_patch(stored: &impl serde::Serialize, patch: Value, label: &str) ->
 
 /// Replace masked header values in `incoming` with the currently stored values
 /// so remote clients can round-trip requests without seeing secrets.
-pub fn restore_masked_headers(
-    incoming: &mut Value,
-    stored_requests: Option<&[HttpRequestSpec]>,
-) {
+pub fn restore_masked_headers(incoming: &mut Value, stored_requests: Option<&[HttpRequestSpec]>) {
     let Some(requests) = incoming.get_mut("requests").and_then(Value::as_array_mut) else {
         return;
     };

@@ -277,18 +277,24 @@ impl AutomationStore {
     /// Queue a prompt run for the frontend executor. The run row *is* the
     /// pending queue — it survives restarts and carries the lease deadline.
     pub fn queue_prompt_run(&self, task: &CronTask) -> Result<PromptQueueOutcome, String> {
-        let prompt = task.prompt.as_deref().unwrap_or_default().trim().to_string();
+        let prompt = task
+            .prompt
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if prompt.is_empty() {
             return Err("Auto Prompt task has no prompt content.".to_string());
         }
-        let selected_model = task
-            .selected_model
-            .as_ref()
-            .ok_or_else(|| "Auto Prompt task is missing the selected model configuration.".to_string())?;
+        let selected_model = task.selected_model.as_ref().ok_or_else(|| {
+            "Auto Prompt task is missing the selected model configuration.".to_string()
+        })?;
         let provider_id = selected_model.custom_provider_id.trim().to_string();
         let model = selected_model.model.trim().to_string();
         if provider_id.is_empty() || model.is_empty() {
-            return Err("Auto Prompt task has an invalid selected model configuration.".to_string());
+            return Err(
+                "Auto Prompt task has an invalid selected model configuration.".to_string(),
+            );
         }
 
         let request = {
@@ -731,10 +737,7 @@ fn ensure_id(item: &mut Value) {
         .unwrap_or_default()
         .is_empty();
     if missing {
-        map.insert(
-            "id".to_string(),
-            Value::String(Uuid::new_v4().to_string()),
-        );
+        map.insert("id".to_string(), Value::String(Uuid::new_v4().to_string()));
     }
 }
 

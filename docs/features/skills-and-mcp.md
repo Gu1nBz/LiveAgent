@@ -15,10 +15,12 @@
 
 | Skill | 说明 |
 |---|---|
+| `api2img` | 指导模型通过 LiveAgent 原生 `ImageManager` / `ImageGenerate` / `ImageEdit` 生成和编辑图片；可根据用户提供的脱敏接口文档生成受约束的同步/异步 HTTP 适配配置，不依赖外部 CLI。 |
+| `hatch-pet` | 指导模型生成 11 行动画 strip，并通过原生 `PetManager build_generated_and_install` 组装、校验、安装和激活 v2 宠物。 |
 | `skills-creator` | 指导模型创建新 Skill。 |
 | `skills-installer` | 指导模型安装本地/GitHub/压缩包/ClawHub Skill。 |
 
-这两个 builtin skill 在前端 `lib/skills/builtin.ts` 中作为 always enabled 名称处理，Rust 启动或扫描时可通过 `system_ensure_builtin_skills` seed 到 runtime root。
+这四个 builtin skill 都会在 Rust 启动或扫描时通过 `system_ensure_builtin_skills` seed 到 runtime root，并受 builtin 修改/删除保护；前端 `lib/skills/builtin.ts` 将它们合并为 always enabled。宠物创建/修复请求以 `hatch-pet` 为编排层，`api2img` 只作为其原生图像生成/编辑层，避免将完整宠物任务误化约为单图产出。
 
 ## SkillsManager
 

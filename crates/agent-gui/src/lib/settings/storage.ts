@@ -7,6 +7,7 @@ import {
   getDefaultSettings,
   normalizeChatRuntimeControls,
   normalizeFontScaleSettings,
+  normalizePetSettings,
   normalizeRightDockSettings,
   normalizeSelectedModel,
   normalizeSettings,
@@ -41,6 +42,7 @@ type LocalUiSettings = {
   selectedModel?: unknown;
   theme?: unknown;
   locale?: unknown;
+  pet?: unknown;
 };
 
 export type SettingsSaveState =
@@ -67,6 +69,7 @@ function readLocalUiSettings(): {
   selectedModel?: SelectedModel;
   theme: Theme;
   locale: Locale;
+  pet: AppSettings["pet"];
 } {
   const defaults = getDefaultSettings();
 
@@ -97,6 +100,7 @@ function readLocalUiSettings(): {
         selectedModel: defaults.selectedModel,
         theme: defaults.theme,
         locale: defaults.locale,
+        pet: defaults.pet,
       };
     }
 
@@ -113,6 +117,7 @@ function readLocalUiSettings(): {
       selectedModel: normalizeSelectedModel(parsed?.selectedModel),
       theme: normalizeTheme(parsed?.theme ?? defaults.theme),
       locale: normalizeLocale(parsed?.locale ?? defaults.locale),
+      pet: normalizePetSettings(parsed?.pet ?? defaults.pet),
     };
   } catch {
     return {
@@ -123,6 +128,7 @@ function readLocalUiSettings(): {
       selectedModel: defaults.selectedModel,
       theme: defaults.theme,
       locale: defaults.locale,
+      pet: defaults.pet,
     };
   }
 }
@@ -137,6 +143,7 @@ function writeLocalUiSettings(
     | "selectedModel"
     | "theme"
     | "locale"
+    | "pet"
   >,
 ) {
   const payload = {
@@ -147,6 +154,7 @@ function writeLocalUiSettings(
     selectedModel: settings.selectedModel,
     theme: settings.theme,
     locale: settings.locale,
+    pet: settings.pet,
   };
   localStorage.setItem(LOCAL_UI_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
 }
@@ -206,6 +214,7 @@ export async function loadPersistedSettingsWithDefaults(): Promise<PersistedSett
     selectedModel: localUi.selectedModel,
     theme: localUi.theme,
     locale: localUi.locale,
+    pet: localUi.pet,
   });
 
   return {
@@ -304,7 +313,8 @@ export async function persistSettings(
     hasChanged(prev.updates, next.updates) ||
     hasChanged(prev.selectedModel ?? null, next.selectedModel ?? null) ||
     hasChanged(prev.theme, next.theme) ||
-    hasChanged(prev.locale, next.locale)
+    hasChanged(prev.locale, next.locale) ||
+    hasChanged(prev.pet, next.pet)
   ) {
     writeLocalUiSettings({
       skills: next.skills,
@@ -314,6 +324,7 @@ export async function persistSettings(
       selectedModel: next.selectedModel,
       theme: next.theme,
       locale: next.locale,
+      pet: next.pet,
     });
   }
 

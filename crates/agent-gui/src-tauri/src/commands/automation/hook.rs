@@ -331,10 +331,7 @@ mod tests {
             script.to_string(),
             None,
             Some(format!("scope-{}", Uuid::new_v4())),
-            vec![(
-                "LIVEAGENT_HOOK_EVENT".to_string(),
-                "agent_end".to_string(),
-            )],
+            vec![("LIVEAGENT_HOOK_EVENT".to_string(), "agent_end".to_string())],
         )
         .expect("run hook script");
         assert_eq!(result.exit_code, 0);

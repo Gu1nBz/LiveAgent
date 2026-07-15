@@ -787,6 +787,7 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     /* ── Settings Nav ── */
     "settings.navSystem": "系统设置",
+    "settings.navPet": "宠物",
     "settings.navSystemTools": "系统工具",
     "settings.navProviders": "供应商配置",
     "settings.navHooks": "Hooks",
@@ -1153,6 +1154,22 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.builtinTool.todo_write.desc": "创建与更新当前会话的任务清单",
     "settings.builtinTool.todo_write.detail":
       "让模型在处理多步骤任务时列出任务清单并逐项推进状态，进度以清单卡片实时展示在对话中。清单仅保存在当前对话内，不跨对话保留；仅在对话场景注册。",
+    "settings.builtinTool.image_manager.name": "原生图片服务",
+    "settings.builtinTool.image_manager.desc": "检查和管理 LiveAgent 图片任务",
+    "settings.builtinTool.image_manager.detail":
+      "检查原生图片服务、通过 AI 对话配置 URL、API Key 和模型，并管理图片任务。工具结果不会回显完整 Key。",
+    "settings.builtinTool.image_generate.name": "生成图片",
+    "settings.builtinTool.image_generate.desc": "通过 LiveAgent 原生服务生成图片",
+    "settings.builtinTool.image_generate.detail":
+      "以可取消的后台任务调用已配置的图片 API，验证产物后写入 LiveAgent 管理目录并返回路径。",
+    "settings.builtinTool.image_edit.name": "编辑图片",
+    "settings.builtinTool.image_edit.desc": "基于一个或多个参考图编辑图片",
+    "settings.builtinTool.image_edit.detail":
+      "通过结构化参数上传经过路径校验的参考图，适合生成宠物动作、方向与修复素材。",
+    "settings.builtinTool.pet_manager.name": "宠物管理",
+    "settings.builtinTool.pet_manager.desc": "校验、安装并启用生成的宠物",
+    "settings.builtinTool.pet_manager.detail":
+      "通过临时目录、完整图集校验和原子替换安装宠物，成功后刷新宠物库并可立即启用。",
     "settings.builtinTool.cron_task_manager.name": "定时任务",
     "settings.builtinTool.cron_task_manager.desc": "创建与管理定时自动任务",
     "settings.builtinTool.cron_task_manager.detail":
@@ -2568,6 +2585,7 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     /* ── Settings Nav ── */
     "settings.navSystem": "System",
+    "settings.navPet": "Pet",
     "settings.navSystemTools": "System Tools",
     "settings.navProviders": "Providers",
     "settings.navHooks": "Hooks",
@@ -2953,6 +2971,22 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.builtinTool.todo_write.desc": "Create and update a task list for the current session",
     "settings.builtinTool.todo_write.detail":
       "Lets the model plan multi-step work as a task list and advance each item's status as it goes, shown as a live checklist card in the conversation. The list lives only in the current conversation and is not carried across conversations; chat sessions only.",
+    "settings.builtinTool.image_manager.name": "Native Image Service",
+    "settings.builtinTool.image_manager.desc": "Inspect and manage LiveAgent image jobs",
+    "settings.builtinTool.image_manager.detail":
+      "Checks the native image service, configures its URL, API key, and model through AI chat, and manages image jobs. Tool results never echo the complete key.",
+    "settings.builtinTool.image_generate.name": "Generate Image",
+    "settings.builtinTool.image_generate.desc": "Generate images through LiveAgent's native service",
+    "settings.builtinTool.image_generate.detail":
+      "Runs a cancellable image API job, validates its outputs, and returns paths in LiveAgent-managed storage.",
+    "settings.builtinTool.image_edit.name": "Edit Image",
+    "settings.builtinTool.image_edit.desc": "Edit an image from one or more references",
+    "settings.builtinTool.image_edit.detail":
+      "Uploads path-validated reference images through structured parameters for pet poses, directions, and visual repairs.",
+    "settings.builtinTool.pet_manager.name": "Pet Manager",
+    "settings.builtinTool.pet_manager.desc": "Validate, install, and activate generated pets",
+    "settings.builtinTool.pet_manager.detail":
+      "Installs a pet through staging, full atlas validation, and atomic replacement, then refreshes the pet library and can activate it immediately.",
     "settings.builtinTool.cron_task_manager.name": "Scheduled Tasks",
     "settings.builtinTool.cron_task_manager.desc": "Create and manage scheduled automations",
     "settings.builtinTool.cron_task_manager.detail":

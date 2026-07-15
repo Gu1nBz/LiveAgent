@@ -44,6 +44,12 @@ export function getToolMeta(name: string): {
       return { Icon: Eye, accent: "var(--tool-file-accent)", category: "file" };
     case "Image":
       return { Icon: ImageIcon, accent: "var(--tool-file-accent)", category: "file" };
+    case "ImageManager":
+    case "ImageGenerate":
+    case "ImageEdit":
+      return { Icon: ImageIcon, accent: "var(--tool-list-accent)", category: "system" };
+    case "PetManager":
+      return { Icon: Bot, accent: "var(--tool-list-accent)", category: "system" };
     case "SkillsManager":
       return { Icon: Eye, accent: "var(--tool-file-accent)", category: "file" };
     case "CronTaskManager":
@@ -245,6 +251,8 @@ const TOOL_CARD_ACTION_NAMES = new Set([
   "TunnelManager",
   "SSHManager",
   "ManagedProcess",
+  "ImageManager",
+  "PetManager",
 ]);
 
 export function getManagerToolActionName(toolCall: {

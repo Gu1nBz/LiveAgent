@@ -130,6 +130,20 @@ macro_rules! app_invoke_handler {
             commands::app::app_runtime_platform,
             commands::app::app_confirmed_exit,
             commands::app::app_macos_traffic_light_metrics,
+            commands::pet::pet_list,
+            commands::pet::pet_library_path,
+            commands::pet::pet_scan_codex,
+            commands::pet::pet_import_codex,
+            commands::pet::pet_build_generated,
+            commands::pet::pet_install_generated,
+            commands::pet::pet_delete,
+            commands::pet::pet_window_set_visible,
+            commands::pet::pet_window_mark_ready,
+            commands::pet::pet_window_pointer_snapshot,
+            commands::pet::pet_window_set_interaction,
+            commands::pet::pet_window_commit_position,
+            commands::pet::pet_window_constrain_position,
+            commands::pet::pet_window_reset_position,
             // Hooks
             commands::hook::hook_run_script,
             commands::hook::hook_run_http_requests,
@@ -225,6 +239,17 @@ macro_rules! app_invoke_handler {
             commands::system::system_begin_power_activity,
             commands::system::system_end_power_activity,
             commands::custom_tools::system_http_get_test,
+            commands::native_image::native_image_config_get,
+            commands::native_image::native_image_config_save,
+            commands::native_image::native_image_adapter_get,
+            commands::native_image::native_image_adapter_save,
+            commands::native_image::native_image_adapter_clear,
+            commands::native_image::native_image_doctor,
+            commands::native_image::native_image_generate_start,
+            commands::native_image::native_image_edit_start,
+            commands::native_image::native_image_job_status,
+            commands::native_image::native_image_job_cancel,
+            commands::native_image::native_image_job_export,
             commands::gateway::gateway_connect,
             commands::gateway::gateway_disconnect,
             commands::gateway::gateway_status,
@@ -403,12 +428,20 @@ pub fn run() {
         &terminal_registry,
     )));
     let allow_exit = Arc::new(AtomicBool::new(false));
+    let native_image_service = Arc::new(
+        services::native_image::NativeImageService::app_default()
+            .expect("failed to initialize LiveAgent native image service"),
+    );
 
     let app = tauri::Builder::default()
+        .register_uri_scheme_protocol("liveagent-pet", |_context, request| {
+            commands::pet::pet_asset_response(request)
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_mcp_bridge::init())
         .manage(Arc::new(commands::mcp::McpRuntimeManager::default()))
+        .manage(Arc::clone(&native_image_service))
         .manage(Arc::clone(&memory_store))
         .manage(Arc::clone(&power_activity))
         .manage(Arc::new(runtime::shell_runner::ShellRunRegistry::default()))

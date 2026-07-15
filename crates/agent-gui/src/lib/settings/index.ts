@@ -131,6 +131,22 @@ export type UpdateSettings = {
   includePrereleases: boolean;
 };
 
+export type PetSettings = {
+  enabled: boolean;
+  activePetId?: string;
+  displayMode: "chat-overlay" | "desktop-floating";
+  scale: number;
+  opacity: number;
+  anchor: "bottom-left" | "bottom-right";
+  pointerTracking: "off" | "nearby" | "window";
+  showStatusBubble: boolean;
+  reducedMotion: boolean;
+  lockPosition: boolean;
+  clickThrough: boolean;
+  snapToEdges: boolean;
+  alwaysOnTop: boolean;
+};
+
 export type SystemSettings = {
   executionMode: ExecutionMode;
   workdir: string;
@@ -271,6 +287,7 @@ export type AppSettings = {
   updates: UpdateSettings;
   skills: SkillsSettings;
   chatRuntimeControls: ChatRuntimeControls;
+  pet: PetSettings;
   selectedModel?: SelectedModel;
   theme: Theme;
   locale: Locale;
@@ -1751,6 +1768,27 @@ export function normalizeUpdateSettings(input: unknown): UpdateSettings {
   };
 }
 
+export function normalizePetSettings(input: unknown): PetSettings {
+  const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const scaleValue = typeof obj.scale === "number" && Number.isFinite(obj.scale) ? obj.scale : 0.72;
+  const activePetId = typeof obj.activePetId === "string" ? obj.activePetId.trim() : "";
+  return {
+    enabled: Boolean(activePetId) && obj.enabled !== false,
+    activePetId: activePetId || undefined,
+    displayMode: "desktop-floating",
+    scale: Math.min(1.25, Math.max(0.45, scaleValue)),
+    opacity: 1,
+    anchor: "bottom-right",
+    pointerTracking: "window",
+    showStatusBubble: false,
+    reducedMotion: false,
+    lockPosition: false,
+    clickThrough: false,
+    snapToEdges: false,
+    alwaysOnTop: true,
+  };
+}
+
 export function getDefaultSettings(): AppSettings {
   const customProviders = getBuiltinCustomProviders();
   return {
@@ -1795,6 +1833,7 @@ export function getDefaultSettings(): AppSettings {
       selected: mergeAlwaysEnabledSkillNames([]),
     },
     chatRuntimeControls: DEFAULT_CHAT_RUNTIME_CONTROLS,
+    pet: normalizePetSettings({}),
     selectedModel: undefined,
     theme: "light",
     locale: DEFAULT_LOCALE,
@@ -1829,6 +1868,7 @@ export function normalizeSettings(input?: Partial<AppSettings> | null): AppSetti
     chatRuntimeControls: normalizeChatRuntimeControls(
       obj.chatRuntimeControls ?? defaults.chatRuntimeControls,
     ),
+    pet: normalizePetSettings(obj.pet ?? defaults.pet),
     selectedModel,
     theme: normalizeTheme(obj.theme),
     locale: normalizeLocale(obj.locale),

@@ -62,9 +62,10 @@ impl AutomationScheduler {
     async fn run_loop(self: Arc<Self>) {
         {
             let store = Arc::clone(&self.store);
-            let recovered =
-                tauri::async_runtime::spawn_blocking(move || store.recover_interrupted_prompt_runs())
-                    .await;
+            let recovered = tauri::async_runtime::spawn_blocking(move || {
+                store.recover_interrupted_prompt_runs()
+            })
+            .await;
             match recovered {
                 Ok(Ok(count)) if count > 0 => {
                     eprintln!("automation: expired {count} prompt run(s) interrupted by restart");
@@ -389,9 +390,18 @@ fn execute_blocking(task: CronTask, workdir: String) -> CompletedRun {
 fn execute_bash(task: &CronTask, workdir: String) -> CompletedRun {
     let started_at = now_ms();
     let overall = Instant::now();
-    let script = task.script.as_deref().unwrap_or_default().trim().to_string();
+    let script = task
+        .script
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if script.is_empty() {
-        return failed_run(&task.id, "No Bash script configured for this Cron task.".to_string(), true);
+        return failed_run(
+            &task.id,
+            "No Bash script configured for this Cron task.".to_string(),
+            true,
+        );
     }
     if workdir.trim().is_empty() {
         return failed_run(
@@ -433,7 +443,11 @@ fn execute_http(task: &CronTask) -> CompletedRun {
     let overall = Instant::now();
     let requests = task.requests.clone().unwrap_or_default();
     if requests.is_empty() {
-        return failed_run(&task.id, "No HTTP requests configured for this Cron task.".to_string(), true);
+        return failed_run(
+            &task.id,
+            "No HTTP requests configured for this Cron task.".to_string(),
+            true,
+        );
     }
     let client = match build_http_client() {
         Ok(client) => client,
@@ -443,7 +457,11 @@ fn execute_http(task: &CronTask) -> CompletedRun {
     let mut sections = Vec::new();
     let mut success = true;
     for (index, request) in requests.into_iter().enumerate() {
-        let display = format!("{} {}", request.method.trim().to_uppercase(), request.url.trim());
+        let display = format!(
+            "{} {}",
+            request.method.trim().to_uppercase(),
+            request.url.trim()
+        );
         match run_single_http_request(&client, to_http_input(request)) {
             Ok(result) => sections.push(format_http_result(index + 1, &display, &result)),
             Err(error) => {

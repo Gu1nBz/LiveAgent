@@ -28,7 +28,10 @@ fn unique_suffix() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("{nanos}-{}", UNIQUE_SUFFIX_SEQ.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{nanos}-{}",
+        UNIQUE_SUFFIX_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn staging_root(dest_root: &Path) -> PathBuf {
@@ -268,7 +271,10 @@ pub(crate) fn install_skill_dir(
     })
 }
 
-pub(crate) fn normalize_conflict(value: Option<&str>, default_value: &str) -> Result<String, String> {
+pub(crate) fn normalize_conflict(
+    value: Option<&str>,
+    default_value: &str,
+) -> Result<String, String> {
     let raw = value.unwrap_or(default_value).trim();
     match raw {
         "backup" | "fail" | "overwrite" => Ok(raw.to_string()),

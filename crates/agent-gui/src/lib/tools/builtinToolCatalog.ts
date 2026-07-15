@@ -208,6 +208,38 @@ export const BUILTIN_TOOL_CATALOG: readonly BuiltinToolCatalogEntry[] = [
     runtimeScopes: CHAT_ONLY,
     conditional: true,
   },
+  {
+    id: "image_manager",
+    toolName: "ImageManager",
+    icon: "image",
+    categoryId: "intelligence",
+    isReadOnly: false,
+    runtimeScopes: CHAT_ONLY,
+  },
+  {
+    id: "image_generate",
+    toolName: "ImageGenerate",
+    icon: "image",
+    categoryId: "intelligence",
+    isReadOnly: false,
+    runtimeScopes: CHAT_ONLY,
+  },
+  {
+    id: "image_edit",
+    toolName: "ImageEdit",
+    icon: "image",
+    categoryId: "intelligence",
+    isReadOnly: false,
+    runtimeScopes: CHAT_ONLY,
+  },
+  {
+    id: "pet_manager",
+    toolName: "PetManager",
+    icon: "bot",
+    categoryId: "intelligence",
+    isReadOnly: false,
+    runtimeScopes: CHAT_ONLY,
+  },
   /* ── Automation ── */
   {
     id: "cron_task_manager",

@@ -288,6 +288,38 @@ export function buildToolsSuffix(
     );
   }
 
+  if (hasAny("ImageManager", "ImageGenerate", "ImageEdit")) {
+    sections.push(
+      [
+        "## Native Image Generation",
+        '- Run ImageManager(action="doctor") before the first ImageGenerate or ImageEdit call in an image workflow.',
+        '- If image configuration is missing, ask the user in chat for the Base URL, API key, and model, then save them together with ImageManager(action="configure_connection", base_url=..., api_key=..., model=...). Never echo the complete API key in tool-facing text or the final response.',
+        "- A complete generated pet requires both text-to-image generation and reference-image editing. These may be separate endpoints or one shared endpoint. For non-standard providers, collect documented request/response examples for both operations and do not assume that image generation automatically includes reference-image editing.",
+        '- For a non-standard relay, ask for redacted API documentation or request/response examples, call ImageManager(action="adapter_schema"), and save a declarative sync/async adapter with configure_adapter. Never generate executable adapter code, invent undocumented endpoints, or include credentials in adapter_json.',
+        "- Do not make a separate paid image request just to test an adapter. Configure it, run doctor, then use the image operation the user already requested as the real capability test.",
+        "- Use ImageGenerate for prompt-only generation. Use ImageEdit whenever one or more reference images define identity, composition, pose, or required visual details.",
+        "- These tools own their cancellable background jobs and output paths. Do not replace them with node, npx, curl, or an external image CLI.",
+        has("Image")
+          ? "- When the user should inspect a returned output, pass its exact output path to Image before the final response."
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
+  if (has("PetManager")) {
+    sections.push(
+      [
+        "## Generated Pet Installation",
+        '- Prefer PetManager(action="build_generated_and_install") for new pets. It assembles the required eleven row strips into the canonical 8x11 atlas and installs the package in one validated flow.',
+        "- For an already assembled package, keep pet.json and its declared spritesheet together inside the current workspace.",
+        '- Install only through PetManager(action="install_generated"). Never copy generated files directly into ~/.liveagent/pets.',
+        "- PetManager performs the authoritative atlas validation, atomic replacement, library refresh, and optional activation.",
+      ].join("\n"),
+    );
+  }
+
   if (has("Bash")) {
     const bashPlatformLines =
       runtimePlatform === "windows"

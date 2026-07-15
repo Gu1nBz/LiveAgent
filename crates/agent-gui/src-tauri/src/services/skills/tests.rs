@@ -113,8 +113,7 @@ fn readme_without_frontmatter_derives_metadata_for_management() {
     )
     .expect("write readme");
 
-    let raw_metadata =
-        read_skill_metadata_file(&dir.join("README.md")).expect("read raw metadata");
+    let raw_metadata = read_skill_metadata_file(&dir.join("README.md")).expect("read raw metadata");
     assert!(raw_metadata.name.is_none());
     assert!(raw_metadata.description.is_none());
 
@@ -280,8 +279,7 @@ fn builtin_seed_removes_retired_builtin_files() {
     ensure_builtin_agent_skills_in_root(&root).expect("seed builtins");
     let creator_dir = root.join("skills-creator");
     let retired_script = creator_dir.join("scripts").join("old_helper.py");
-    fs::create_dir_all(retired_script.parent().expect("script parent"))
-        .expect("create scripts");
+    fs::create_dir_all(retired_script.parent().expect("script parent")).expect("create scripts");
     fs::write(&retired_script, "#!/usr/bin/env python3\nprint('old')\n")
         .expect("write retired script");
 
@@ -294,6 +292,66 @@ fn builtin_seed_removes_retired_builtin_files() {
     assert_eq!(creator.action, "updated");
     assert!(creator.backup.is_some());
     assert!(!root.join("skills-creator").join("scripts").exists());
+}
+
+#[test]
+fn builtin_seed_installs_native_image_and_pet_skills() {
+    let tmp = TempDir::new("liveagent-native-pet-skills-seed-test").expect("temp dir");
+    let root = tmp.path().join("skills");
+
+    let seeded = ensure_builtin_agent_skills_in_root(&root).expect("seed builtins");
+    for name in ["api2img", "hatch-pet"] {
+        let result = seeded
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("missing seed result for {name}"));
+        assert_eq!(result.action, "created");
+
+        let target = root.join(name);
+        let validation = validate_skill_dir(&target);
+        assert!(validation.ok, "{name}: {:?}", validation.errors);
+        let builtin = BUILTIN_AGENT_SKILLS
+            .iter()
+            .find(|skill| skill.name == name)
+            .expect("registered builtin");
+        assert!(builtin_skill_files_match(&target, builtin).expect("match builtin files"));
+    }
+
+    let api_instructions =
+        fs::read_to_string(root.join("api2img").join("SKILL.md")).expect("read api2img");
+    assert!(api_instructions.contains("ImageGenerate"));
+    assert!(api_instructions.contains("ImageEdit"));
+    assert!(api_instructions.contains("ImageManager"));
+    assert!(api_instructions.contains("configure_connection"));
+    assert!(root
+        .join("api2img")
+        .join("references")
+        .join("ai-adapter.md")
+        .is_file());
+    for legacy in ["npx ", "CODEX_HOME", ".codex", "curl "] {
+        assert!(
+            !api_instructions.contains(legacy),
+            "api2img must not retain legacy invocation {legacy:?}"
+        );
+    }
+
+    let hatch = root.join("hatch-pet");
+    let hatch_instructions = fs::read_to_string(hatch.join("SKILL.md")).expect("read hatch-pet");
+    assert!(hatch_instructions.lines().count() <= 200);
+    assert!(hatch_instructions.contains("build_generated_and_install"));
+    assert!(hatch_instructions.contains("Row 0 columns 6-7"));
+    assert!(!hatch.join("scripts").exists());
+    assert!(!hatch.join("tests").exists());
+}
+
+#[test]
+fn native_pet_skills_are_protected_builtins() {
+    for name in ["api2img", "hatch-pet"] {
+        assert!(is_builtin_agent_skill_name(name));
+        let error = ensure_not_builtin_skill_management_target(name, "test")
+            .expect_err("built-in management must be rejected");
+        assert!(error.contains("cannot modify built-in Skill"));
+    }
 }
 
 #[test]
@@ -349,8 +407,8 @@ fn install_source_from_local_skill_archive_installs_skill() {
 
 #[test]
 fn clawhub_download_url_preserves_slug_and_tag_params() {
-    let url = clawhub_download_url_for_slug("owner/example-skill", Some("v1.2.3"))
-        .expect("download url");
+    let url =
+        clawhub_download_url_for_slug("owner/example-skill", Some("v1.2.3")).expect("download url");
     let parsed = reqwest::Url::parse(&url).expect("parse url");
     let pairs = parsed
         .query_pairs()
@@ -453,8 +511,7 @@ fn delete_installed_skill_rejects_builtin_skill() {
     let root = tmp.path().join("skills");
     write_skill(&root, "skills-installer", "Built-in replacement");
 
-    let error =
-        delete_installed_skill(&root, "skills-installer").expect_err("delete should fail");
+    let error = delete_installed_skill(&root, "skills-installer").expect_err("delete should fail");
 
     assert!(
         error.contains("cannot modify built-in Skill"),
@@ -546,8 +603,7 @@ fn validate_accepts_non_english_markdown_documentation() {
     )
     .expect("write skill");
 
-    let validation =
-        validate_installed_skill(&root, "multilingual-skill").expect("validate skill");
+    let validation = validate_installed_skill(&root, "multilingual-skill").expect("validate skill");
 
     assert!(validation.ok, "{:?}", validation.errors);
 }
@@ -687,7 +743,10 @@ fn install_skill_dir_failure_leaves_existing_target_untouched() {
     let bad_dir = write_skill(&bad_source, "different-name", "Bad");
     let error = install_skill_dir(&root, &bad_dir, "stable-skill", "overwrite", None)
         .expect_err("name mismatch should fail");
-    assert!(error.contains("does not match"), "unexpected error: {error}");
+    assert!(
+        error.contains("does not match"),
+        "unexpected error: {error}"
+    );
 
     let content = fs::read_to_string(root.join("stable-skill").join("SKILL.md"))
         .expect("target survives failed overwrite");
@@ -714,7 +773,10 @@ fn concurrent_same_name_installs_serialize_into_one_target_and_complete_backups(
         })
         .collect();
     for handle in handles {
-        handle.join().expect("join writer").expect("install succeeds");
+        handle
+            .join()
+            .expect("join writer")
+            .expect("install succeeds");
     }
 
     // Exactly one complete live target...
@@ -754,14 +816,22 @@ fn concurrent_distinct_installs_all_succeed_and_staging_is_drained() {
         })
         .collect();
     for handle in handles {
-        handle.join().expect("join writer").expect("install succeeds");
+        handle
+            .join()
+            .expect("join writer")
+            .expect("install succeeds");
     }
 
     let (skills, invalid) = list_installed_skills(&root).expect("list skills");
     assert_eq!(skills.len(), WRITERS);
-    assert!(invalid.is_empty(), "unexpected invalid entries: {invalid:?}");
+    assert!(
+        invalid.is_empty(),
+        "unexpected invalid entries: {invalid:?}"
+    );
     assert_eq!(
-        fs::read_dir(root.join(".staging")).expect("staging").count(),
+        fs::read_dir(root.join(".staging"))
+            .expect("staging")
+            .count(),
         0
     );
 }

@@ -26,6 +26,7 @@ import { type NotifyItem, NotifyToast } from "../components/chat/NotifyToast";
 import { SharedHistoryManagerModal } from "../components/chat/SharedHistoryManagerModal";
 import { Ban, PanelRightClose, PanelRightOpen, Terminal, Upload } from "../components/icons";
 import { MacOsTitleBarSpacer, MacOsTitleBarToggle } from "../components/MacOsTitleBarSpacer";
+import { PetWindowBridge } from "../components/pet/PetWindowBridge";
 import type {
   GitCommitContextPayload,
   GitFileContextPayload,
@@ -783,6 +784,10 @@ export function ChatPage(props: ChatPageProps) {
   // The only page-level subscription to the sidebar list: ChatPage's own
   // render needs (draft detection, pending-item effect, workspace root).
   const historyItems = useSidebarSelector(sidebarStore, selectConversations);
+  const currentConversationTitle = useMemo(
+    () => historyItems.find((item) => item.id === currentConversationId)?.title.trim() || "LiveAgent",
+    [currentConversationId, historyItems],
+  );
   const [shareConversation, setShareConversation] = useState<ChatHistorySummary | null>(null);
   const [shareStatus, setShareStatus] = useState<ChatHistoryShareStatus | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
@@ -5003,8 +5008,33 @@ export function ChatPage(props: ChatPageProps) {
     sendActionRef,
   });
 
+  const petActiveConversations = useMemo(
+    () =>
+      Array.from(runningConversationIds, (id) => ({
+        id,
+        title: historyItems.find((item) => item.id === id)?.title.trim() || "LiveAgent",
+        transcriptStore: getConversationLiveTranscriptStore(id),
+      })),
+    [getConversationLiveTranscriptStore, historyItems, runningConversationIds],
+  );
+
   return (
     <div className="flex h-full min-h-0 w-full overflow-hidden">
+      <PetWindowBridge
+        settings={settings.pet}
+        isSending={isSending}
+        errorMessage={errorMessage}
+        liveTranscriptStore={liveTranscriptStore}
+        isCompactionRunning={isCompactionRunning}
+        queuedTurnCount={queuedChatTurnsForCurrentConversation.length}
+        backgroundRunCount={Math.max(
+          0,
+          runningConversationIds.size - (isConversationRunning(currentConversationId) ? 1 : 0),
+        )}
+        conversationTitle={currentConversationTitle}
+        activeConversations={petActiveConversations}
+        setSettings={setSettings}
+      />
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <MacOsTitleBarToggle
           sidebarOpen={sidebarOpen}

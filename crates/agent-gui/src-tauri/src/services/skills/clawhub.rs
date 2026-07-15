@@ -68,7 +68,10 @@ pub(crate) fn json_optional_u64(item: &serde_json::Map<String, Value>, key: &str
     })
 }
 
-pub(crate) fn clawhub_download_url_for_slug(slug: &str, tag: Option<&str>) -> Result<String, String> {
+pub(crate) fn clawhub_download_url_for_slug(
+    slug: &str,
+    tag: Option<&str>,
+) -> Result<String, String> {
     let slug = slug.trim();
     if slug.is_empty() {
         return Err("SkillsManager clawhub_install requires slug".to_string());

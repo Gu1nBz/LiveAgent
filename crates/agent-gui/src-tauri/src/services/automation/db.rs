@@ -33,8 +33,7 @@ pub fn truncate_run_output(text: &str) -> String {
 
 pub fn open_automation_connection() -> Result<Connection, String> {
     let db_path = crate::commands::settings::config_db_path()?;
-    let conn =
-        Connection::open(db_path).map_err(|e| format!("打开 automation 数据库失败：{e}"))?;
+    let conn = Connection::open(db_path).map_err(|e| format!("打开 automation 数据库失败：{e}"))?;
     conn.busy_timeout(Duration::from_secs(5))
         .map_err(|e| format!("设置 SQLite busy_timeout 失败：{e}"))?;
     conn.pragma_update(None, "journal_mode", "WAL")
