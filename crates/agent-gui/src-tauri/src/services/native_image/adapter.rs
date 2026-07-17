@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, path::Path, sync::atomic::Ordering, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::atomic::Ordering,
+    time::Duration,
+};
 
 use base64::{engine::general_purpose, Engine as _};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -59,18 +64,6 @@ fn validate_operation(operation: &NativeImageAdapterOperation, field: &str) -> R
             .as_ref()
             .ok_or_else(|| format!("{field}.poll 是异步协议的必填项"))?;
         validate_http_request(poll, &format!("{field}.poll"))?;
-        if operation.extract.task_id.is_none() || operation.extract.status.is_none() {
-            return Err(format!(
-                "{field}.extract.taskId 和 status 是异步协议的必填项"
-            ));
-        }
-        if operation.extract.success_statuses.is_empty()
-            || operation.extract.failure_statuses.is_empty()
-        {
-            return Err(format!(
-                "{field}.extract 必须声明 successStatuses 和 failureStatuses"
-            ));
-        }
     }
     validate_extract(&operation.extract, field)
 }
@@ -141,9 +134,9 @@ fn validate_http_request(
 }
 
 fn validate_extract(extract: &NativeImageAdapterExtract, field: &str) -> Result<(), String> {
-    if extract.outputs.is_empty() || extract.outputs.len() > MAX_ADAPTER_OUTPUT_PATHS {
+    if extract.outputs.len() > MAX_ADAPTER_OUTPUT_PATHS {
         return Err(format!(
-            "{field}.extract.outputs 必须包含 1 到 {MAX_ADAPTER_OUTPUT_PATHS} 个 JSON 路径"
+            "{field}.extract.outputs 最多包含 {MAX_ADAPTER_OUTPUT_PATHS} 个 JSON 路径"
         ));
     }
     for (label, path) in extract
@@ -423,22 +416,31 @@ async fn execute_operation(
         unreachable!();
     };
     if operation.mode == NativeImageAdapterMode::Sync {
-        return extract_outputs(&submit_json, &operation.extract, &config.base_url);
+        return extract_outputs(
+            &submit_json,
+            &operation.extract,
+            &config.base_url,
+            &config.api_key,
+        );
     }
-    if let Ok(outputs) = extract_outputs(&submit_json, &operation.extract, &config.base_url) {
-        if !outputs.is_empty() && status_is_success(&submit_json, &operation.extract) {
+    if let Ok(outputs) = extract_outputs(
+        &submit_json,
+        &operation.extract,
+        &config.base_url,
+        &config.api_key,
+    ) {
+        if !outputs.is_empty()
+            && (status_is_success(&submit_json, &operation.extract)
+                || extract_status(&submit_json, &operation.extract).is_none())
+        {
             return Ok(outputs);
         }
     }
-    let task_id_path = operation
-        .extract
-        .task_id
-        .as_deref()
-        .ok_or_else(|| "异步图片协议缺少 taskId 提取路径".to_string())?;
-    let task_id = extract_first_text(&submit_json, task_id_path).ok_or_else(|| {
+    let task_id = extract_task_id(&submit_json, &operation.extract).ok_or_else(|| {
         format!(
-            "提交响应中没有找到任务 ID：{task_id_path}；可用字段：{}",
-            json_shape_summary(&submit_json)
+            "提交响应中没有找到任务 ID；可用字段：{}；响应摘要：{}",
+            json_shape_summary(&submit_json),
+            response_preview(&submit_json, &config.api_key)
         )
     })?;
     let poll = operation
@@ -474,11 +476,11 @@ async fn execute_operation(
         let AdapterResponse::Json(value) = response else {
             unreachable!();
         };
-        let status_path = operation.extract.status.as_deref().unwrap_or("$.status");
         if extract_status(&value, &operation.extract).is_none() {
             return Err(format!(
-                "轮询响应中没有找到状态字段：{status_path}；可用字段：{}",
-                json_shape_summary(&value)
+                "轮询响应中没有找到状态字段；可用字段：{}；响应摘要：{}",
+                json_shape_summary(&value),
+                response_preview(&value, &config.api_key)
             ));
         }
         if status_is_failure(&value, &operation.extract) {
@@ -487,11 +489,17 @@ async fn execute_operation(
                 .error
                 .as_deref()
                 .and_then(|path| extract_first_text(&value, path))
+                .or_else(|| find_text_by_keys(&value, &["error", "message", "detail"]))
                 .unwrap_or_else(|| "远端异步图片任务失败".to_string());
             return Err(detail);
         }
         if status_is_success(&value, &operation.extract) {
-            return extract_outputs(&value, &operation.extract, &config.base_url);
+            return extract_outputs(
+                &value,
+                &operation.extract,
+                &config.base_url,
+                &config.api_key,
+            );
         }
     }
     Err("远端异步图片任务轮询超时".to_string())
@@ -599,15 +607,11 @@ async fn execute_request(
             ),
         }]));
     }
-    let value: Value = serde_json::from_slice(&body).map_err(|error| {
-        let preview = String::from_utf8_lossy(&body);
-        format!(
-            "AI 图片协议响应不是 JSON 或图片：{}；响应预览：{}",
-            error,
-            super::truncate_chars(preview.trim(), MAX_ERROR_CHARS.min(512))
-        )
-    })?;
-    Ok(AdapterResponse::Json(value))
+    Ok(AdapterResponse::Json(parse_json_or_sse_response(
+        &body,
+        &content_type,
+        &config.api_key,
+    )?))
 }
 
 fn render_value(value: &Value, context: &BTreeMap<String, Value>) -> Result<Value, String> {
@@ -680,19 +684,45 @@ fn scalar_text(value: &Value) -> Result<String, String> {
 
 fn status_is_success(value: &Value, extract: &NativeImageAdapterExtract) -> bool {
     extract_status(value, extract).is_some_and(|status| {
-        extract
-            .success_statuses
+        if extract.success_statuses.is_empty() {
+            [
+                "succeeded",
+                "success",
+                "completed",
+                "complete",
+                "done",
+                "finished",
+            ]
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(&status))
+        } else {
+            extract
+                .success_statuses
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&status))
+        }
     })
 }
 
 fn status_is_failure(value: &Value, extract: &NativeImageAdapterExtract) -> bool {
     extract_status(value, extract).is_some_and(|status| {
-        extract
-            .failure_statuses
+        if extract.failure_statuses.is_empty() {
+            [
+                "failed",
+                "failure",
+                "error",
+                "cancelled",
+                "canceled",
+                "rejected",
+            ]
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(&status))
+        } else {
+            extract
+                .failure_statuses
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&status))
+        }
     })
 }
 
@@ -701,6 +731,7 @@ fn extract_status(value: &Value, extract: &NativeImageAdapterExtract) -> Option<
         .status
         .as_deref()
         .and_then(|path| extract_first_text(value, path))
+        .or_else(|| find_text_by_keys(value, &["status", "state", "phase"]))
 }
 
 fn extract_first_text(value: &Value, path: &str) -> Option<String> {
@@ -719,6 +750,7 @@ fn extract_outputs(
     value: &Value,
     extract: &NativeImageAdapterExtract,
     base_url: &str,
+    api_key: &str,
 ) -> Result<Vec<RemoteImage>, String> {
     let mut outputs = Vec::new();
     for path in &extract.outputs {
@@ -727,16 +759,231 @@ fn extract_outputs(
         }
     }
     if outputs.is_empty() {
+        outputs = auto_extract_outputs(value, base_url)?;
+    }
+    if outputs.is_empty() {
         return Err(format!(
-            "响应中没有找到图片输出；已检查路径：{}；可用字段：{}",
-            extract.outputs.join(", "),
-            json_shape_summary(value)
+            "响应中没有自动识别到图片输出；可用字段：{}；响应摘要：{}",
+            json_shape_summary(value),
+            response_preview(value, api_key)
         ));
     }
     if outputs.len() > 4 {
         outputs.truncate(4);
     }
     Ok(outputs)
+}
+
+fn extract_task_id(value: &Value, extract: &NativeImageAdapterExtract) -> Option<String> {
+    extract
+        .task_id
+        .as_deref()
+        .and_then(|path| extract_first_text(value, path))
+        .or_else(|| {
+            find_text_by_keys(
+                value,
+                &["task_id", "taskId", "job_id", "jobId", "request_id", "id"],
+            )
+        })
+}
+
+fn find_text_by_keys(value: &Value, keys: &[&str]) -> Option<String> {
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .find_map(|value| find_text_by_keys(value, keys)),
+        Value::Object(values) => {
+            for key in keys {
+                if let Some(value) = values.get(*key) {
+                    match value {
+                        Value::String(value) => return Some(value.clone()),
+                        Value::Number(value) => return Some(value.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            values
+                .values()
+                .find_map(|value| find_text_by_keys(value, keys))
+        }
+        _ => None,
+    }
+}
+
+fn auto_extract_outputs(value: &Value, base_url: &str) -> Result<Vec<RemoteImage>, String> {
+    fn visit(
+        value: &Value,
+        base_url: &str,
+        outputs: &mut Vec<RemoteImage>,
+        seen: &mut BTreeSet<String>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > 32 || outputs.len() >= 4 {
+            return Ok(());
+        }
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    visit(value, base_url, outputs, seen, depth + 1)?;
+                    if outputs.len() >= 4 {
+                        break;
+                    }
+                }
+            }
+            Value::Object(values) => {
+                for (key, value) in values {
+                    let image_key = matches!(
+                        key.as_str(),
+                        "url"
+                            | "image_url"
+                            | "imageUrl"
+                            | "b64_json"
+                            | "base64"
+                            | "image"
+                            | "images"
+                            | "image_b64"
+                            | "output"
+                            | "output_url"
+                            | "result"
+                            | "data"
+                    );
+                    if image_key {
+                        collect_auto_output_value(value, base_url, outputs, seen)?;
+                    }
+                    visit(value, base_url, outputs, seen, depth + 1)?;
+                    if outputs.len() >= 4 {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    let mut outputs = Vec::new();
+    let mut seen = BTreeSet::new();
+    visit(value, base_url, &mut outputs, &mut seen, 0)?;
+    Ok(outputs)
+}
+
+fn collect_auto_output_value(
+    value: &Value,
+    base_url: &str,
+    outputs: &mut Vec<RemoteImage>,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    match value {
+        Value::String(value) if looks_like_image_value(value) => {
+            let key = value.trim().to_string();
+            if seen.insert(key) {
+                outputs.push(output_from_string(value, base_url)?);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_auto_output_value(value, base_url, outputs, seen)?;
+                if outputs.len() >= 4 {
+                    break;
+                }
+            }
+        }
+        Value::Object(values) => {
+            for key in [
+                "url",
+                "image_url",
+                "imageUrl",
+                "b64_json",
+                "base64",
+                "image",
+                "images",
+                "image_b64",
+                "output",
+                "output_url",
+                "result",
+                "data",
+            ] {
+                if let Some(value) = values.get(key) {
+                    collect_auto_output_value(value, base_url, outputs, seen)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn looks_like_image_value(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.starts_with('/')
+        || value.starts_with("data:image/")
+        || looks_like_base64_image(value)
+}
+
+fn looks_like_base64_image(value: &str) -> bool {
+    let mut count = 0usize;
+    for byte in value.bytes() {
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        if !(byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'_' | b'-' | b'=')) {
+            return false;
+        }
+        count += 1;
+    }
+    count >= 128
+}
+
+fn parse_json_or_sse_response(
+    body: &[u8],
+    content_type: &str,
+    api_key: &str,
+) -> Result<Value, String> {
+    if let Ok(value) = serde_json::from_slice(body) {
+        return Ok(value);
+    }
+    let text = std::str::from_utf8(body).map_err(|error| {
+        safe_error(
+            &format!("AI 图片协议响应不是 UTF-8 JSON 或图片：{error}"),
+            Some(api_key),
+        )
+    })?;
+    let normalized = text.replace("\r\n", "\n");
+    let mut events = Vec::new();
+    for block in normalized.split("\n\n") {
+        let data = block
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && *line != "[DONE]")
+            .collect::<Vec<_>>()
+            .join("\n");
+        if let Ok(value) = serde_json::from_str::<Value>(&data) {
+            events.push(value);
+        }
+    }
+    if events.is_empty() {
+        let kind = if content_type.contains("text/event-stream") {
+            "SSE"
+        } else {
+            "JSON"
+        };
+        return Err(safe_error(
+            &format!(
+                "AI 图片协议响应不是有效 {kind} 或图片；响应预览：{}",
+                super::truncate_chars(text.trim(), MAX_ERROR_CHARS.min(2_048))
+            ),
+            Some(api_key),
+        ));
+    }
+    Ok(Value::Array(events))
+}
+
+fn response_preview(value: &Value, api_key: &str) -> String {
+    let text = serde_json::to_string(value).unwrap_or_else(|_| "(无法序列化响应)".to_string());
+    safe_error(&super::truncate_chars(&text, 2_048), Some(api_key))
 }
 
 fn json_shape_summary(value: &Value) -> String {

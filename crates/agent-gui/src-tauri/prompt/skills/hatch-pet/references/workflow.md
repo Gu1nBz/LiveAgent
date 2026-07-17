@@ -45,7 +45,7 @@ After each result, inspect:
 - same flat background with no key color inside the pet;
 - no labels, grids, borders, shadows, scenery, or detached effects.
 
-Regenerate a failed complete row before moving on. Keep the selected exported absolute workspace path for the final call. If a completed job's automatic export failed and its job id is known, retry only the export with `ImageManager(action="export", job_id=..., destination_dir=<run_dir>/rows)`.
+Immediately call `PetManager(action="validate_generated_rows", chroma_key="#RRGGBB", rows=[{"row":<row>,"frame_count":<count>,"path":<exported path>}])`. This native preflight rejects strip widths that cannot be evenly split, frames touching a slot edge, cross-slot fragments, and row-scale jumps. Regenerate a failed complete row before moving on. Keep the selected exported absolute workspace path for the final call. If a completed job's automatic export failed and its job id is known, retry only the export with `ImageManager(action="export", job_id=..., destination_dir=<run_dir>/rows)`.
 
 ## 3. Generate look rows
 

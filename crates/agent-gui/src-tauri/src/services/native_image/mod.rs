@@ -146,6 +146,10 @@ impl NativeImageService {
         self.config_store.update(update)
     }
 
+    pub fn config_clear(&self) -> Result<NativeImageConfigPublic, String> {
+        self.config_store.clear()
+    }
+
     pub fn adapter_get(&self) -> Result<NativeImageAdapterPublic, String> {
         self.config_store.adapter_get()
     }

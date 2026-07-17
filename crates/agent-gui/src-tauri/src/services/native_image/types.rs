@@ -159,13 +159,14 @@ fn default_adapter_body() -> Value {
     Value::Object(Default::default())
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeImageAdapterExtract {
     #[serde(default)]
     pub task_id: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
     pub outputs: Vec<String>,
     #[serde(default)]
     pub error: Option<String>,
@@ -187,6 +188,7 @@ pub struct NativeImageAdapterOperation {
     pub submit: NativeImageAdapterHttpRequest,
     #[serde(default)]
     pub poll: Option<NativeImageAdapterHttpRequest>,
+    #[serde(default)]
     pub extract: NativeImageAdapterExtract,
 }
 

@@ -24,10 +24,45 @@ test("ImageManager exposes AI-managed connection and declarative adapter actions
     "adapter_schema",
     "configure_adapter",
     "clear_adapter",
+    "clear_configuration",
   ]) {
     assert.ok(actions.includes(action), `missing ${action}`);
   }
   assert.ok(manager.parameters.properties.api_key);
+});
+
+test("AI can clear the complete native image configuration without exposing prior values", async () => {
+  const calls = [];
+  const loader = createTsModuleLoader({
+    mocks: {
+      "@tauri-apps/api/core": {
+        async invoke(command, args) {
+          calls.push({ command, args });
+          if (command === "native_image_config_clear") {
+            return {
+              baseUrl: "https://api.openai.com/v1",
+              generationModel: "gpt-image-2",
+              editModel: "gpt-image-2",
+              endpointMode: "images",
+              timeoutSeconds: 180,
+              apiKeyConfigured: false,
+              adapterConfigured: false,
+              adapterName: null,
+            };
+          }
+          throw new Error(`unexpected command ${command}`);
+        },
+      },
+    },
+  });
+  const { createNativeImageTools } = loader.loadModule("src/lib/tools/nativeImageTools.ts");
+  const bundle = createNativeImageTools({ workdir: "/workspace" });
+  const result = await bundle.executeToolCall(toolCall("clear_configuration"));
+  assert.equal(result.isError, false);
+  assert.deepEqual(calls, [{ command: "native_image_config_clear", args: undefined }]);
+  assert.match(result.content[0].text, /configuration_cleared=true/);
+  assert.match(result.content[0].text, /configured=false/);
+  assert.doesNotMatch(result.content[0].text, /old\.example|secret/i);
 });
 
 test("AI connection configuration stores a user-provided key without echoing it", async () => {

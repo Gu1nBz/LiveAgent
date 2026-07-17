@@ -93,6 +93,18 @@ function getToolDisplay(toolCall: { name: string; arguments?: Record<string, unk
       if (typeof args.prompt === "string")
         tags.push({ label: "prompt", value: `${(args.prompt as string).length} chars` });
       return { type: "generic" as const, path: null, pattern: null, tags };
+    case "Image": {
+      const sourceGroups = ["source", "sources", "path", "paths", "url", "urls", "base64", "base64s"]
+        .filter((key) => {
+          const value = args[key];
+          return (typeof value === "string" && value.trim()) || (Array.isArray(value) && value.length > 0);
+        })
+        .map((key) => key.replace(/s$/, ""));
+      if (sourceGroups.length > 0) {
+        tags.push({ label: "source", value: sourceGroups.join(", ") });
+      }
+      return { type: "generic" as const, path: null, pattern: null, tags };
+    }
     case "PetManager":
       if (typeof args.action === "string")
         tags.push({ label: "action", value: args.action as string });

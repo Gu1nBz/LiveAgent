@@ -1159,6 +1159,22 @@ export function createFsTools(params: {
     const sources: DisplayImageSourceInput[] = [];
     const mimeType = getOptionalMimeType(args);
 
+    const groups = [
+      Array.isArray(args?.sources) && args.sources.length > 0 ||
+      (typeof args?.source === "string" && args.source.trim()),
+      Array.isArray(args?.paths) && args.paths.length > 0 ||
+      (typeof args?.path === "string" && args.path.trim()),
+      Array.isArray(args?.urls) && args.urls.length > 0 ||
+      (typeof args?.url === "string" && args.url.trim()),
+      Array.isArray(args?.base64s) && args.base64s.length > 0 ||
+      (typeof args?.base64 === "string" && args.base64.trim()),
+    ].filter(Boolean).length;
+    if (groups !== 1) {
+      throw new Error(
+        "Image requires exactly one source group: source(s), path(s), url(s), or base64(s). Do not combine them.",
+      );
+    }
+
     if (Array.isArray(args?.sources) && args.sources.length > 0) {
       await pushGenericImageSources(sources, args.sources, "Image.sources", mimeType);
     } else if (typeof args?.source === "string" && args.source.trim()) {

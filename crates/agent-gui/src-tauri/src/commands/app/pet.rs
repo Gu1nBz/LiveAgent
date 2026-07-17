@@ -195,6 +195,22 @@ pub struct PetBuildGeneratedInput {
     rows: Vec<PetBuildRowInput>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetValidateGeneratedRowsInput {
+    workspace_root: String,
+    #[serde(default)]
+    chroma_key: Option<PetBuildChromaKeyInput>,
+    rows: Vec<PetBuildRowInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetValidateGeneratedRowsPayload {
+    valid: bool,
+    row_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PetBuildGeneratedPayload {
@@ -887,23 +903,95 @@ fn alpha_bounds(frame: &RgbaImage) -> Option<(u32, u32, u32, u32)> {
     (right > left && bottom > top).then_some((left, top, right - left, bottom - top))
 }
 
-fn fit_frame_into_cell(frame: &RgbaImage, row: u32, column: u32) -> Result<RgbaImage, String> {
-    let (left, top, width, height) = alpha_bounds(frame).ok_or_else(|| {
+fn validate_frame_geometry(
+    frame: &RgbaImage,
+    row: u32,
+    column: u32,
+) -> Result<(u32, u32, u32, u32), String> {
+    let bounds = alpha_bounds(frame).ok_or_else(|| {
         format!("Generated frame row {row}, column {column} is fully transparent")
     })?;
-    let cropped = crop_imm(frame, left, top, width, height).to_image();
+    let margin = (frame.width() / 32).clamp(3, 24);
+    let (left, _top, width, _height) = bounds;
+    if left < margin || left.saturating_add(width) > frame.width().saturating_sub(margin) {
+        return Err(format!(
+            "Generated frame row {row}, column {column} touches a slot edge; regenerate the complete row with one centered pose per slot"
+        ));
+    }
+    Ok(bounds)
+}
+
+fn prepare_row_frames(
+    strip: &RgbaImage,
+    row: u32,
+    frame_count: u32,
+    chroma_key: Option<PetBuildChromaKeyInput>,
+) -> Result<Vec<RgbaImage>, String> {
+    let frame_width = strip.width() / frame_count;
+    let mut frames = Vec::with_capacity(frame_count as usize);
+    let mut dimensions = Vec::with_capacity(frame_count as usize);
+    for column in 0..frame_count {
+        let mut frame =
+            crop_imm(strip, column * frame_width, 0, frame_width, strip.height()).to_image();
+        if let Some(key) = chroma_key {
+            remove_chroma_key(&mut frame, key);
+        }
+        let (_left, _top, width, height) = validate_frame_geometry(&frame, row, column)?;
+        dimensions.push((width, height));
+        frames.push(frame);
+    }
+    let median_width = dimensions.iter().map(|(width, _)| *width).sum::<u32>() / frame_count;
+    let median_height = dimensions.iter().map(|(_, height)| *height).sum::<u32>() / frame_count;
+    for (column, (width, height)) in dimensions.into_iter().enumerate() {
+        let width_delta = width.abs_diff(median_width);
+        let height_delta = height.abs_diff(median_height);
+        if width_delta.saturating_mul(100) > median_width.saturating_mul(35)
+            || height_delta.saturating_mul(100) > median_height.saturating_mul(35)
+        {
+            return Err(format!(
+                "Generated frame row {row}, column {column} has an inconsistent sprite scale; regenerate the complete row"
+            ));
+        }
+    }
+    Ok(frames)
+}
+
+fn fit_row_frames_into_cells(frames: &[RgbaImage], row: u32) -> Result<Vec<RgbaImage>, String> {
+    let mut left = u32::MAX;
+    let mut top = u32::MAX;
+    let mut right = 0;
+    let mut bottom = 0;
+    for (column, frame) in frames.iter().enumerate() {
+        let (frame_left, frame_top, width, height) =
+            validate_frame_geometry(frame, row, column as u32)?;
+        left = left.min(frame_left);
+        top = top.min(frame_top);
+        right = right.max(frame_left + width);
+        bottom = bottom.max(frame_top + height);
+    }
+    let width = right.saturating_sub(left);
+    let height = bottom.saturating_sub(top);
+    if width == 0 || height == 0 {
+        return Err(format!("Generated row {row} has no visible sprite bounds"));
+    }
     let scale = (CELL_WIDTH as f64 / width as f64).min(CELL_HEIGHT as f64 / height as f64);
     let target_width = ((width as f64 * scale).round() as u32).clamp(1, CELL_WIDTH);
     let target_height = ((height as f64 * scale).round() as u32).clamp(1, CELL_HEIGHT);
-    let resized = resize(&cropped, target_width, target_height, FilterType::Lanczos3);
-    let mut cell = RgbaImage::new(CELL_WIDTH, CELL_HEIGHT);
-    overlay(
-        &mut cell,
-        &resized,
-        i64::from((CELL_WIDTH - target_width) / 2),
-        i64::from((CELL_HEIGHT - target_height) / 2),
-    );
-    Ok(cell)
+    frames
+        .iter()
+        .map(|frame| {
+            let cropped = crop_imm(frame, left, top, width, height).to_image();
+            let resized = resize(&cropped, target_width, target_height, FilterType::Lanczos3);
+            let mut cell = RgbaImage::new(CELL_WIDTH, CELL_HEIGHT);
+            overlay(
+                &mut cell,
+                &resized,
+                i64::from((CELL_WIDTH - target_width) / 2),
+                i64::from((CELL_HEIGHT - target_height) / 2),
+            );
+            Ok(cell)
+        })
+        .collect()
 }
 
 fn decode_frame_strip(path: &Path, row: u32, frame_count: u32) -> Result<RgbaImage, String> {
@@ -952,18 +1040,13 @@ fn assemble_pet_atlas(
     for row in rows {
         let source = resolve_workspace_input_file(workspace, &row.path)?;
         let strip = decode_frame_strip(&source, row.row, row.frame_count)?;
-        let frame_width = strip.width() / row.frame_count;
-        for column in 0..row.frame_count {
-            let mut frame =
-                crop_imm(&strip, column * frame_width, 0, frame_width, strip.height()).to_image();
-            if let Some(key) = chroma_key {
-                remove_chroma_key(&mut frame, key);
-            }
-            let cell = fit_frame_into_cell(&frame, row.row, column)?;
+        let frames = prepare_row_frames(&strip, row.row, row.frame_count, chroma_key)?;
+        let cells = fit_row_frames_into_cells(&frames, row.row)?;
+        for (column, cell) in cells.into_iter().enumerate() {
             overlay(
                 &mut atlas,
                 &cell,
-                i64::from(column * CELL_WIDTH),
+                i64::from(column as u32 * CELL_WIDTH),
                 i64::from(row.row * CELL_HEIGHT),
             );
         }
@@ -1115,6 +1198,41 @@ fn build_generated_pet(input: PetBuildGeneratedInput) -> Result<PetBuildGenerate
     build_result
 }
 
+fn validate_generated_rows(
+    input: PetValidateGeneratedRowsInput,
+) -> Result<PetValidateGeneratedRowsPayload, String> {
+    let workspace = resolve_canonical_workspace_root(&input.workspace_root)?;
+    if input.rows.is_empty() || input.rows.len() > 11 {
+        return Err("Generated row validation requires 1 to 11 rows".to_string());
+    }
+    let mut seen = [false; 11];
+    for row in &input.rows {
+        let expected = V2_ROW_FRAME_COUNTS
+            .get(row.row as usize)
+            .ok_or_else(|| format!("Generated row index {} is out of range", row.row))?;
+        if row.frame_count != *expected {
+            return Err(format!(
+                "Generated row {} must contain {} frames, received {}",
+                row.row, expected, row.frame_count
+            ));
+        }
+        if std::mem::replace(&mut seen[row.row as usize], true) {
+            return Err(format!(
+                "Generated row {} was supplied more than once",
+                row.row
+            ));
+        }
+        let source = resolve_workspace_input_file(&workspace, &row.path)?;
+        let strip = decode_frame_strip(&source, row.row, row.frame_count)?;
+        let frames = prepare_row_frames(&strip, row.row, row.frame_count, input.chroma_key)?;
+        let _ = fit_row_frames_into_cells(&frames, row.row)?;
+    }
+    Ok(PetValidateGeneratedRowsPayload {
+        valid: true,
+        row_count: input.rows.len(),
+    })
+}
+
 fn emit_pet_library_changed(
     app: &tauri::AppHandle,
     action: &str,
@@ -1179,6 +1297,15 @@ pub async fn pet_build_generated(
     tauri::async_runtime::spawn_blocking(move || build_generated_pet(input))
         .await
         .map_err(|e| format!("generated pet build join failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn pet_validate_generated_rows(
+    input: PetValidateGeneratedRowsInput,
+) -> Result<PetValidateGeneratedRowsPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || validate_generated_rows(input))
+        .await
+        .map_err(|e| format!("generated pet validation join failed: {e}"))?
 }
 
 #[tauri::command]

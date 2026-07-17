@@ -67,13 +67,13 @@ operation:
   "mode": "sync" | "async",
   "submit": <httpRequest>,
   "poll": <httpRequest, required for async>,
-  "extract": {
-    "taskId": "$.path",              // async only
-    "status": "$.path",              // async only
-    "outputs": ["$.path[*]"],         // URL, base64, data URL, or objects containing url/b64_json/base64/image/result/data
-    "error": "$.path",               // optional
-    "successStatuses": ["completed"], // async only
-    "failureStatuses": ["failed"],    // async only
+  "extract": {                         // optional compatibility hints; omit for adaptive parsing
+    "taskId": "$.path",
+    "status": "$.path",
+    "outputs": ["$.path[*]"],
+    "error": "$.path",
+    "successStatuses": ["completed"],
+    "failureStatuses": ["failed"],
     "pollIntervalMs": 1500,
     "maxPollAttempts": 1200
   }
@@ -89,7 +89,7 @@ httpRequest:
   "files": [{"field": "image", "source": "inputImages"}, {"field": "mask", "source": "mask"}]
 }
 Allowed variables: {{apiKey}}, {{model}}, {{prompt}}, {{size}}, {{width}}, {{height}}, {{quality}}, {{background}}, {{count}}, {{outputFormat}}, {{inputImages}}, {{inputImagesBase64}}, {{mask}}, {{maskBase64}}, {{taskId}}.
-Exact-value placeholders preserve JSON types; embedded placeholders render as strings. JSON paths support $.field, [index], and [*]. Paths must stay under the configured Base URL. Do not include a real API key in adapter_json.`;
+Exact-value placeholders preserve JSON types; embedded placeholders render as strings. LiveAgent automatically scans JSON and SSE responses for image URLs/base64 and common async task/status fields, so do not add extract JSON paths unless automatic parsing needs an explicit compatibility hint. Paths must stay under the configured Base URL. Do not include a real API key in adapter_json.`;
 
 const TERMINAL_JOB_STATUSES = new Set<NativeImageJobStatus>(["succeeded", "failed", "cancelled"]);
 const JOB_POLL_INTERVAL_MS = 750;
@@ -268,6 +268,7 @@ export function createNativeImageTools(params: { workdir: string }): BuiltinTool
           Type.Literal("configure_adapter"),
           Type.Literal("configure_connection"),
           Type.Literal("clear_adapter"),
+          Type.Literal("clear_configuration"),
         ]),
         job_id: Type.Optional(Type.String()),
         destination_dir: Type.Optional(Type.String()),
@@ -400,6 +401,20 @@ export function createNativeImageTools(params: { workdir: string }): BuiltinTool
           return resultMessage(
             toolCall,
             "adapter_configured=false\nThe custom adapter was cleared; built-in OpenAI-compatible behavior is active.",
+            cleared,
+          );
+        }
+        if (action === "clear_configuration") {
+          const cleared = await invoke<NativeImageConfigPublic>("native_image_config_clear");
+          return resultMessage(
+            toolCall,
+            [
+              "configuration_cleared=true",
+              "configured=false",
+              `api_key_configured=${cleared.apiKeyConfigured}`,
+              `adapter_configured=${cleared.adapterConfigured}`,
+              "The API key, custom adapter, and connection settings were reset. Generated images and installed pets were kept.",
+            ].join("\n"),
             cleared,
           );
         }

@@ -21,6 +21,14 @@ When the requested deliverable is a new, repaired, validated, packaged, or insta
 4. Pass the API Key only to `configure_connection`. Never repeat it in a reply, write it to a file, or include it in `adapter_json`; the native service stores it in LiveAgent's local configuration.
 5. If the relay uses non-standard request parameters, synchronous responses, or asynchronous submit/poll responses, follow `references/ai-adapter.md`. Ask for redacted API documentation or redacted request/response examples, then create a declarative adapter with `ImageManager`; never write or execute adapter code.
 
+LiveAgent automatically scans JSON and SSE responses for image URLs, Base64 images, common task IDs, and common status values. Do not require the user or pre-fill `$.data.images[*].url`, `taskId`, `status`, or similar response extraction paths. Use `extract` only as a compatibility hint after a real response proves automatic parsing insufficient.
+
+## Clearing configuration
+
+- When the user asks to clear only the custom relay protocol, adapter, or return to built-in OpenAI-compatible request behavior, call `ImageManager(action="clear_adapter")`. Keep the current Base URL, API Key, and model.
+- When the user asks to clear, delete, reset, or replace the `api2img` configuration or image service credentials, call `ImageManager(action="clear_configuration")`. This resets the API Key, adapter, Base URL, models, endpoint mode, and timeout together. It does not delete generated images or installed pets.
+- After `clear_configuration`, call `ImageManager(action="doctor")` before the next image workflow and collect a new Base URL, API Key, and model when needed. Do not direct the user to a Settings page.
+
 ## Required provider capabilities
 
 A complete pet workflow needs both of these capabilities. Explain this distinction when collecting configuration so the user knows what provider documentation to supply:

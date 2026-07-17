@@ -6,19 +6,20 @@ Use this flow when the provider is not a standard OpenAI-compatible Images or Re
 
 - Collect the Base URL, API Key, and model from the user in chat and save them together with `ImageManager(action="configure_connection", base_url=..., api_key=..., model=...)`.
 - The API Key may be passed only to `configure_connection`. Never echo it in tool-facing text or a reply, include it in `adapter_json`, or write it to a file. Use only the `{{apiKey}}` placeholder in adapter headers, query parameters, or bodies.
-- Ask the user for redacted API documentation, a redacted curl example, or representative request and response JSON. A complete pet requires both text-to-image generation and reference-image editing; obtain examples for both operations even when they share one URL. For an asynchronous API, obtain submit and poll examples plus success/failure status values for each operation.
+- Ask the user for redacted API documentation, a redacted curl example, or representative request and response JSON. A complete pet requires both text-to-image generation and reference-image editing; obtain examples for both operations even when they share one URL. For an asynchronous API, obtain submit and poll examples for each operation. Do not ask the user to provide JSON extraction paths.
 
 ## Workflow
 
 1. Call `ImageManager(action="adapter_status")`.
 2. If protocol details are needed, call `ImageManager(action="adapter_schema")` for the authoritative version-1 schema.
-3. Translate only the user's documented fields into a declarative adapter. Do not invent endpoints or response paths.
+3. Translate only the user's documented request fields into a declarative adapter. Do not invent endpoints, poll paths, or request parameters.
    - Define `generate` for prompt-only text-to-image requests.
    - Define `edit` for requests that upload reference images. It may reuse the same endpoint as `generate`, but its request must map `inputImages` (and `mask` when supported) into the provider's documented file or image fields.
-4. Call `ImageManager(action="configure_adapter", adapter_json=<JSON string>)`.
-5. Call `ImageManager(action="doctor")`.
-6. Run the single image operation the user already requested. Its real response is the capability test; do not issue an extra paid generation merely for probing.
-7. If execution reports a missing JSON path or unexpected response shape, ask for a redacted example of that response, update the adapter, and retry only when the user still wants the original generation.
+4. Omit `extract` initially. Native parsing automatically scans JSON and SSE response events for image URLs, Base64 images, common task IDs, and common statuses.
+5. Call `ImageManager(action="configure_adapter", adapter_json=<JSON string>)`.
+6. Call `ImageManager(action="doctor")`.
+7. Run the single image operation the user already requested. Its real response is the capability test; do not issue an extra paid generation merely for probing.
+8. If execution fails, inspect the returned response diagnostic yourself. Update only the request template or, when necessary, add minimal `extract` compatibility hints; then re-run the original requested image operation once with the corrected adapter. Do not ask the user to decipher response fields.
 
 ## Adapter example: synchronous JSON
 
@@ -40,9 +41,6 @@ Use this flow when the provider is not a standard OpenAI-compatible Images or Re
         "height": "{{height}}",
         "num_images": "{{count}}"
       }
-    },
-    "extract": {
-      "outputs": ["$.data.images[*].url"]
     }
   }
 }
@@ -69,16 +67,6 @@ Use this flow when the provider is not a standard OpenAI-compatible Images or Re
       "bodyType": "json",
       "headers": { "X-API-Key": "{{apiKey}}" },
       "body": {}
-    },
-    "extract": {
-      "taskId": "$.data.task_id",
-      "status": "$.data.status",
-      "outputs": ["$.data.images[*]"],
-      "error": "$.data.error",
-      "successStatuses": ["completed"],
-      "failureStatuses": ["failed", "cancelled"],
-      "pollIntervalMs": 1500,
-      "maxPollAttempts": 1200
     }
   }
 }

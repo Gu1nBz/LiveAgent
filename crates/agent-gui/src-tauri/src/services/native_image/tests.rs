@@ -16,6 +16,7 @@ use image::{DynamicImage, ImageFormat};
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
+use super::types::{DEFAULT_BASE_URL, DEFAULT_IMAGE_MODEL, DEFAULT_TIMEOUT_SECONDS};
 use super::*;
 
 fn config_update(base_url: String, api_key: Option<&str>) -> NativeImageConfigUpdate {
@@ -156,6 +157,39 @@ fn config_never_exposes_api_key_and_supports_retain_and_clear() {
     clear.clear_api_key = true;
     assert!(!service.config_save(clear).unwrap().api_key_configured);
     assert!(!service.config_get().unwrap().api_key_configured);
+}
+
+#[test]
+fn clearing_configuration_restores_defaults_and_removes_adapter_and_key() {
+    let root = tempdir().unwrap();
+    let service = NativeImageService::test_service(root.path()).unwrap();
+    service
+        .config_save(config_update(
+            "https://relay.example/custom/v1".to_string(),
+            Some("configuration-secret"),
+        ))
+        .unwrap();
+    let mut adapter = sync_adapter("/custom-generate");
+    adapter.generate.extract = NativeImageAdapterExtract::default();
+    service.adapter_save(adapter).unwrap();
+
+    let cleared = service.config_clear().unwrap();
+    assert_eq!(cleared.base_url, DEFAULT_BASE_URL);
+    assert_eq!(cleared.generation_model, DEFAULT_IMAGE_MODEL);
+    assert_eq!(cleared.edit_model, DEFAULT_IMAGE_MODEL);
+    assert_eq!(cleared.endpoint_mode, NativeImageEndpointMode::Images);
+    assert_eq!(cleared.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
+    assert!(!cleared.api_key_configured);
+    assert!(!cleared.adapter_configured);
+    assert!(cleared.adapter_name.is_none());
+    assert!(!serde_json::to_string(&cleared)
+        .unwrap()
+        .contains("configuration-secret"));
+
+    let persisted = service.config_get().unwrap();
+    assert_eq!(persisted.base_url, DEFAULT_BASE_URL);
+    assert!(!persisted.api_key_configured);
+    assert!(!persisted.adapter_configured);
 }
 
 #[test]
@@ -342,6 +376,80 @@ async fn generation_job_writes_validated_output_and_exports_inside_workspace() {
 }
 
 #[tokio::test]
+async fn ai_adapter_automatically_scans_sse_response_events_for_images() {
+    let encoded = general_purpose::STANDARD.encode(png_bytes());
+    let app = Router::new().route(
+        "/sse-generate",
+        post(move || {
+            let encoded = encoded.clone();
+            async move {
+                (
+                    [("content-type", "text/event-stream")],
+                    format!(
+                        "event: response.created\ndata: {{\"type\":\"response.created\",\"response\":{{\"status\":\"in_progress\"}}}}\n\nevent: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\",\"output\":[{{\"type\":\"image_generation_call\",\"result\":\"{encoded}\"}}]}}}}\n\n"
+                    ),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let root = tempdir().unwrap();
+    let service = Arc::new(NativeImageService::test_service(root.path()).unwrap());
+    service
+        .config_save(config_update(format!("http://{address}"), Some("sse-key")))
+        .unwrap();
+    let mut adapter = sync_adapter("/sse-generate");
+    adapter.generate.extract = NativeImageAdapterExtract::default();
+    service.adapter_save(adapter).unwrap();
+
+    let started = service.start_generate(generate_request()).unwrap();
+    let snapshot = wait_for_terminal(&service, &started.id).await;
+    assert_eq!(snapshot.status, NativeImageJobStatus::Succeeded);
+    assert_eq!(snapshot.outputs.len(), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn ai_adapter_sse_without_an_image_returns_a_response_diagnostic() {
+    let app = Router::new().route(
+        "/sse-without-image",
+        post(|| async {
+            (
+                [("content-type", "text/event-stream")],
+                "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_test\",\"status\":\"in_progress\"}}\n\n",
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let root = tempdir().unwrap();
+    let service = Arc::new(NativeImageService::test_service(root.path()).unwrap());
+    service
+        .config_save(config_update(
+            format!("http://{address}"),
+            Some("diagnostic-secret"),
+        ))
+        .unwrap();
+    let mut adapter = sync_adapter("/sse-without-image");
+    adapter.generate.extract = NativeImageAdapterExtract::default();
+    service.adapter_save(adapter).unwrap();
+
+    let started = service.start_generate(generate_request()).unwrap();
+    let snapshot = wait_for_terminal(&service, &started.id).await;
+    assert_eq!(snapshot.status, NativeImageJobStatus::Failed);
+    let error = snapshot.error.unwrap_or_default();
+    assert!(error.contains("响应摘要"));
+    assert!(error.contains("response.created"));
+    assert!(!error.contains("diagnostic-secret"));
+    server.abort();
+}
+
+#[tokio::test]
 async fn ai_sync_adapter_maps_parameters_and_extracts_images() {
     let encoded = general_purpose::STANDARD.encode(png_bytes());
     let captured = Arc::new(Mutex::new(None::<Value>));
@@ -425,14 +533,9 @@ async fn ai_async_adapter_submits_polls_and_normalizes_completion() {
             submit: adapter_request("/async-generate", json!({"prompt": "{{prompt}}"})),
             poll: Some(poll),
             extract: NativeImageAdapterExtract {
-                task_id: Some("$.job.id".to_string()),
-                status: Some("$.state".to_string()),
-                outputs: vec!["$.images[*]".to_string()],
-                error: Some("$.error".to_string()),
-                success_statuses: vec!["completed".to_string()],
-                failure_statuses: vec!["failed".to_string(), "cancelled".to_string()],
                 poll_interval_ms: Some(250),
                 max_poll_attempts: Some(5),
+                ..Default::default()
             },
         },
         edit: None,

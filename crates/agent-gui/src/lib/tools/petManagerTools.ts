@@ -78,6 +78,7 @@ export function createPetManagerTools(params: { workdir: string }): BuiltinToolB
       {
         action: Type.Union([
           Type.Literal("build_generated_and_install"),
+          Type.Literal("validate_generated_rows"),
           Type.Literal("install_generated"),
           Type.Literal("list"),
         ]),
@@ -114,7 +115,7 @@ export function createPetManagerTools(params: { workdir: string }): BuiltinToolB
               },
               { additionalProperties: false },
             ),
-            { minItems: 11, maxItems: 11 },
+            { minItems: 1, maxItems: 11 },
           ),
         ),
       },
@@ -156,7 +157,7 @@ export function createPetManagerTools(params: { workdir: string }): BuiltinToolB
               };
             })
           : [];
-        if (rows.length !== 11) throw new Error("rows must contain exactly 11 row strips");
+        if (rows.length === 0) throw new Error("rows must contain at least one row strip");
         const rowByIndex = new Map(rows.map((row) => [row.row, row]));
         for (const [row, frameCount] of LIVEAGENT_V2_FRAME_COUNTS.entries()) {
           const item = rowByIndex.get(row);
@@ -198,8 +199,31 @@ export function createPetManagerTools(params: { workdir: string }): BuiltinToolB
           { pet, packageDirectory: build.packageDirectory, activate: args.activate !== false },
         );
       }
+      if (action === "validate_generated_rows") {
+        const rows = Array.isArray(args.rows)
+          ? args.rows.map((row, index) => {
+              if (!row || typeof row !== "object" || Array.isArray(row)) {
+                throw new Error(`rows[${index}] must be an object`);
+              }
+              const item = row as Record<string, unknown>;
+              if (typeof item.row !== "number" || typeof item.frame_count !== "number" || typeof item.path !== "string") {
+                throw new Error(`rows[${index}] requires row, frame_count, and path`);
+              }
+              return { row: item.row, frameCount: item.frame_count, path: item.path.trim() };
+            })
+          : [];
+        if (rows.length !== 11) throw new Error("rows must contain exactly 11 row strips");
+        const checked = await invoke<{ valid: boolean; rowCount: number }>("pet_validate_generated_rows", {
+          input: {
+            workspaceRoot: params.workdir,
+            chromaKey: parseChromaKey(typeof args.chroma_key === "string" ? args.chroma_key : "#00FF00"),
+            rows,
+          },
+        });
+        return result(toolCall, `valid=${checked.valid}\nrows=${checked.rowCount}`, checked);
+      }
       if (action !== "install_generated") {
-        throw new Error("action must be build_generated_and_install, install_generated, or list");
+        throw new Error("action must be build_generated_and_install, validate_generated_rows, install_generated, or list");
       }
       const sourceDir = typeof args.source_dir === "string" ? args.source_dir.trim() : "";
       if (!sourceDir) throw new Error("source_dir is required for install_generated");

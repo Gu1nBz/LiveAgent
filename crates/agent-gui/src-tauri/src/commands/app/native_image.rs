@@ -30,6 +30,16 @@ pub async fn native_image_config_save(
 }
 
 #[tauri::command]
+pub async fn native_image_config_clear(
+    service: State<'_, Arc<NativeImageService>>,
+) -> Result<NativeImageConfigPublic, String> {
+    let service = Arc::clone(service.inner());
+    tauri::async_runtime::spawn_blocking(move || service.config_clear())
+        .await
+        .map_err(|error| format!("native_image_config_clear join failed: {error}"))?
+}
+
+#[tauri::command]
 pub async fn native_image_adapter_get(
     service: State<'_, Arc<NativeImageService>>,
 ) -> Result<NativeImageAdapterPublic, String> {

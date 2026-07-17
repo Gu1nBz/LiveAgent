@@ -174,6 +174,12 @@ impl NativeImageConfigStore {
         self.adapter_get()
     }
 
+    pub(crate) fn clear(&self) -> Result<NativeImageConfigPublic, String> {
+        let config = NativeImageConfig::default();
+        self.write_config(&config)?;
+        Ok(config.public())
+    }
+
     fn write_config(&self, config: &NativeImageConfig) -> Result<(), String> {
         let adapter_json = config
             .adapter

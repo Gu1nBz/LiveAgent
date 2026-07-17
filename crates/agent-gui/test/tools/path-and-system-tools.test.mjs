@@ -2717,7 +2717,7 @@ test("Image file tool forwards SVG sources as inline images", async () => {
   );
 });
 
-test("Image file tool accepts absolute paths, URLs, and base64 input", async () => {
+test("Image file tool rejects mixed source groups", async () => {
   const invocations = [];
   const fsLoader = createTsModuleLoader({
     mocks: {
@@ -2758,34 +2758,9 @@ test("Image file tool accepts absolute paths, URLs, and base64 input", async () 
     },
   });
 
-  assert.equal(result.isError, false);
-  assert.equal(result.details.kind, "display_image");
-  assert.deepEqual(
-    invocations.map((call) => [call.command, call.args.source_type, call.args.source]),
-    [
-      ["fs_read_image_source", "path", "/Users/me/Pictures/local.png"],
-      ["fs_read_image_source", "base64", "data:image/png;base64,abc123"],
-    ],
-  );
-  assert.deepEqual(
-    result.details.images.map((image) => image.path),
-    [
-      "/Users/me/Pictures/local.png",
-      "https://example.com/remote.webp",
-      "base64:image/png:12 bytes",
-    ],
-  );
-  assert.deepEqual(
-    result.content.slice(1).map((block) => [block.type, block.mimeType, block.data]),
-    [
-      ["image", "image/png", "path-data"],
-      ["image", "image/png", "base64-data"],
-    ],
-  );
-  assert.equal(result.details.images[1].sourceType, "url");
-  assert.equal(result.details.images[1].renderMode, "proxy");
-  assert.equal(result.details.images[1].sourceUrl, "https://example.com/remote.webp");
-  assert.equal(result.details.loadMode, "mixed");
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /exactly one source group/);
+  assert.deepEqual(invocations, []);
 });
 
 test("Image generic source infers raw base64 image input", async () => {
